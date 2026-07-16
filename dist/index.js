@@ -101,7 +101,7 @@ async function run() {
     }
 
     // 从环境变量获取 coderepo 信息（变量名带 CODEMETRICS_ 前缀，避免与其他插件的 APIG 凭证混淆）
-    const coderepoUrl = process.env['CODEMETRICS_APIG_BASE_URL'] || '';
+    const coderepoUrl = 'https://apig.openlibing.com:443';
     const apigAppKey = process.env['CODEMETRICS_APIG_APP_KEY'] || '';
     const apigAppSecret = process.env['CODEMETRICS_APIG_APP_SECRET'] || '';
 

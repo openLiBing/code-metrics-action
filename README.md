@@ -15,26 +15,20 @@
 ## 使用方式
 
 ```yaml
-stages:
-  stage1:
+jobs:
+  code-metrics-scan:
     name: 代码度量检测
-    select: selected_by_default
-    jobs:
-      code-metrics-scan:
-        name: 代码度量检测
-        runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "large"]
-        steps:
-          - name: Checkout
-            uses: checkout
+    runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "large"]
+    steps:
+      - name: Checkout
+        uses: checkout
 
-          - name: code-metrics-scan
-            uses: openlibing-code-metrics-action
-            env:
-              CODEMETRICS_APIG_BASE_URL: ${{ secrets.CODEMETRICS_APIG_BASE_URL }}
-              CODEMETRICS_APIG_APP_KEY: ${{ secrets.CODEMETRICS_APIG_APP_KEY }}
-              CODEMETRICS_APIG_APP_SECRET: ${{ secrets.CODEMETRICS_APIG_APP_SECRET }}
-    pre:
-      - type: auto
+      - name: code-metrics-scan
+        uses: openlibing-code-metrics-action
+        env:
+          CODEMETRICS_APIG_BASE_URL: ${{ secrets.CODEMETRICS_APIG_BASE_URL }}
+          CODEMETRICS_APIG_APP_KEY: ${{ secrets.CODEMETRICS_APIG_APP_KEY }}
+          CODEMETRICS_APIG_APP_SECRET: ${{ secrets.CODEMETRICS_APIG_APP_SECRET }}
 ```
 
 ## 输入参数
