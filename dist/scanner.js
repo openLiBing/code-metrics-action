@@ -1,0 +1,198 @@
+const SlocDetector = require('./detectors/SlocDetector');
+const LizardDetector = require('./detectors/LizardDetector');
+const DuplicationDetector = require('./detectors/DuplicationDetector');
+const MetricsCalculator = require('./calculators/MetricsCalculator');
+const CoderepoUploader = require('./uploaders/CoderepoUploader');
+const ConfigLoader = require('./config/loader');
+const Logger = require('./utils/logger');
+const FileUtils = require('./utils/fileUtils');
+const FileCollector = require('./utils/fileCollector');
+const path = require('path');
+
+// 将日期格式化为 yyyy-MM-dd HH:mm:ss
+function formatDateTime(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+class MetricsScanner {
+  constructor(config = {}) {
+    this.config = config;
+    this.logger = new Logger({ verbose: config.verbose });
+    this.workingDir = config.workingDir || process.cwd();
+
+    const allowedExtensions = config.allowedExtensions || [];
+
+    this.slocDetector = new SlocDetector({
+      excludeDirs: config.excludeDirs,
+      allowedExtensions: allowedExtensions
+    });
+
+    this.lizardDetector = new LizardDetector({
+      excludeDirs: config.excludeDirs,
+      allowedExtensions: allowedExtensions,
+      lizardPath: config.detectors?.lizard?.path || 'lizard',
+      workingDir: this.workingDir
+    });
+
+    this.duplicationDetector = new DuplicationDetector({
+      excludeDirs: config.excludeDirs,
+      allowedExtensions: allowedExtensions,
+      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"
+      // - minLines=10：连续代码块至少 10 行才算一次重复
+      // - minTokens=85：滑动窗口大小
+      minLines: config.detectors?.jscpd?.minLines || 10,
+      minTokens: config.detectors?.jscpd?.minTokens || 85
+    });
+
+    this.uploader = new CoderepoUploader({
+      coderepoUrl: config.uploader?.coderepoUrl,
+      timeout: (config.uploader?.timeout || 30) * 1000,
+      apigAppKey: config.uploader?.apigAppKey,
+      apigAppSecret: config.uploader?.apigAppSecret
+    });
+  }
+
+  async scan(options = {}) {
+    const startTime = new Date();
+    const startTimeFormatted = formatDateTime(startTime);
+    this.logger.info('Starting code metrics scan...');
+
+    const sourceInput = options.sourceDir || this.config.sourceDir;
+    const sources = Array.isArray(sourceInput) ? sourceInput : [sourceInput];
+    const resolvedSources = sources.map(src =>
+      path.isAbsolute(src) ? src : path.resolve(this.workingDir, src)
+    );
+
+    this.logger.debug('Config summary:');
+    this.logger.debug(`  excludeDirs: ${JSON.stringify(this.config.excludeDirs || [])}`);
+    this.logger.debug(`  allowedExtensions: ${JSON.stringify(this.config.allowedExtensions || [])}`);
+    this.logger.debug(`  sources: ${resolvedSources.join(', ')}`);
+
+    const previewFiles = FileCollector.collectFiles(
+      resolvedSources,
+      this.config.excludeDirs || [],
+      this.config.allowedExtensions || []
+    );
+    this.logger.debug(`Found ${previewFiles.length} files to scan`);
+
+    let slocResult = {};
+    let lizardResult = {};
+    let duplicationResult = {};
+    let status = 0;
+
+    try {
+      if (this.config.detectors?.sloc?.enabled !== false) {
+        this.logger.info('Running scc detector (code size)...');
+        slocResult = await this.slocDetector.detect(resolvedSources);
+        this.logger.debug('scc result:', JSON.stringify(slocResult));
+      }
+
+      if (this.config.detectors?.lizard?.enabled !== false) {
+        this.logger.info('Running lizard detector (function complexity)...');
+        lizardResult = await this.lizardDetector.detect(resolvedSources);
+        this.logger.debug('lizard result:', JSON.stringify(lizardResult));
+      }
+
+      if (this.config.detectors?.jscpd?.enabled !== false) {
+        this.logger.info('Running duplication detector (code duplication)...');
+        duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult.codeScale);
+        this.logger.debug('duplication result:', JSON.stringify(duplicationResult));
+      }
+
+      const mergedMetrics = MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
+      MetricsCalculator.validate(mergedMetrics);
+      const formattedMetrics = MetricsCalculator.formatForReport(mergedMetrics);
+
+      // 从格式化结果中分离 fileDetails 和总体指标
+      const { fileDetails, ...overallMetrics } = formattedMetrics;
+
+      const endTime = new Date();
+      const endTimeFormatted = formatDateTime(endTime);
+      const durationMs = endTime.getTime() - startTime.getTime();
+
+      const result = {
+        ...overallMetrics,
+        fileDetails: fileDetails,
+        detectionInfo: {
+          startTime: startTimeFormatted,
+          endTime: endTimeFormatted,
+          durationMs: durationMs,
+          sources: resolvedSources,
+          tools: {
+            sloc: this.config.detectors?.sloc?.enabled !== false,
+            lizard: this.config.detectors?.lizard?.enabled !== false,
+            duplication: this.config.detectors?.jscpd?.enabled !== false
+          }
+        }
+      };
+
+      this.logger.info(`Scan completed in ${durationMs}ms`);
+
+      if (options.output || this.config.output) {
+        const outputPath = path.isAbsolute(options.output || this.config.output)
+          ? (options.output || this.config.output)
+          : path.resolve(this.workingDir, options.output || this.config.output);
+        FileUtils.writeJsonFile(outputPath, result);
+        this.logger.info(`Results saved to: ${outputPath}`);
+      }
+
+      if (options.upload || this.config.uploader?.enabled) {
+        const uploadResult = await this.uploader.upload(formattedMetrics, {
+          gitUrl: options.gitUrl,
+          branchName: options.branchName,
+          repository: options.repository,
+          pipelineRunId: options.pipelineRunId,
+          runNumber: options.runNumber,
+          startTime: startTimeFormatted,
+          endTime: endTimeFormatted,
+          status: status
+        });
+
+        if (uploadResult.success) {
+          this.logger.info(`Successfully uploaded metrics, recordId: ${uploadResult.recordId}`);
+          result.uploadInfo = { success: true, recordId: uploadResult.recordId };
+        } else {
+          this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
+          result.uploadInfo = { success: false, error: uploadResult.error };
+        }
+      }
+
+      return result;
+
+    } catch (error) {
+      this.logger.error(`Scan failed: ${error.message}`);
+
+      // 失败时也上传报告，附带错误信息
+      if (options.upload || this.config.uploader?.enabled) {
+        const endTimeFormatted = formatDateTime(new Date());
+        try {
+          await this.uploader.upload({}, {
+            gitUrl: options.gitUrl,
+            branchName: options.branchName,
+            repository: options.repository,
+            pipelineRunId: options.pipelineRunId,
+            runNumber: options.runNumber,
+            startTime: startTimeFormatted,
+            endTime: endTimeFormatted,
+            status: 1,
+            errorMessage: error.message
+          });
+        } catch (uploadError) {
+          this.logger.error(`Failed to upload error report: ${uploadError.message}`);
+        }
+      }
+
+      throw error;
+    }
+  }
+}
+
+module.exports = {
+  MetricsScanner,
+  ConfigLoader,
+  SlocDetector,
+  LizardDetector,
+  DuplicationDetector,
+  MetricsCalculator
+};
