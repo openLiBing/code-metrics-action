@@ -15,7 +15,6 @@
     "axios": "^1.6.0",
     "jscpd": "^3.5.0",
     "js-yaml": "^4.1.0",
-    "simple-git": "^3.20.0",
     "winston": "^3.11.0"
   },
   "devDependencies": {

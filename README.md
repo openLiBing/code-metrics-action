@@ -25,7 +25,7 @@ on:
 jobs:
   code-metrics-scan:
     name: 代码度量检测
-    runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "large"]
+    runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "slim"]
     steps:
       - name: Checkout
         uses: checkout
@@ -37,13 +37,18 @@ jobs:
           OPENLIBING_APIG_SECRET: ${{ secrets.OPENLIBING_APIG_SECRET }}
 ```
 
+## 触发方式
+
+| 触发方式     | 配置关键字                                | 适用场景                                      |
+| ------------ | ----------------------------------------- | --------------------------------------------- |
+| 手动触发     | `workflow_dispatch`                       | 按需验证、首次接入验证                        |
+| 代码推送触发 | `push.branches` / `pull_request.branches` | 合入主分支时自动检测                 |
+| 定时任务触发 | `schedule.cron`                           | Nightly 流水线，每日定期检测跟踪趋势 |
+
 ## 输入参数
 
 | 参数 | 必填 | 默认值         | 说明                                  |
 |------|------|-------------|-------------------------------------|
-| source-dir | 否 | `./`        | 源代码目录路径，当扫描指定代码仓时必填checkout指定仓的path |
-| repository | 否 | -           | 流水线所属仓库的 owner/repo，用于上报，默认自动获取     |
-| config-file | 否 | -           | 配置文件路径（.metrics.yml）                |
 | exclude-dirs | 否 | -           | 排除目录列表，逗号分隔，不填时默认扫描全部路径             |
 | allowed-extensions | 否 | -           | 允许的文件扩展名，逗号分隔，不填时默认扫描所有文件类型         |
 | output | 否 | metrics.json | 结果输出文件路径                            |
@@ -51,7 +56,7 @@ jobs:
 
 ## 环境变量
 
-上传功能需要以下环境变量：
+上传功能需要以下环境变量（通过 APIG 网关调用 openLiBing 接口），请在`项目设置 -> Actions 密钥与变量 -> 仓库密钥中进行配置`：
 
 | 变量 | 必填 | 说明                                        |
 |------|------|-------------------------------------------|
