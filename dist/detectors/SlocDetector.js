@@ -74,7 +74,6 @@ class SlocDetector extends BaseDetector {
   // 执行 scc 并解析 JSON 输出
   runScc(args, sources) {
     const cmd = `"${this.sccPath}" ${args.join(' ')}`;
-    console.log(`[DEBUG] 执行命令: ${cmd}`);
 
     const output = execSync(cmd, {
       encoding: 'utf8',
@@ -107,10 +106,6 @@ class SlocDetector extends BaseDetector {
 
       // 解析 --by-file 输出的每个文件
       if (lang.Files && Array.isArray(lang.Files)) {
-        // 调试：打印第一个文件的完整结构，确认 scc 输出的字段名
-        if (lang.Files.length > 0) {
-          console.log(`[DEBUG] scc Files[0] sample: ${JSON.stringify(lang.Files[0])}`);
-        }
         for (const file of lang.Files) {
           // scc 不同版本的 --by-file JSON 输出字段名可能不同：
           //   - 旧版：Name 是完整路径
@@ -133,7 +128,6 @@ class SlocDetector extends BaseDetector {
       }
     }
 
-    console.log(`[DEBUG] SCC statistics:`);
     console.log(`  - Total files: ${totalFiles}`);
     console.log(`  - Code lines (codeScale): ${totalCode}`);
     console.log(`  - Comment lines: ${totalComment}`);

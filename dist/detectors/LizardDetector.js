@@ -34,8 +34,6 @@ class LizardDetector extends BaseDetector {
       return this.getEmptyResult();
     }
 
-    console.log(`[DEBUG] Lizard processing ${uniqueFiles.length} files`);
-
     const pythonFiles = uniqueFiles.filter(f => f.endsWith('.py'));
     const nonPythonFiles = uniqueFiles.filter(f => !f.endsWith('.py'));
 

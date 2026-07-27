@@ -100,10 +100,10 @@ async function run() {
       core.info(`源代码目录已存在，跳过克隆: ${sourceDir}`);
     }
 
-    // 从环境变量获取 coderepo 信息（变量名带 CODEMETRICS_ 前缀，避免与其他插件的 APIG 凭证混淆）
+    // 从环境变量获取 coderepo 信息（统一使用 OPENLIBING_APIG_KEY/SECRET，两个插件共用同一套 APIG 凭证）
     const coderepoUrl = 'https://apig.openlibing.com:443';
-    const apigAppKey = process.env['CODEMETRICS_APIG_APP_KEY'] || '';
-    const apigAppSecret = process.env['CODEMETRICS_APIG_APP_SECRET'] || '';
+    const apigAppKey = process.env['OPENLIBING_APIG_KEY'] || '';
+    const apigAppSecret = process.env['OPENLIBING_APIG_SECRET'] || '';
 
     // 上报用 git_url 和 branch_name：
     // gitUrl 解析优先级：

@@ -15,6 +15,13 @@
 ## 使用方式
 
 ```yaml
+name: openlibing-code-metrics-action
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "master" ]
+
 jobs:
   code-metrics-scan:
     name: 代码度量检测
@@ -26,9 +33,8 @@ jobs:
       - name: code-metrics-scan
         uses: openlibing-code-metrics-action
         env:
-          CODEMETRICS_APIG_BASE_URL: ${{ secrets.CODEMETRICS_APIG_BASE_URL }}
-          CODEMETRICS_APIG_APP_KEY: ${{ secrets.CODEMETRICS_APIG_APP_KEY }}
-          CODEMETRICS_APIG_APP_SECRET: ${{ secrets.CODEMETRICS_APIG_APP_SECRET }}
+          OPENLIBING_APIG_KEY: ${{ secrets.OPENLIBING_APIG_KEY }}
+          OPENLIBING_APIG_SECRET: ${{ secrets.OPENLIBING_APIG_SECRET }}
 ```
 
 ## 输入参数
@@ -49,9 +55,8 @@ jobs:
 
 | 变量 | 必填 | 说明                                        |
 |------|------|-------------------------------------------|
-| CODEMETRICS_APIG_BASE_URL | 是 | coderepo 服务地址（APIG 网关 baseUrl，https://apig.openlibing.com:443)           |
-| CODEMETRICS_APIG_APP_KEY | 是 | APIG 网关 AppKey（即 AK，用于 HMAC-SHA256 签名）    |
-| CODEMETRICS_APIG_APP_SECRET | 是 | APIG 网关 AppSecret（即 SK，用于 HMAC-SHA256 签名） |
+| OPENLIBING_APIG_KEY | 是 | APIG 网关 AppKey（即 AK，用于 HMAC-SHA256 签名）    |
+| OPENLIBING_APIG_SECRET | 是 | APIG 网关 AppSecret（即 SK，用于 HMAC-SHA256 签名） |
 
 ## 输出
 
