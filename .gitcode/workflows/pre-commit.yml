@@ -5,38 +5,61 @@ on:
     branches:
       - '*'
   pull_request_comment:
-    types: [created]
-    comments: ['pre-commit']
+    types: [ created ]
+    comments: [ 'pre-commit' ]
     branches:
       - '*'
-
-jobs:
+stages:
+  initiate:
+    name: initiate
+    jobs:
+      pr-label-running:
+        name: pr-label-running
+        runs-on: [ 'ubuntu-latest','x64','slim' ]
+        steps:
+          - name: set pr label running
+            uses: ozvale/pr-label-action@main
+            with:
+              token: ${{ secrets.ROBOT_TOKEN }}
+              add_labels: ci-pipeline-running
+              remove_labels: ci-pipeline-passed,ci-pipeline-failed
   pre-commit:
-    name:  pre-commit
-    runs-on: ['codearts-hosted', 'ubuntu-latest', x64, 'small']
-    steps:
-      - name: Checkout repository
-        uses: checkout
-        with:
-          ref: ${{ atomgit.event.pull_request.merge_commit_sha || '' }}
+    name: pre-commit
+    jobs:
+      pre-commit:
+        name: pre-commit
+        runs-on: [ 'codearts-hosted', 'ubuntu-latest', x64, 'small' ]
+        steps:
+          - name: Checkout repository
+            uses: checkout
+            with:
+              ref: ${{ atomgit.event.pull_request.merge_commit_sha || atomgit.event.pull_request.head.sha }}
 
-      - name: setup-python
-        uses: setup-python
-        with:
-          version: 3.14
+          - name: setup-python
+            uses: setup-python
+            with:
+              version: 3.14
+              cache: true
 
-      - name: setup-node
-        uses: setup-node
-        with:
-          node-version: 20
+          - name: setup-go
+            uses: setup-go
+            with:
+              version: 1.26
+              cache: true
 
-      - name: setup-go
-        uses: setup-go
-        with:
-          version: 1.26
-          cache: true
-
-      - name: run pre-commit
-        uses: openlibing-pre-commit-action
-        with:
-          extra_args: ${{ inputs.extra_args }}
+          - name: run pre-commit
+            uses: openlibing-pre-commit-action
+            with:
+              extra_args: ${{ inputs.extra_args }}
+post:
+  jobs:
+    label-pr:
+      name: pr-label-success/failed
+      runs-on: [ 'ubuntu-latest','x64','slim' ]
+      steps:
+        - name: set pr label complete
+          uses: ozvale/pr-label-action@main
+          with:
+            token: ${{ secrets.ROBOT_TOKEN }}
+            add_labels: ${{ pipeline.upstream_status == 'COMPLETED' && 'ci-pipeline-passed' || 'ci-pipeline-failed' }}
+            remove_labels: ci-pipeline-running
