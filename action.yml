@@ -1,0 +1,44 @@
+name: 'openlibing-code-metrics-action'
+author: 'openLiBing'
+version: 1.0.3
+description: '代码度量扫描插件 - 检测代码规模、平均函数代码行数、平均圈复杂度、代码重复率和文件重复率'
+inputs:
+  source-dir:
+    description: '源代码目录路径（默认当前目录，线上环境由 checkout 步骤决定扫描内容）'
+    required: false
+    default: './'
+  scan-repository:
+    description: '要扫描的目标仓库 HTTPS 地址（如 https://gitcode.com/openlibing/openlibing-coderepo.git）。指定后插件会自动克隆该仓库到 source-dir 下进行扫描，与流水线所属仓库（repository）解耦'
+    required: false
+    default: ''
+  scan-ref:
+    description: '扫描目标仓库的分支或标签（配合 scan-repository 使用）'
+    required: false
+    default: ''
+  scan-token:
+    description: '扫描目标仓库的访问令牌（配合 scan-repository 使用）'
+    required: false
+    default: ''
+  repository:
+    description: '流水线所属仓库的 owner/repo（如 openlibing/openlibing-cicd），用于上报。不传则从 ATOMGIT_REPO 环境变量获取'
+    required: false
+    default: ''
+  exclude-dirs:
+    description: '排除目录列表，逗号分隔'
+    required: false
+    default: ''
+  allowed-extensions:
+    description: '允许的文件扩展名，逗号分隔'
+    required: false
+    default: ''
+  output:
+    description: '结果输出文件路径'
+    required: false
+    default: 'metrics.json'
+  upload:
+    description: '是否上传检测结果到 openLiBing'
+    required: false
+    default: 'true'
+runs:
+  using: 'node16'
+  main: 'dist/index.js'

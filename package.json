@@ -1,0 +1,28 @@
+{
+  "name": "openlibing-code-metrics-action",
+  "version": "1.0.0",
+  "description": "Code metrics scan plugin - detect code scale, avg function LOC, avg cyclomatic complexity, code duplication rate and file duplication rate",
+  "main": "dist/index.js",
+  "scripts": {
+    "package": "ncc build dist/index.js -o dist",
+    "zip": "node zip.js",
+    "build": "npm run package && npm run zip"
+  },
+  "author": "openLiBing",
+  "license": "ISC",
+  "dependencies": {
+    "@actions/core": "^1.10.0",
+    "axios": "^1.6.0",
+    "jscpd": "^3.5.0",
+    "js-yaml": "^4.1.0",
+    "simple-git": "^3.20.0",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.1",
+    "adm-zip": "^0.5.16"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
