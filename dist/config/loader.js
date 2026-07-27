@@ -41,7 +41,7 @@ class ConfigLoader {
       try {
         const fileContent = fs.readFileSync(configPath, 'utf8');
         const ext = path.extname(configPath).toLowerCase();
-        
+
         let userConfig;
         if (ext === '.yaml' || ext === '.yml') {
           userConfig = yaml.load(fileContent);
@@ -62,12 +62,12 @@ class ConfigLoader {
 
   static mergeConfig(defaultConfig, userConfig) {
     const merged = { ...defaultConfig };
-    
+
     for (const key of Object.keys(userConfig)) {
       if (userConfig[key] === undefined || userConfig[key] === null) {
         continue;
       }
-      
+
       if (Array.isArray(userConfig[key])) {
         // 如果用户配置了数组，完全替换默认值
         merged[key] = [...userConfig[key]];
@@ -81,7 +81,7 @@ class ConfigLoader {
         merged[key] = userConfig[key];
       }
     }
-    
+
     return merged;
   }
 
