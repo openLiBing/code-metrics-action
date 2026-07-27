@@ -6,7 +6,7 @@ on:
       - '*'
   pull_request_comment:
     types: [ created ]
-    comments: [ 'pre-commit' ]
+    comments: [ '/pre-commit' ]
     branches:
       - '*'
 stages:
@@ -28,7 +28,7 @@ stages:
     jobs:
       pre-commit:
         name: pre-commit
-        runs-on: [ 'codearts-hosted', 'ubuntu-latest', x64, 'small' ]
+        runs-on: [ 'ubuntu-latest', 'x64', 'small' ]
         steps:
           - name: Checkout repository
             uses: checkout
