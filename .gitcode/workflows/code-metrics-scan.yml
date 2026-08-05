@@ -1,0 +1,23 @@
+name: code-metrics-scan-nightly
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+  schedule:
+    - cron: "0 0 0 * * ?"
+
+jobs:
+  code-metrics-scan:
+    name: 代码度量指标扫描
+    runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "slim"]
+    steps:
+      - name: Checkout
+        uses: checkout
+
+      - name: code-metrics-scan
+        uses: openlibing/code-metrics-action@master
+        env:
+          OPENLIBING_APIG_KEY: ${{ secrets.OPENLIBING_APIG_KEY }}
+          OPENLIBING_APIG_SECRET: ${{ secrets.OPENLIBING_APIG_SECRET }}
