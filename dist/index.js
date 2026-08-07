@@ -59024,7 +59024,7 @@ async function run() {
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
     // 从环境变量获取 coderepo 信息（统一使用 OPENLIBING_APIG_KEY/SECRET，两个插件共用同一套 APIG 凭证）
-    const coderepoUrl = 'https://apig.openlibing.com:443';
+    const coderepoUrl = 'https://f209a4ca505e492b96d2dc70f5578641.apic.cn-southwest-2.huaweicloudapis.com';
     const apigAppKey = getInput('apig_app_key') || '';
     const apigAppSecret = getInput('apig_app_secret') || '';
 
