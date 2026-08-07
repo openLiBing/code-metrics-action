@@ -1,6 +1,6 @@
 name: "openlibing-code-metrics-action"
 author: "openLiBing"
-version: 1.0.4
+version: 1.0.5
 description: "代码度量扫描插件 - 检测代码规模、平均函数代码行数、平均圈复杂度、代码重复率和文件重复率"
 inputs:
   exclude-dirs:

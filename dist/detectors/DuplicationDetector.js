@@ -7,11 +7,9 @@ const FileCollector = require('../utils/fileCollector');
 class DuplicationDetector extends BaseDetector {
   constructor(config = {}) {
     super(config);
-    // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"
-    // - minLines=10：连续代码块至少 10 行才算一次重复
-    // - minTokens=85：滑动窗口大小
+    // 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
+    // - minLines=10：连续源代码行至少 10 行才算一次重复
     this.minLines = config.minLines || 10;
-    this.minTokens = config.minTokens || 85;
     this.allowedExtensions = config.allowedExtensions || [];
   }
 
@@ -19,6 +17,11 @@ class DuplicationDetector extends BaseDetector {
     // 支持单个路径或多个路径
     const sources = Array.isArray(source) ? source : [source];
     const excludeDirs = this.config.excludeDirs || [];
+
+    // 相对路径基准：优先用 git 仓库根目录，确保返回的是仓库根的相对全路径
+    // （source-dir 可能是子目录，用 sources 做基准会把子目录前缀也剥掉，只剩文件名）
+    const gitRoot = this.findGitRoot(sources[0]);
+    const pathBase = gitRoot ? [gitRoot] : sources;
 
     // 收集所有文件
     const allFiles = [];
@@ -47,21 +50,19 @@ class DuplicationDetector extends BaseDetector {
       }
     }
 
-    // Token 级跨文件匹配（与 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"）
-    // 失败时降级到 jscpd 引擎
-    let fileDetails;
-    try {
-      const fileDuplicatedLines = this.detectWithTokenLevel(uniqueFiles, fileSourceLineMaps);
-      fileDetails = this.calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources);
-    } catch (error) {
-      console.warn(`Token-level detection failed, falling back to jscpd: ${error.message}`);
-      const jscpdResult = await this.detectWithJscpd(uniqueFiles, fileSourceLineMaps);
-      fileDetails = this.calculateFileDuplicationDetails(
-        jscpdResult.clones || [],
-        fileSourceLineMaps,
-        sources
-      );
-    }
+    // 行级跨文件匹配（与 cmetrics 官方定义对齐："非空非注释行连续 10 行相同"）
+    const lineResult = this.detectWithLineLevel(uniqueFiles, fileSourceLineMaps, fileContents);
+    // 使用 let 声明：buildContextSegments 会返回带 snapshotData 的新 fileDetails
+    let fileDetails = this.calculateFileDetailsFromLines(
+        lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase);
+    // 从合并区间构建重复块出现位置（union-find 分组，自动去重）
+    const duplicationOccurrences = this.buildDuplicationOccurrences(
+        lineResult.fileRanges, lineResult.fileSeedHashes, lineResult.fileSourceLines,
+        fileContents, pathBase);
+
+    // 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData
+    fileDetails = this.buildContextSegments(fileDetails, duplicationOccurrences, fileContents, pathBase);
+
     const duplicatedLines = fileDetails.reduce((sum, d) => sum + d.duplicationLineCount, 0);
 
     // 分母：优先用传入的 codeScale（与 cmetrics 和华为云保持一致）
@@ -79,7 +80,7 @@ class DuplicationDetector extends BaseDetector {
       : 0;
 
     // 计算完全一致文件的详情（用于总文件重复率下钻）
-    const identicalFileDetails = this.calculateIdenticalFileDetails(fileContents, sources);
+    const identicalFileDetails = this.calculateIdenticalFileDetails(fileContents, pathBase);
 
     return {
       totalCodeDuplicationRate: duplicationRate,
@@ -89,57 +90,60 @@ class DuplicationDetector extends BaseDetector {
       duplicatedFiles: identicalFileCount,
       totalFiles: uniqueFiles.length,
       fileDetails: fileDetails,
-      identicalFileDetails: identicalFileDetails
+      identicalFileDetails: identicalFileDetails,
+      // 重复块出现位置列表（同一代码内容的所有出现位置归为同一 group_id），供后端入库 code_metrics_duplication_block
+      duplicationOccurrences: duplicationOccurrences
     };
   }
 
   /**
-   * Token 级跨文件重复检测（主路径）
-   * 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"
-   * - 用 jscpd tokenizer 分词，mild 模式过滤空行/分隔 token
-   * - 滑动窗口（size=minTokens）+ md5 哈希找跨文件匹配
-   * - 每个匹配 window 标记其覆盖的行号（loc.start.line），用 Set 去重
-   * - 不在 window 级别应用 minLines 过滤：
-   *   Java import 区一行 7+ token，30 token 窗口只跨 5 行，但实际属于更大的 40+ 行匹配块
-   *   window 的并集自然反映整个大块的覆盖范围；minTokens=30 已保证最小匹配大小
+   * 行级跨文件重复检测（主路径）
+   * 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
+   *
+   * 算法：
+   * 1. 提取每个文件的源代码行（非空非注释，含 import 行），保留原始行号
+   * 2. 10 源代码行滑动窗口，md5 哈希每个窗口
+   * 3. 同一 hash 有 2+ 个窗口即计为重复（含同文件内重复）
+   * 4. 标记所有被匹配窗口覆盖的源代码行索引
+   * 5. 合并连续的源代码行索引为最大区间 → 每个区间是一个重复块出现位置
+   *
+   * 相比 token 级窗口的优势：
+   * - 按行对齐，30 行连续重复只产生 1 个块（而非多个 19 行碎片）
+   * - 合并后同一 (file, startLine, endLine) 只产生一条记录（避免重复入库）
    *
    * @param {string[]} files 文件绝对路径列表
-   * @param {Map<string, {lineMap, sourceCount}>} fileSourceLineMaps 每个文件的源代码行 map
-   * @returns {Map<string, Set<number>>} 每个文件的重复行号集合
+   * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（用于兼容 calculateFileDetailsFromLines）
+   * @param {Map} fileContents file(原始路径) → 内容
+   * @returns {Object} {fileDuplicatedLines, fileRanges, fileSeedHashes, fileSourceLines}
    */
-  detectWithTokenLevel(files, fileSourceLineMaps) {
-    const { tokenize, getFormatByFile } = require('@jscpd/tokenizer');
-    const { mild } = require('@jscpd/core');
+  detectWithLineLevel(files, fileSourceLineMaps, fileContents) {
+    const WINDOW_SIZE = this.minLines; // 10
 
-    // Step 1+2: 分词 + 滑动窗口哈希
-    const WINDOW_SIZE = this.minTokens;
-    const fileTokens = new Map();      // file(正斜杠) → IToken[]（已 mild 过滤）
-    const hashToLocations = new Map(); // hash → [{file, startIdx, endIdx}]
-
+    // Step 1: 提取每个文件的源代码行（非空非注释），保留原始行号
+    const fileSourceLines = new Map();
     for (const file of files) {
-      const content = fs.readFileSync(file, 'utf8');
-      const format = getFormatByFile(path.basename(file));
-      if (!format) continue;
-
-      // mild 谓词过滤：剔除 type ∈ {ignore, empty, new_line} 的 token
-      // 保留 comment token（license header 等参与匹配）
-      const tokens = tokenize(content, format).filter(t => mild(t));
-      if (tokens.length < WINDOW_SIZE) continue;
-      const normalizedFile = file.replace(/\\/g, '/');
-      fileTokens.set(normalizedFile, tokens);
-
-      for (let i = 0; i <= tokens.length - WINDOW_SIZE; i++) {
-        // 拼接 window 内 token 的 type:value，md5 哈希
-        // 含 type 是为了避免不同语法结构的 token 序列误匹配（如 "int x" vs "x int"）
-        let signature = '';
-        for (let j = i; j < i + WINDOW_SIZE; j++) {
-          if (j > i) signature += '\u0001';  // SOH 控制字符作分隔符
-          signature += `${tokens[j].type}:${tokens[j].value}`;
+      const content = fileContents.get(file);
+      if (!content) continue;
+      const lines = content.split('\n');
+      const sourceLines = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (DuplicationDetector.isSourceLine(lines[i])) {
+          sourceLines.push({ lineNum: i + 1, text: lines[i].trim() });
         }
-        const hash = crypto.createHash('md5').update(signature).digest('hex');
+      }
+      fileSourceLines.set(file.replace(/\\/g, '/'), sourceLines);
+    }
 
-        if (!hashToLocations.has(hash)) hashToLocations.set(hash, []);
-        hashToLocations.get(hash).push({
+    // Step 2: 10 源代码行滑动窗口，md5 哈希
+    const hashToWindows = new Map();
+    for (const [normalizedFile, sourceLines] of fileSourceLines) {
+      if (sourceLines.length < WINDOW_SIZE) continue;
+      for (let i = 0; i <= sourceLines.length - WINDOW_SIZE; i++) {
+        const windowText = sourceLines.slice(i, i + WINDOW_SIZE)
+          .map(l => l.text).join('\n');
+        const hash = crypto.createHash('md5').update(windowText).digest('hex');
+        if (!hashToWindows.has(hash)) hashToWindows.set(hash, []);
+        hashToWindows.get(hash).push({
           file: normalizedFile,
           startIdx: i,
           endIdx: i + WINDOW_SIZE - 1
@@ -147,44 +151,74 @@ class DuplicationDetector extends BaseDetector {
       }
     }
 
-    // Step 3: 跨文件匹配 + 标记行号
+    // Step 3: 标记重复行 + 收集 seed hash
     const fileDuplicatedLines = new Map();
+    const fileDuplicatedSourceIdx = new Map();
+    const fileSeedHashes = new Map();
 
-    for (const [, locations] of hashToLocations) {
-      // 只在 2+ 不同文件出现才计为重复（对齐 cmetrics "在其他地方重复"）
-      // 同文件多次出现不算（如 OWASP Benchmark 文件内部多个相同 catch 块属代码结构问题）
-      const uniqueFiles = new Set(locations.map(l => l.file));
-      if (uniqueFiles.size < 2) continue;
+    for (const [hash, windows] of hashToWindows) {
+      if (windows.length < 2) continue;
 
-      // 该 hash 在 2+ 文件出现：所有出现的 file 都标记行号（A 侧和 B 侧都标）
-      for (const loc of locations) {
-        const tokens = fileTokens.get(loc.file);
-        if (!fileDuplicatedLines.has(loc.file)) {
-          fileDuplicatedLines.set(loc.file, new Set());
-        }
-        const lineSet = fileDuplicatedLines.get(loc.file);
-        // 标记 window 内每个 token 的 loc.start.line（Set 自动去重）
-        for (let i = loc.startIdx; i <= loc.endIdx; i++) {
-          const token = tokens[i];
-          if (token.loc && token.loc.start) {
-            lineSet.add(token.loc.start.line);
-          }
+      for (const win of windows) {
+        const sourceLines = fileSourceLines.get(win.file);
+        if (!sourceLines) continue;
+
+        if (!fileDuplicatedLines.has(win.file)) fileDuplicatedLines.set(win.file, new Set());
+        if (!fileDuplicatedSourceIdx.has(win.file)) fileDuplicatedSourceIdx.set(win.file, new Set());
+        if (!fileSeedHashes.has(win.file)) fileSeedHashes.set(win.file, new Map());
+
+        const lineSet = fileDuplicatedLines.get(win.file);
+        const idxSet = fileDuplicatedSourceIdx.get(win.file);
+        const seedMap = fileSeedHashes.get(win.file);
+
+        for (let i = win.startIdx; i <= win.endIdx; i++) {
+          idxSet.add(i);
+          lineSet.add(sourceLines[i].lineNum);
+          if (!seedMap.has(i)) seedMap.set(i, new Set());
+          seedMap.get(i).add(hash);
         }
       }
     }
 
-    return fileDuplicatedLines;
+    // Step 4: 合并连续源代码行索引为最大区间
+    const fileRanges = new Map();
+    for (const [file, idxSet] of fileDuplicatedSourceIdx) {
+      const sortedIndices = [...idxSet].sort((a, b) => a - b);
+      const sourceLines = fileSourceLines.get(file);
+      const ranges = [];
+      let rangeStart = sortedIndices[0];
+      let rangeEnd = sortedIndices[0];
+      for (let i = 1; i < sortedIndices.length; i++) {
+        if (sortedIndices[i] === rangeEnd + 1) {
+          rangeEnd = sortedIndices[i];
+        } else {
+          ranges.push({ startIdx: rangeStart, endIdx: rangeEnd });
+          rangeStart = sortedIndices[i];
+          rangeEnd = sortedIndices[i];
+        }
+      }
+      ranges.push({ startIdx: rangeStart, endIdx: rangeEnd });
+
+      fileRanges.set(file, ranges.map(r => ({
+        startIdx: r.startIdx,
+        endIdx: r.endIdx,
+        startLine: sourceLines[r.startIdx].lineNum,
+        endLine: sourceLines[r.endIdx].lineNum
+      })));
+    }
+
+    return { fileDuplicatedLines, fileRanges, fileSeedHashes, fileSourceLines };
   }
 
   /**
-   * 把 token 级匹配得到的「文件→重复行号集合」转为 fileDetails 数组（Step 5）
+   * 把行级匹配得到的「文件→重复行号集合」转为 fileDetails 数组（Step 5）
    * - 过滤为源代码行（剔除空行/注释行）
    * - 只含有重复的文件入 fileDetails（无重复文件由 sloc 基础记录覆盖）
    */
   calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources) {
     const fileDetails = [];
     for (const [file, lineSet] of fileDuplicatedLines) {
-      // 兼容路径分隔符：detectWithTokenLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
+      // 兼容路径分隔符：detectWithLineLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
       const sourceLineMap = fileSourceLineMaps.get(file)
         || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
       if (!sourceLineMap) continue;
@@ -210,145 +244,6 @@ class DuplicationDetector extends BaseDetector {
       });
     }
     return fileDetails;
-  }
-
-  /**
-   * 使用 jscpd 核心引擎检测代码重复（fallback）
-   * - 绕过 jscpd 的 finder 模块（Windows 路径 bug），直接用 FileCollector 收集文件
-   * - mild 模式：忽略空行和空白 token，保留注释 token
-   * - 只保留跨文件 clone（排除同文件内重复）
-   */
-  async detectWithJscpd(files, fileSourceLineMaps) {
-    try {
-      const core = require('@jscpd/core');
-      const { Tokenizer, getFormatByFile, getSupportedFormats } = require('@jscpd/tokenizer');
-      const { InFilesDetector } = require('@jscpd/finder');
-
-      const entries = [];
-      for (const file of files) {
-        if (typeof file !== 'string') {
-          console.warn(`[WARN] Invalid file path type: ${typeof file}, skipping`);
-          continue;
-        }
-        const content = fs.readFileSync(file, 'utf8');
-        const format = getFormatByFile(path.basename(file));
-        if (!format) {
-          console.warn(`[WARN] Unsupported file format: ${file}`);
-          continue;
-        }
-        entries.push({
-          id: file.replace(/\\/g, '/'),
-          content: content,
-          format: format,
-          path: file.replace(/\\/g, '/'),
-          lines: content.split('\n').length
-        });
-      }
-
-      if (entries.length === 0) {
-        return { rate: 0, duplicatedLines: 0, totalLines: 0, clones: [] };
-      }
-
-      // 使用 mild 模式以包含 import 行（strict 会过滤掉 import）
-      // minLines=10 对齐华为云 cmetrics 官方定义
-      const options = Object.assign({}, core.getDefaultOptions(), {
-        minLines: this.minLines,
-        minTokens: this.minTokens,
-        mode: core.mild,
-        format: getSupportedFormats(),
-        silent: true,
-        hashFunction: (value) => crypto.createHash('md5').update(value).digest('hex')
-      });
-
-      const store = new core.MemoryStore();
-      const statistic = new core.Statistic();
-      const tokenizer = new Tokenizer();
-      const detector = new InFilesDetector(tokenizer, store, statistic, options);
-
-      const clones = await detector.detect(entries);
-      const stats = statistic.getStatistic();
-      const totalLines = stats.total.lines || 0;
-
-      // 单文件维度：排除同文件内重复（self-clones，dA.sourceId === dB.sourceId）
-      // 与 cmetrics "在其他地方重复"对齐：只统计跨文件重复
-      const crossFileClones = [];
-      for (const clone of clones) {
-        const dA = clone.duplicationA;
-        const dB = clone.duplicationB;
-        if (!dA || !dB || !dA.start || !dA.end || !dB.start || !dB.end) continue;
-        if (dA.sourceId === dB.sourceId) continue;
-        crossFileClones.push(clone);
-      }
-
-      // 总体 duplicatedLines：用 sum(min(A,B)) 近似 cmetrics token-level 算法
-      // jscpd 把相邻 token 合并成大 clone 区间，A 和 B 行数可能严重不一致
-      //（如 A=131 行 ↔ B=49 行，A 中夹了 82 行不匹配的中间行）
-      let totalMatchLines = 0;
-      for (const clone of crossFileClones) {
-        const dA = clone.duplicationA;
-        const dB = clone.duplicationB;
-        const aLineCount = dA.end.line - dA.start.line + 1;
-        const bLineCount = dB.end.line - dB.start.line + 1;
-        totalMatchLines += Math.min(aLineCount, bLineCount);
-      }
-
-      store.close();
-      return { rate: 0, duplicatedLines: totalMatchLines, totalLines, clones: crossFileClones };
-    } catch (error) {
-      console.warn(`jscpd engine failed, falling back to line-level detection: ${error.message}`);
-
-      // 回退到行级检测
-      try {
-        const lineResult = this.calculateLineDuplication(fileSourceLineMaps);
-        return { rate: 0, duplicatedLines: lineResult, totalLines: 0, clones: [] };
-      } catch (fallbackError) {
-        console.warn(`Fallback also failed: ${fallbackError.message}`);
-        return { rate: 0, duplicatedLines: 0, totalLines: 0, clones: [] };
-      }
-    }
-  }
-
-  // 行级重复检测（fallback 的 fallback）
-  calculateLineDuplication(fileSourceLineMaps) {
-    const blockMap = new Map();
-
-    for (const [file, content] of fileSourceLineMaps.entries()) {
-      const rawContent = fs.readFileSync(file, 'utf8');
-      const lines = rawContent.split('\n');
-      for (let i = 0; i <= lines.length - this.minLines; i++) {
-        const block = lines.slice(i, i + this.minLines)
-          .map(l => l.trim())
-          .join('\n');
-
-        if (block.replace(/\n/g, '').length < this.minTokens) continue;
-
-        const hash = crypto.createHash('md5').update(block).digest('hex');
-        if (!blockMap.has(hash)) blockMap.set(hash, []);
-        blockMap.get(hash).push({ file, startLine: i + 1 });
-      }
-    }
-
-    const processedSourceLines = new Map();
-    for (const [hash, locations] of blockMap) {
-      if (locations.length > 1) {
-        for (let idx = 1; idx < locations.length; idx++) {
-          const loc = locations[idx];
-          if (!processedSourceLines.has(loc.file)) processedSourceLines.set(loc.file, new Set());
-          const fileLines = processedSourceLines.get(loc.file);
-          const sourceLineMap = fileSourceLineMaps.get(loc.file);
-          for (let line = loc.startLine; line < loc.startLine + this.minLines; line++) {
-            if (sourceLineMap && sourceLineMap.lineMap.get(line)) fileLines.add(line);
-          }
-        }
-      }
-    }
-
-    let duplicatedSourceLines = 0;
-    for (const fileLines of processedSourceLines.values()) {
-      duplicatedSourceLines += fileLines.size;
-    }
-
-    return duplicatedSourceLines;
   }
 
   static isSourceLine(line) {
@@ -388,97 +283,46 @@ class DuplicationDetector extends BaseDetector {
     return identicalFileCount;
   }
 
-  // 计算每个文件的重复率和重复行数（fallback 路径用，主路径走 calculateFileDetailsFromLines）
-  // 单文件维度算法（与 cmetrics token-level 算法近似对齐）：
-  // - jsCPD 把相邻 token 合并成大 clone 区间，A 和 B 行数可能严重不一致
-  // - 近似方案：每个 clone 的实际重复行数 = min(A 行数, B 行数)
-  //   从 start.line 开始连续数 min 行
-  // - 同一文件多个 clone 重叠的行号只算一次（Set 去重）
-  calculateFileDuplicationDetails(clones, fileSourceLineMaps, sources) {
-    // 收集每个文件的重复行号（A 侧和 B 侧都收集，求并集）
-    const fileDuplicatedLines = new Map();
-
-    const getOrCreateSet = (file) => {
-      if (!fileDuplicatedLines.has(file)) {
-        fileDuplicatedLines.set(file, new Set());
-      }
-      return fileDuplicatedLines.get(file);
-    };
-
-    for (const clone of clones) {
-      const dA = clone.duplicationA;
-      const dB = clone.duplicationB;
-      if (!dA || !dB || !dA.start || !dA.end || !dB.start || !dB.end) continue;
-
-      // A 和 B 行数
-      const aLineCount = dA.end.line - dA.start.line + 1;
-      const bLineCount = dB.end.line - dB.start.line + 1;
-      // 实际匹配行数 = min(A, B)，对齐 cmetrics token-level 算法
-      const matchLineCount = Math.min(aLineCount, bLineCount);
-
-      // A 侧：从 start.line 开始连续数 matchLineCount 行
-      const aSet = getOrCreateSet(dA.sourceId);
-      for (let i = 0; i < matchLineCount; i++) {
-        aSet.add(dA.start.line + i);
-      }
-      // B 侧：从 start.line 开始连续数 matchLineCount 行
-      const bSet = getOrCreateSet(dB.sourceId);
-      for (let i = 0; i < matchLineCount; i++) {
-        bSet.add(dB.start.line + i);
-      }
-    }
-
-    // 计算每个文件的重复率
-    const fileDetails = [];
-    for (const [file, lineSet] of fileDuplicatedLines) {
-      // file 来自 sourceId（jscpd 内部统一正斜杠），fileSourceLineMaps 的 key 是原始路径
-      // Windows 下原始路径含反斜杠，需要兼容两种分隔符
-      const sourceLineMap = fileSourceLineMaps.get(file)
-        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
-      let duplicatedSourceLines = 0;
-      if (sourceLineMap) {
-        for (const lineNum of lineSet) {
-          if (sourceLineMap.lineMap.get(lineNum)) {
-            duplicatedSourceLines++;
-          }
-        }
-      }
-
-      const totalFileSourceLines = sourceLineMap ? sourceLineMap.sourceCount : 0;
-      const duplicationRate = totalFileSourceLines > 0
-        ? parseFloat(((duplicatedSourceLines / totalFileSourceLines) * 100).toFixed(2))
-        : 0;
-
-      let filePath = this.toRelativePath(file, sources);
-
-      fileDetails.push({
-        filePath: filePath,
-        duplicationRate: duplicationRate,
-        duplicationLineCount: duplicatedSourceLines
-      });
-    }
-
-    return fileDetails;
-  }
-
   // 将绝对路径转为相对路径
+  // 修复前缀匹配问题：/repo 会误匹配 /repo-other/test.py，需确保 src 是路径分隔符边界
   toRelativePath(absolutePath, sources) {
     if (!sources || sources.length === 0) {
       return absolutePath.replace(/\\/g, '/');
     }
+    const normalizedPath = absolutePath.replace(/\\/g, '/');
     for (const src of sources) {
-      const normalizedSrc = src.replace(/\\/g, '/');
-      const normalizedPath = absolutePath.replace(/\\/g, '/');
-      if (normalizedPath.startsWith(normalizedSrc)) {
+      const normalizedSrc = src.replace(/\\/g, '/').replace(/\/+$/, ''); // 去掉尾部斜杠
+      // 精确前缀匹配：src 后必须跟 / 或恰好等于完整路径
+      if (normalizedPath === normalizedSrc
+          || normalizedPath.startsWith(normalizedSrc + '/')) {
         return path.relative(src, absolutePath).replace(/\\/g, '/');
       }
     }
     return absolutePath.replace(/\\/g, '/');
   }
 
+  /**
+   * 从起始目录向上查找 git 仓库根目录（包含 .git 的目录）
+   * .git 既可能是目录（普通仓库）也可能是文件（worktree/submodule）
+   * @param {string} startDir 起始目录
+   * @returns {string|null} 仓库根目录绝对路径，找不到返回 null
+   */
+  findGitRoot(startDir) {
+    let cur = path.resolve(startDir);
+    const root = path.parse(cur).root;
+    for (let i = 0; i < 8 && cur && cur !== root; i++) {
+      if (fs.existsSync(path.join(cur, '.git'))) return cur;
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+    return null;
+  }
+
   // 计算完全一致文件的详情（用于总文件重复率下钻）
   // 只在文件内容完全一致（MD5相同）时才认为是重复文件
-  // 对于一组重复文件 A、B、C，只记录 A 的重复文件列表包含 B 和 C，不反向记录
+  // 对于一组重复文件 A、B、C，只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
+  // 前端将同一组的所有文件展示在一起，无需区分"原始文件"和"重复副本"
   calculateIdenticalFileDetails(fileContents, sources) {
     // 按内容哈希分组
     const hashGroups = new Map();
@@ -496,27 +340,266 @@ class DuplicationDetector extends BaseDetector {
       // 只处理有重复的组（2个及以上文件内容一致）
       if (files.length < 2) continue;
 
-      // 将第一个文件作为"原始文件"，其余文件作为"重复副本"
-      // 只为重复副本记录 duplicatedFiles，不反向记录
-      const originalFile = this.toRelativePath(files[0], sources);
-      for (let i = 1; i < files.length; i++) {
-        const duplicateFile = this.toRelativePath(files[i], sources);
-        // 重复文件的 duplicatedFiles 列表包含原始文件和同组的其他重复文件
-        const relatedFiles = [originalFile];
-        for (let j = 1; j < files.length; j++) {
-          if (j !== i) {
-            relatedFiles.push(this.toRelativePath(files[j], sources));
-          }
-        }
+      // 每组只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
+      // 前端展示时将同一组的所有文件列在一起，不再双向展示
+      const duplicatedFiles = files.map(f => this.toRelativePath(f, sources));
 
-        details.push({
-          filePath: duplicateFile,
-          duplicatedFiles: relatedFiles
+      details.push({
+        duplicatedFiles: duplicatedFiles
+      });
+    }
+
+    return details;
+  }
+
+  /**
+   * 从行级检测的合并区间构建重复块出现位置列表（主路径）
+   *
+   * 分组策略（union-find）：
+   * - 不同文件中的区间如果共享至少一个 seed hash（即某个 10 行窗口在两个区间中都出现），则归为同一组
+   * - 同一文件内的多个不连续区间属于不同组（除非通过其他文件的区间桥接）
+   * - 同一 (file, startLine, endLine) 跨多个 hash 时只产生一条记录（去重）
+   *
+   * @param {Map} fileRanges file → [{startIdx, endIdx, startLine, endLine}]
+   * @param {Map} fileSeedHashes file → Map<sourceIdx, Set<hash>>
+   * @param {Map} fileSourceLines file → [{lineNum, text}]
+   * @param {Map} fileContents file(原始路径) → 内容
+   * @param {string[]} sources 源目录列表
+   * @returns {Array} duplicationOccurrences 列表
+   */
+  buildDuplicationOccurrences(fileRanges, fileSeedHashes, fileSourceLines, fileContents, sources) {
+    // 收集所有区间，建立全局索引
+    const allRanges = [];
+    for (const [file, ranges] of fileRanges) {
+      for (const range of ranges) {
+        allRanges.push({ file, ...range });
+      }
+    }
+    if (allRanges.length === 0) return [];
+
+    // 为每个区间收集其覆盖的所有 seed hash
+    const rangeHashSets = allRanges.map(range => {
+      const seedMap = fileSeedHashes.get(range.file);
+      const hashes = new Set();
+      for (let idx = range.startIdx; idx <= range.endIdx; idx++) {
+        const h = seedMap.get(idx);
+        if (h) for (const x of h) hashes.add(x);
+      }
+      return hashes;
+    });
+
+    // 建立 hash → [rangeIndex] 的倒排索引
+    const hashToRangeIndices = new Map();
+    for (let i = 0; i < allRanges.length; i++) {
+      for (const h of rangeHashSets[i]) {
+        if (!hashToRangeIndices.has(h)) hashToRangeIndices.set(h, []);
+        hashToRangeIndices.get(h).push(i);
+      }
+    }
+
+    // Union-Find：共享 seed hash 的区间归为同一组
+    const parent = allRanges.map((_, i) => i);
+    const find = (x) => {
+      while (parent[x] !== x) {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+      }
+      return x;
+    };
+    const union = (x, y) => {
+      const px = find(x), py = find(y);
+      if (px !== py) parent[px] = py;
+    };
+
+    for (const [, indices] of hashToRangeIndices) {
+      for (let i = 1; i < indices.length; i++) {
+        union(indices[0], indices[i]);
+      }
+    }
+
+    // 按 root 分组
+    const groups = new Map();
+    for (let i = 0; i < allRanges.length; i++) {
+      const root = find(i);
+      if (!groups.has(root)) groups.set(root, []);
+      groups.get(root).push(i);
+    }
+
+    // 为每组构建 occurrences
+    const occurrences = [];
+    for (const [, indices] of groups) {
+      // 2+ 个出现位置才算重复
+      if (indices.length < 2) continue;
+
+      const groupRanges = indices.map(i => allRanges[i]);
+
+      // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
+      groupRanges.sort((a, b) => {
+        const relA = this.toRelativePath(a.file, sources);
+        const relB = this.toRelativePath(b.file, sources);
+        if (relA !== relB) return relA.localeCompare(relB);
+        return a.startLine - b.startLine;
+      });
+
+      // 提取第一个出现位置的内容，计算 contentHash/groupId（SHA-256）
+      const first = groupRanges[0];
+      const firstContent = this.extractBlockContent(
+          first.file, first.startLine, first.endLine, fileContents);
+      const contentHash = crypto.createHash('sha256').update(firstContent).digest('hex');
+
+      for (let i = 0; i < groupRanges.length; i++) {
+        const range = groupRanges[i];
+        const content = (i === 0)
+            ? firstContent
+            : this.extractBlockContent(range.file, range.startLine, range.endLine, fileContents);
+        occurrences.push({
+          groupId: contentHash,
+          contentHash: contentHash,
+          occurrenceIndex: i,
+          filePath: this.toRelativePath(range.file, sources),
+          startLine: range.startLine,
+          endLine: range.endLine,
+          content: content
         });
       }
     }
 
-    return details;
+    return occurrences;
+  }
+
+  /**
+   * 提取文件中指定行号区间的代码内容
+   *
+   * @param {string} file 文件路径（可能是正斜杠或反斜杠格式）
+   * @param {number} startLine 起始行（1-based）
+   * @param {number} endLine 结束行（1-based）
+   * @param {Map} fileContents file(原始路径) → 内容
+   * @returns {string} 代码内容，找不到文件时返回空字符串
+   */
+  extractBlockContent(file, startLine, endLine, fileContents) {
+    // 兼容路径分隔符：fileContents 的 key 是原始路径（Windows 下含反斜杠）
+    const content = fileContents.get(file)
+        || fileContents.get(file.replace(/\//g, '\\'));
+    if (!content) return '';
+    const lines = content.split('\n');
+    const start = Math.max(0, startLine - 1);
+    const end = Math.min(lines.length, endLine);
+    return lines.slice(start, end).join('\n');
+  }
+
+  /**
+   * 合并重叠/相邻的行号区间
+   *
+   * @param {Array} intervals [{startLine, endLine}]
+   * @param {boolean} mergeAdjacent 是否合并相邻区间（间隔 ≤1 行），默认 true。
+   *   重复块本身合并传 true（相邻重复块视为一个连续重复区域）；
+   *   扩展 ±contextLines 后的区间合并传 false（只有真正重叠才合并，避免上下文过长）。
+   * @returns {Array} 合并后的区间列表（按 startLine 排序）
+   */
+  mergeIntervals(intervals, mergeAdjacent = true) {
+    if (intervals.length === 0) return [];
+    const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
+    const merged = [{ startLine: sorted[0].startLine, endLine: sorted[0].endLine }];
+    // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
+    const overlapThreshold = mergeAdjacent ? 1 : 0;
+    for (let i = 1; i < sorted.length; i++) {
+      const last = merged[merged.length - 1];
+      if (sorted[i].startLine <= last.endLine + overlapThreshold) {
+        last.endLine = Math.max(last.endLine, sorted[i].endLine);
+      } else {
+        merged.push({ startLine: sorted[i].startLine, endLine: sorted[i].endLine });
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData。
+   * 不读取/上报完整文件内容，其他部分由前端用 "... N lines omitted ..." 占位。
+   *
+   * snapshotData 结构（整体 Base64 编码）：
+   * {
+   *   totalLines: 原始文件总行数,
+   *   contextLines: 上下文行数(5),
+   *   segments: [{originalStartLine, originalEndLine, contentB64}]
+   *   // 每个 segment 的 contentB64 为该片段代码内容再次 Base64 编码
+   * }
+   *
+   * @param {Array} fileDetails 文件明细列表
+   * @param {Array} duplicationOccurrences 重复块出现位置列表
+   * @param {Map} fileContents file(原始路径) → 内容
+   * @param {string[]} sources 源目录列表
+   * @param {number} contextLines 上下文行数，默认 5
+   * @returns {Array} 更新后的 fileDetails（每个有重复的 fileDetail 增加 snapshotData 字段）
+   */
+  buildContextSegments(fileDetails, duplicationOccurrences, fileContents, sources, contextLines = 5) {
+    if (!duplicationOccurrences || duplicationOccurrences.length === 0) {
+      return fileDetails;
+    }
+
+    // 按 filePath 分组出现位置，得到每个文件的重复块区间
+    const blocksByFile = new Map(); // relativePath → [{startLine, endLine}]
+    for (const occ of duplicationOccurrences) {
+      if (!blocksByFile.has(occ.filePath)) blocksByFile.set(occ.filePath, []);
+      blocksByFile.get(occ.filePath).push({ startLine: occ.startLine, endLine: occ.endLine });
+    }
+
+    // 构建 relativePath → content 的映射，便于按 fileDetail.filePath 查找
+    const relativeToContent = new Map();
+    for (const [absPath, content] of fileContents) {
+      relativeToContent.set(this.toRelativePath(absPath, sources), content);
+    }
+
+    for (const fileDetail of fileDetails) {
+      // 只有有重复的文件才生成快照
+      if (!fileDetail.duplicationLineCount || fileDetail.duplicationLineCount === 0) continue;
+
+      const blocks = blocksByFile.get(fileDetail.filePath);
+      if (!blocks || blocks.length === 0) continue;
+
+      // 1. 合并重叠的重复块区间
+      const mergedBlocks = this.mergeIntervals(blocks);
+
+      // 2. 每个合并后的块扩展 ±contextLines，再次合并重叠的扩展区间
+      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间
+      const extended = mergedBlocks.map(b => ({
+        startLine: Math.max(1, b.startLine - contextLines),
+        endLine: b.endLine + contextLines
+      }));
+      const mergedExtended = this.mergeIntervals(extended, false);
+
+      // 3. 获取文件内容和总行数
+      const content = relativeToContent.get(fileDetail.filePath);
+      if (!content) continue;
+      const lines = content.split('\n');
+      const totalLines = lines.length;
+
+      // 4. 构建 segments
+      const segments = [];
+      for (const interval of mergedExtended) {
+        const start = Math.max(1, interval.startLine);
+        const end = Math.min(totalLines, interval.endLine);
+        const segmentContent = lines.slice(start - 1, end).join('\n');
+        // 每个片段的 contentB64 内部再次 Base64 编码
+        const contentB64 = Buffer.from(segmentContent, 'utf8').toString('base64');
+        segments.push({
+          originalStartLine: start,
+          originalEndLine: end,
+          contentB64: contentB64
+        });
+      }
+
+      // 5. 构建 snapshotData JSON 并整体 Base64 编码
+      const snapshotDataObj = {
+        totalLines: totalLines,
+        contextLines: contextLines,
+        segments: segments
+      };
+      const snapshotJson = JSON.stringify(snapshotDataObj);
+      fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
+    }
+
+    return fileDetails;
   }
 
   getEmptyResult() {
@@ -528,7 +611,8 @@ class DuplicationDetector extends BaseDetector {
       duplicatedFiles: 0,
       totalFiles: 0,
       fileDetails: [],
-      identicalFileDetails: []
+      identicalFileDetails: [],
+      duplicationOccurrences: []
     };
   }
 

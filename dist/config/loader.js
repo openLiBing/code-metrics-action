@@ -16,11 +16,10 @@ const DEFAULT_CONFIG = {
     lizard: {
       enabled: true
     },
-    jscpd: {
+    duplication: {
       enabled: true,
       // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块重复记为一次"
       minLines: 10,
-      minTokens: 85,
       threshold: 0.3
     }
   },

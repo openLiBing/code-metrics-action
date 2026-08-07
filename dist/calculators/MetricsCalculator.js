@@ -1,28 +1,36 @@
 class MetricsCalculator {
-  static mergeResults(slocResult, lizardResult, jscpdResult) {
-    // 合并总体指标（排除 fileDetails 和 identicalFileDetails，单独处理）
+  static mergeResults(slocResult, lizardResult, duplicationResult) {
+    // 合并总体指标（排除 fileDetails / identicalFileDetails / duplicationOccurrences，单独处理）
     const { fileDetails: slocFileDetails, ...slocMetrics } = slocResult;
     const { fileDetails: lizardFileDetails, ...lizardMetrics } = lizardResult;
-    const { fileDetails: jscpdFileDetails, identicalFileDetails, ...jscpdMetrics } = jscpdResult;
+    // 显式提取 duplicationOccurrences，避免被 ...duplicationMetrics 散开混入总体指标
+    const {
+      fileDetails: duplicationFileDetails,
+      identicalFileDetails,
+      duplicationOccurrences,
+      ...duplicationMetrics
+    } = duplicationResult;
 
     // 合并文件级指标：以 sloc 的 fileDetails 为基础
     const fileDetails = MetricsCalculator.mergeFileDetails(
       slocFileDetails || [],
       lizardFileDetails || [],
-      jscpdFileDetails || []
+      duplicationFileDetails || []
     );
 
     return {
       ...slocMetrics,
       ...lizardMetrics,
-      ...jscpdMetrics,
+      ...duplicationMetrics,
       fileDetails: fileDetails,
-      identicalFileDetails: identicalFileDetails || []
+      identicalFileDetails: identicalFileDetails || [],
+      // 重复块出现位置列表（含每块的明文 content，由 uploader 做 Base64 编码后分批上报）
+      duplicationOccurrences: duplicationOccurrences || []
     };
   }
 
   // 合并三个检测器的 fileDetails
-  static mergeFileDetails(slocFileDetails, lizardFileDetails, jscpdFileDetails) {
+  static mergeFileDetails(slocFileDetails, lizardFileDetails, duplicationFileDetails) {
     // 以 sloc 的 fileDetails 为基础（有 filePath, language, loc）
     const fileMap = new Map();
 
@@ -65,13 +73,15 @@ class MetricsCalculator {
       }
     }
 
-    // 合并 jscpd 的 fileDetails（按 filePath 匹配）
-    for (const detail of jscpdFileDetails) {
+    // 合并 duplication 的 fileDetails（按 filePath 匹配）
+    for (const detail of duplicationFileDetails) {
       const existing = fileMap.get(detail.filePath);
       if (existing) {
         existing.duplicationRate = detail.duplicationRate || 0;
         existing.duplicationLineCount = detail.duplicationLineCount || 0;
         existing.duplicatedFiles = detail.duplicatedFiles || [];
+        // 上下文片段快照（重复块±5行，整体 Base64 编码），由 buildContextSegments 生成
+        existing.snapshotData = detail.snapshotData || null;
       } else {
         fileMap.set(detail.filePath, {
           filePath: detail.filePath,
@@ -83,7 +93,8 @@ class MetricsCalculator {
           functionDetails: [],
           duplicationRate: detail.duplicationRate || 0,
           duplicationLineCount: detail.duplicationLineCount || 0,
-          duplicatedFiles: detail.duplicatedFiles || []
+          duplicatedFiles: detail.duplicatedFiles || [],
+          snapshotData: detail.snapshotData || null
         });
       }
     }
@@ -110,8 +121,8 @@ class MetricsCalculator {
   }
 
   static formatForReport(metrics) {
-    // 分离 fileDetails、identicalFileDetails 和总体指标
-    const { fileDetails, identicalFileDetails, ...overallMetrics } = metrics;
+    // 分离 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
+    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metrics;
 
     return {
       codeScale: Number(overallMetrics.codeScale) || 0,
@@ -120,7 +131,9 @@ class MetricsCalculator {
       totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,
       totalFileDuplicationRate: Number(overallMetrics.totalFileDuplicationRate) || 0,
       fileDetails: fileDetails || [],
-      identicalFileDetails: identicalFileDetails || []
+      identicalFileDetails: identicalFileDetails || [],
+      // 重复块出现位置列表（含明文 content），uploader 会 Base64 编码后分批上报
+      duplicationOccurrences: duplicationOccurrences || []
     };
   }
 }

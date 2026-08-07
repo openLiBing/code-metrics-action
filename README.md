@@ -1,30 +1,47 @@
 # openlibing-code-metrics-action
 
-代码度量扫描插件 - 检测代码规模、平均函数代码行数、平均圈复杂度、代码重复率和文件重复率。
+代码度量扫描插件，检测代码规模、平均函数代码行数、平均圈复杂度、代码重复率和文件重复率，帮助团队量化代码质量与重复度。
 
 ## 功能
 
-| 指标             | 说明                                 | 工具        |
-| ---------------- | ------------------------------------ | ----------- |
-| 代码规模         | 有效代码行数                         | scc         |
-| 平均函数代码行数 | 函数体有效代码行的算术平均值         | lizard      |
-| 平均圈复杂度     | 函数级圈复杂度的算术平均值           | lizard      |
-| 代码重复率       | 跨文件重复代码行占有效代码行的百分比 | jscpd       |
-| 文件重复率       | 内容完全一致文件占总文件数的百分比   | MD5哈希比对 |
+| 指标             | 说明                               |
+| ---------------- | ---------------------------------- |
+| 代码规模         | 有效代码行数                       |
+| 平均函数代码行数 | 函数体有效代码行的算术平均值       |
+| 平均圈复杂度     | 函数级圈复杂度的算术平均值         |
+| 代码重复率       | 重复代码行占有效代码行的百分比     |
+| 文件重复率       | 内容完全一致文件占总文件数的百分比 |
+
+## 指标说明
+
+- **有效代码行**：非空非注释代码行。
+- **函数体有效代码行**：不包含函数名和函数参数在内的有效代码行。
+- **重复代码**：非空非注释行连续 10 行相同的代码片段即为重复代码（import 行也计入）。
+- **代码重复率**：重复代码行占有效代码行的百分比。
+- **文件级代码重复率**：将该文件的代码与代码仓中所有文件的代码进行比对，重复行数占该文件有效代码行数的百分比。
+- **总文件重复率**：内容完全一致的文件数 ÷ 仓库总文件数 × 100%。若文件 A 与文件 B 内容完全一致，则 A 和 B 均计入分子（共 2 个文件），源文件本身也计入比率。
+
+### 重复代码计数规则
+
+- **多文件相同重复块**：若 3 个文件都包含相同的 10 行重复代码，则总代码重复行数 +30（每个文件的 10 行均计入）。
+- **同文件多段重复取并集**：若 A 文件第 1-10 行与 B 文件重复，第 2-11 行与 C 文件重复，则 A 文件的重复代码行数取两段重复区间的并集，即第 1-11 行共 11 行；此时总代码重复行数为 31（A 的 11 行 + B 的 10 行 + C 的 10 行）。
 
 ## 使用方式
 
 ```yaml
-name: openlibing-code-metrics-action
+name: code-metrics-scan
 
 on:
   workflow_dispatch:
   push:
-    branches: ["master"]
+    branches:
+      - master
+  schedule:
+    - cron: "0 0 0 * * ?"
 
 jobs:
   code-metrics-scan:
-    name: 代码度量检测
+    name: 代码度量指标扫描
     runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "slim"]
     steps:
       - name: Checkout
@@ -32,9 +49,13 @@ jobs:
 
       - name: code-metrics-scan
         uses: openlibing-code-metrics-action
-        env:
-          OPENLIBING_APIG_KEY: ${{ secrets.OPENLIBING_APIG_KEY }}
-          OPENLIBING_APIG_SECRET: ${{ secrets.OPENLIBING_APIG_SECRET }}
+        with:
+          # 可选：排除指定目录/文件，不传 exclude-dirs 默认全路径扫描
+          # exclude-dirs: "node_modules,target,dist,.git,.gitcode,.mvn,.trae,vendor"
+          # 可选：扫描指定文件后缀的文件，不传 allowed-extensions 默认扫描全部文件
+          # allowed-extensions: ".c,.cpp,.h"
+          apig_app_key: ${{ secrets.OPENLIBING_APIG_KEY }}
+          apig_app_secret: ${{ secrets.OPENLIBING_APIG_SECRET }}
 ```
 
 ## 触发方式
@@ -53,15 +74,10 @@ jobs:
 | allowed-extensions | 否   | -            | 允许的文件扩展名，逗号分隔，不填时默认扫描所有文件类型 |
 | output             | 否   | metrics.json | 结果输出文件路径                                       |
 | upload             | 否   | true         | 是否上传检测结果到 coderepo 服务                       |
+| apig_app_key       | 否   | -            | APIG 网关 AppKey（即 AK，用于 HMAC-SHA256 签名）       |
+| apig_app_secret    | 否   | -            | APIG 网关 AppSecret（即 SK，用于 HMAC-SHA256 签名）    |
 
-## 环境变量
-
-上传功能需要以下环境变量（通过 APIG 网关调用 openLiBing 接口），请在`项目设置 -> Actions 密钥与变量 -> 仓库密钥中进行配置`：
-
-| 变量                   | 必填 | 说明                                                |
-| ---------------------- | ---- | --------------------------------------------------- |
-| OPENLIBING_APIG_KEY    | 是   | APIG 网关 AppKey（即 AK，用于 HMAC-SHA256 签名）    |
-| OPENLIBING_APIG_SECRET | 是   | APIG 网关 AppSecret（即 SK，用于 HMAC-SHA256 签名） |
+注：上传功能需要环境变量（通过 APIG 网关调用 openLiBing 接口），请在 `项目设置 -> Actions 密钥与变量 -> 仓库密钥` 中进行配置。
 
 ## 输出
 
@@ -75,6 +91,6 @@ jobs:
 
 ## 依赖
 
-- **scc** - 代码行数统计（内置二进制包 bin/scc）
-- **lizard** - 函数复杂度分析（Python 包，需 pip install）
-- **jscpd** - 代码重复检测（npm 依赖）
+- **scc** — 代码行数统计（内置二进制包）
+- **lizard** — 计算函数数、函数代码行数与圈复杂度（Python 包，运行时自动安装）
+- **重复代码与文件重复检测** — 插件内置实现，无需额外依赖
