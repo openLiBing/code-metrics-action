@@ -249,7 +249,9 @@ class DuplicationDetector extends BaseDetector {
   static isSourceLine(line) {
     const trimmed = line.trim();
     if (trimmed.length === 0) return false;
-    if (trimmed.startsWith('#')) return false;
+    // #include 是 C/C++ 的 import 行，应计入源代码行（与 scc 统计 loc 保持一致）；
+    // 其余 # 开头行（如 Python 注释、预处理宏）仍按非源代码行排除
+    if (trimmed.startsWith('#') && !trimmed.startsWith('#include')) return false;
     if (trimmed.startsWith('//')) return false;
     if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/')) return false;
     return true;

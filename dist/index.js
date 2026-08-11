@@ -524,7 +524,9 @@ class DuplicationDetector extends BaseDetector {
   static isSourceLine(line) {
     const trimmed = line.trim();
     if (trimmed.length === 0) return false;
-    if (trimmed.startsWith('#')) return false;
+    // #include 是 C/C++ 的 import 行，应计入源代码行（与 scc 统计 loc 保持一致）；
+    // 其余 # 开头行（如 Python 注释、预处理宏）仍按非源代码行排除
+    if (trimmed.startsWith('#') && !trimmed.startsWith('#include')) return false;
     if (trimmed.startsWith('//')) return false;
     if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/')) return false;
     return true;
@@ -59024,7 +59026,7 @@ async function run() {
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
     // 从环境变量获取 coderepo 信息（统一使用 OPENLIBING_APIG_KEY/SECRET，两个插件共用同一套 APIG 凭证）
-    const coderepoUrl = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com';
+    const coderepoUrl = 'https://apig.openlibing.com:443';
     const apigAppKey = getInput('apig_app_key') || '';
     const apigAppSecret = getInput('apig_app_secret') || '';
 
