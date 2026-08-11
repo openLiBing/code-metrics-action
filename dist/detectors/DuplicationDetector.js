@@ -13,7 +13,7 @@ class DuplicationDetector extends BaseDetector {
     this.allowedExtensions = config.allowedExtensions || [];
   }
 
-  async detect(source, codeScale = null) {
+  async detect(source, slocResult = null) {
     // 支持单个路径或多个路径
     const sources = Array.isArray(source) ? source : [source];
     const excludeDirs = this.config.excludeDirs || [];
@@ -22,6 +22,17 @@ class DuplicationDetector extends BaseDetector {
     // （source-dir 可能是子目录，用 sources 做基准会把子目录前缀也剥掉，只剩文件名）
     const gitRoot = this.findGitRoot(sources[0]);
     const pathBase = gitRoot ? [gitRoot] : sources;
+
+    // scc 的总体代码行数（codeScale），作为总重复率的分母
+    const codeScale = slocResult ? slocResult.codeScale : null;
+
+    // scc 每个文件的 loc 作为该文件重复率的权威分母，保证与上报的 loc 完全一致
+    const locByRel = new Map();
+    if (slocResult && Array.isArray(slocResult.fileDetails)) {
+      for (const d of slocResult.fileDetails) {
+        if (d && d.filePath) locByRel.set(d.filePath, Number(d.loc) || 0);
+      }
+    }
 
     // 收集所有文件
     const allFiles = [];
@@ -42,7 +53,7 @@ class DuplicationDetector extends BaseDetector {
       try {
         const content = fs.readFileSync(file, 'utf8');
         fileContents.set(file, content);
-        const sourceLineMap = this.buildSourceLineMap(content);
+        const sourceLineMap = this.buildSourceLineMap(content, file);
         fileSourceLineMaps.set(file, sourceLineMap);
         totalSourceLines += sourceLineMap.sourceCount;
       } catch (error) {
@@ -51,10 +62,10 @@ class DuplicationDetector extends BaseDetector {
     }
 
     // 行级跨文件匹配（与 cmetrics 官方定义对齐："非空非注释行连续 10 行相同"）
-    const lineResult = this.detectWithLineLevel(uniqueFiles, fileSourceLineMaps, fileContents);
+    const lineResult = this.detectWithLineLevel(uniqueFiles, fileSourceLineMaps);
     // 使用 let 声明：buildContextSegments 会返回带 snapshotData 的新 fileDetails
     let fileDetails = this.calculateFileDetailsFromLines(
-        lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase);
+        lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase, locByRel);
     // 从合并区间构建重复块出现位置（union-find 分组，自动去重）
     const duplicationOccurrences = this.buildDuplicationOccurrences(
         lineResult.fileRanges, lineResult.fileSeedHashes, lineResult.fileSourceLines,
@@ -112,26 +123,20 @@ class DuplicationDetector extends BaseDetector {
    * - 合并后同一 (file, startLine, endLine) 只产生一条记录（避免重复入库）
    *
    * @param {string[]} files 文件绝对路径列表
-   * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（用于兼容 calculateFileDetailsFromLines）
-   * @param {Map} fileContents file(原始路径) → 内容
+   * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（含 sourceLines，分类口径与 scc 一致）
    * @returns {Object} {fileDuplicatedLines, fileRanges, fileSeedHashes, fileSourceLines}
    */
-  detectWithLineLevel(files, fileSourceLineMaps, fileContents) {
+  detectWithLineLevel(files, fileSourceLineMaps) {
     const WINDOW_SIZE = this.minLines; // 10
 
-    // Step 1: 提取每个文件的源代码行（非空非注释），保留原始行号
+    // Step 1: 提取每个文件的源代码行（与 scc 有效代码行语义一致），保留原始行号
+    // 直接复用 buildSourceLineMap 已计算好的 sourceLines，避免分类口径不一致
     const fileSourceLines = new Map();
     for (const file of files) {
-      const content = fileContents.get(file);
-      if (!content) continue;
-      const lines = content.split('\n');
-      const sourceLines = [];
-      for (let i = 0; i < lines.length; i++) {
-        if (DuplicationDetector.isSourceLine(lines[i])) {
-          sourceLines.push({ lineNum: i + 1, text: lines[i].trim() });
-        }
-      }
-      fileSourceLines.set(file.replace(/\\/g, '/'), sourceLines);
+      const sourceLineMap = fileSourceLineMaps.get(file)
+        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
+      if (!sourceLineMap || !sourceLineMap.sourceLines) continue;
+      fileSourceLines.set(file.replace(/\\/g, '/'), sourceLineMap.sourceLines);
     }
 
     // Step 2: 10 源代码行滑动窗口，md5 哈希
@@ -215,7 +220,7 @@ class DuplicationDetector extends BaseDetector {
    * - 过滤为源代码行（剔除空行/注释行）
    * - 只含有重复的文件入 fileDetails（无重复文件由 sloc 基础记录覆盖）
    */
-  calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources) {
+  calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources, locByRel) {
     const fileDetails = [];
     for (const [file, lineSet] of fileDuplicatedLines) {
       // 兼容路径分隔符：detectWithLineLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
@@ -223,7 +228,7 @@ class DuplicationDetector extends BaseDetector {
         || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
       if (!sourceLineMap) continue;
 
-      // 过滤为源代码行（剔除空行/注释行），与 cmetrics "代码行" 定义一致
+      // 分子：仅统计 scc 视为"有效代码行"的重复行（剔除空行/注释/docstring）
       let duplicatedSourceLines = 0;
       for (const lineNum of lineSet) {
         if (sourceLineMap.lineMap.get(lineNum)) {
@@ -232,13 +237,16 @@ class DuplicationDetector extends BaseDetector {
       }
       if (duplicatedSourceLines === 0) continue;  // 全是注释/空行：不入 fileDetails
 
-      const totalFileSourceLines = sourceLineMap.sourceCount;
+      // 分母：优先用 scc 每个文件的 loc（与上报的 loc 完全一致），否则回退到本地分类统计
+      const filePath = this.toRelativePath(file, sources);
+      const sccLoc = locByRel ? locByRel.get(filePath) : undefined;
+      const totalFileSourceLines = (sccLoc !== undefined && sccLoc > 0) ? sccLoc : sourceLineMap.sourceCount;
       const duplicationRate = totalFileSourceLines > 0
         ? parseFloat(((duplicatedSourceLines / totalFileSourceLines) * 100).toFixed(2))
         : 0;
 
       fileDetails.push({
-        filePath: this.toRelativePath(file, sources),
+        filePath: filePath,
         duplicationRate,
         duplicationLineCount: duplicatedSourceLines
       });
@@ -246,27 +254,121 @@ class DuplicationDetector extends BaseDetector {
     return fileDetails;
   }
 
-  static isSourceLine(line) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) return false;
-    // #include 是 C/C++ 的 import 行，应计入源代码行（与 scc 统计 loc 保持一致）；
-    // 其余 # 开头行（如 Python 注释、预处理宏）仍按非源代码行排除
-    if (trimmed.startsWith('#') && !trimmed.startsWith('#include')) return false;
-    if (trimmed.startsWith('//')) return false;
-    if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/')) return false;
-    return true;
+  // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）
+  // hashIsCode=true：C/C++ 预处理指令（#include/#define 等）计入代码行（scc 计入）
+  // mlStrings：Python 三引号 docstring 按注释处理（scc 不计入代码行）
+  static getLanguageConfig(ext) {
+    const e = (ext || '').toLowerCase();
+    switch (e) {
+      case '.c': case '.cpp': case '.cc': case '.cxx': case '.h': case '.hpp': case '.cuh':
+        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: true };
+      case '.java': case '.js': case '.mjs': case '.cjs': case '.ts': case '.go': case '.cs':
+      case '.scala': case '.kt': case '.kts': case '.swift': case '.rs':
+        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+      case '.php':
+        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+      case '.py':
+        return { lineComments: ['#'], blockStart: null, blockEnd: null, mlStrings: ['"""', "'''"], hashIsCode: false };
+      case '.rb':
+        // Ruby 块注释：=begin ... =end（必须位于行首），行注释为 #
+        return { lineComments: ['#'], blockStart: '=begin', blockEnd: '=end', mlStrings: [], hashIsCode: false };
+      default:
+        // 未知语言：保守兜底，覆盖 C 风格与 # 注释
+        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+    }
   }
 
-  buildSourceLineMap(content) {
-    const lines = content.split('\n');
-    const lineMap = new Map();
-    let sourceCount = 0;
-    for (let i = 0; i < lines.length; i++) {
-      const isSource = DuplicationDetector.isSourceLine(lines[i]);
-      lineMap.set(i + 1, isSource);
-      if (isSource) sourceCount++;
+  static startsWithAny(text, markers) {
+    for (const m of markers) {
+      if (text.startsWith(m)) return true;
     }
-    return { lineMap, sourceCount };
+    return false;
+  }
+
+  // 判断一行是否以某个多行字符串标记开始；若同一行内已闭合则返回 null（不进入状态）
+  static openMlString(text, markers) {
+    for (const m of markers) {
+      if (text.startsWith(m)) {
+        return text.slice(m.length).includes(m) ? null : m;
+      }
+    }
+    return null;
+  }
+
+  // 判断一行中（非行首）是否出现三引号字符串标记。
+  // 与 scc 语义对齐：行首的三引号是 docstring（注释），行中的三引号是字符串字面量（计入代码行）。
+  // 返回 { marker, open }：open=true 表示该行打开了未在同行闭合的多行字符串；open=false 表示同行已闭合。
+  static findMidLineMlString(line, markers) {
+    for (const m of markers) {
+      const idx = line.indexOf(m);
+      // 只处理出现在行中的标记；行首由调用方走 docstring 分支
+      if (idx > 0) {
+        const after = line.slice(idx + m.length);
+        return { marker: m, open: !after.includes(m) };
+      }
+    }
+    return null;
+  }
+
+  // 逐文件构建"有效代码行"分析：与 scc 口径完全一致
+  // - 剔除空行、行注释、块注释、行首三引号 docstring（注释）
+  // - 行中三引号多行字符串（如 x = '''...'''）整块计入代码行（含内部空白行）
+  // - C/C++ 预处理指令（#include/#define 等）计入代码行
+  // 返回 { lineMap: 行号→是否有效代码行, sourceCount, sourceLines: [{lineNum,text}] }
+  buildSourceLineMap(content, filePath) {
+    const lines = content.split('\n');
+    const lang = DuplicationDetector.getLanguageConfig(filePath ? path.extname(filePath) : '');
+    const lineMap = new Map();
+    const sourceLines = [];
+    let sourceCount = 0;
+    let inBlock = false;      // 是否处于块注释中
+    let inDocstring = null;   // 行首三引号 docstring（注释）的结束标记
+    let inMlStringCode = null; // 行中三引号多行字符串（代码）的结束标记
+
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      let isCode = false;
+
+      if (inBlock) {
+        // 块注释中：查找结束标记
+        if (lang.blockEnd && trimmed.includes(lang.blockEnd)) inBlock = false;
+      } else if (inDocstring) {
+        // docstring（注释）中：查找结束标记
+        if (trimmed.includes(inDocstring)) inDocstring = null;
+      } else if (inMlStringCode) {
+        // 行中多行字符串中：整块计入代码行（含空白行），查找结束标记
+        isCode = true;
+        if (trimmed.includes(inMlStringCode)) inMlStringCode = null;
+      } else if (trimmed.length === 0) {
+        // 空行
+      } else if (lang.mlStrings.length > 0 && DuplicationDetector.startsWithAny(trimmed, lang.mlStrings)) {
+        // 行首三引号 → docstring，视为注释不计入代码行；未闭合则进入状态
+        const marker = DuplicationDetector.openMlString(trimmed, lang.mlStrings);
+        if (marker !== null) inDocstring = marker;
+      } else if (lang.blockStart && trimmed.startsWith(lang.blockStart)) {
+        // 块注释开始行
+        if (!trimmed.includes(lang.blockEnd)) inBlock = true;
+      } else if (DuplicationDetector.startsWithAny(trimmed, lang.lineComments)) {
+        // 纯行注释
+      } else if (lang.hashIsCode && trimmed.startsWith('#')) {
+        // C/C++ 预处理指令：计入代码行
+        isCode = true;
+      } else {
+        // 普通代码行；若行中出现三引号且未同行闭合，则进入"行中多行字符串"状态（仍计入代码行）
+        isCode = true;
+        if (lang.mlStrings.length > 0) {
+          const mm = DuplicationDetector.findMidLineMlString(trimmed, lang.mlStrings);
+          if (mm && mm.open) inMlStringCode = mm.marker;
+        }
+      }
+
+      lineMap.set(i + 1, isCode);
+      if (isCode) {
+        sourceCount++;
+        sourceLines.push({ lineNum: i + 1, text: trimmed });
+      }
+    }
+    return { lineMap, sourceCount, sourceLines };
   }
 
   calculateFileDuplication(fileContents) {

@@ -94,7 +94,8 @@ class MetricsScanner {
 
       if (this.config.detectors?.duplication?.enabled !== false) {
         this.logger.info('Running duplication detector (code duplication)...');
-        duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult.codeScale);
+        // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
+        duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
         this.logger.debug('duplication result:', JSON.stringify(duplicationResult));
       }
 
