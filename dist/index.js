@@ -700,18 +700,22 @@ class DuplicationDetector extends BaseDetector {
   /**
    * 从行级检测的共享滑动窗口构建重复块出现位置列表（主路径）
    *
-   * 分组策略（基于「文件集合关系」+「完全一致文件去重」）：
+   * 分组策略（基于「精确文件集合分桶」+「完全一致文件去重」+「跨组去重」）：
    * - 每个共享 hash（10 行连续窗口内容）都有一个「出现文件集合」F(hash)，即共同出现该内容的所有文件
-   * - 每个去重后的文件集合 S 代表一种「重复关系」；S 的重复内容 = 所有满足 F(hash) ⊇ S 的窗口之并集
-   *   （即这些内容在 S 中每个文件上都出现）
-   * - 内容完全一致的文件（trim 后 MD5 相同，如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp）
-   *   视为同一「等价类」，作为独立的一组；其它存在包含/重叠关系的文件，
-   *   与等价类「成对分组」——同一等价类在部分重复组里只保留一个代表，
-   *   从而把 {all_dup, dup, test} 这类含完全一致文件的三文件组收敛为 {all_dup, dup}。
+   * - 内容完全一致的文件（trim 后 MD5 相同）视为同一「等价类」，每个等价类选一个代表；
+   *   每个窗口的「代表集合」F' = { rep(f) | f ∈ F(hash) }
+   * - 按 F' 精确分桶：同一 F' 的窗口归入同一「重复关系」，不再做超集匹配
+   *   ——这保证同一代码块只属于一个精确文件集合组，不会被多个子集组重复包含
+   * - 同一 F' 桶内 |F'| ≥ 2 才算重复关系；桶内按代表合并连续索引为出现区间，每个区间一条 occurrence
+   * - 完全一致文件组单独输出：同一等价类 ≥2 个文件时整块成一组
+   * - 跨组去重保险：最终对同一 (file, startLine, endLine) 出现在多个组的情形，
+   *   只保留行覆盖最大的那个组，从其余组删除该 occurrence（不足 2 条的组整组丢弃）
    *
    * 最终分组示例（all_dup_cfile.cpp=A, test-codeql-cpp.cpp=T 完全一致，dup_cfile.cpp=D 为 A 的子集）：
    * - 完全一致组：{A, T}（整块 1-46 行）
-   * - 部分重复组：{A, D}（共同部分），T 因与 A 完全一致被去重，不再重复出现
+   * - 部分重复组：{A, D}（L14-46 共同部分），T 因与 A 完全一致被折叠为 A，不再单独出现
+   * - apig 三文件完全共同代码 L4-16：F'={anti, codecheck, sca} 精确成一组，
+   *   不会在 {anti,codecheck}、{codecheck,sca} 等子集组重复出现
    *
    * 重复代码行数/重复率仍由行级检测（fileDuplicatedLines）取并集计算，与分组无关，不受影响。
    *
@@ -739,72 +743,34 @@ class DuplicationDetector extends BaseDetector {
       for (const f of files) fileToRep.set(f, rep);
     }
 
-    // 2) 每个共享 hash：出现文件集合 F(hash)，以及按文件归类的窗口位置
-    const hashFileSet = new Map();      // hash -> Set<file>
-    const hashFileWindows = new Map();  // hash -> Map<file, [{startIdx,endIdx}]>
+    // 2) 每个共享 hash：按「代表集合」F' 精确分桶
+    //    bucketKey = 排序后的代表路径拼接；同一 F' 的窗口归入同一桶
+    const buckets = new Map(); // bucketKey -> { reps: [rep...], idxByRep: Map<rep, Set<idx>> }
     for (const [hash, wins] of sharedHashWindows) {
-      const set = new Set();
-      const byFile = new Map();
-      for (const w of wins) {
-        set.add(w.file);
-        if (!byFile.has(w.file)) byFile.set(w.file, []);
-        byFile.get(w.file).push({ startIdx: w.startIdx, endIdx: w.endIdx });
+      const reps = new Set();
+      for (const w of wins) reps.add(fileToRep.get(w.file) || w.file);
+      if (reps.size < 2) continue; // 代表集合 < 2 不构成重复关系
+      const bucketKey = [...reps].sort().join('\u0001');
+      if (!buckets.has(bucketKey)) {
+        buckets.set(bucketKey, { reps: [...reps].sort(), idxByRep: new Map() });
       }
-      hashFileSet.set(hash, set);
-      hashFileWindows.set(hash, byFile);
-    }
-
-    // 3) 候选「重复关系」= 去重后的窗口文件集合（保留原始集合以计算共同内容）
-    const candidates = [];
-    const seen = new Set();
-    for (const set of hashFileSet.values()) {
-      const key = [...set].sort().join('\u0001');
-      if (set.size >= 2 && !seen.has(key)) {
-        seen.add(key);
-        candidates.push([...set].sort());
+      const bucket = buckets.get(bucketKey);
+      for (const w of wins) {
+        const rep = fileToRep.get(w.file) || w.file;
+        if (!bucket.idxByRep.has(rep)) bucket.idxByRep.set(rep, new Set());
+        for (let i = w.startIdx; i <= w.endIdx; i++) bucket.idxByRep.get(rep).add(i);
       }
     }
 
     const occurrences = [];
 
-    // 4) 处理「部分重复」关系：每个候选折叠为等价类代表后成组
-    //    同一等价类（完全一致文件）在该组只保留一个代表，避免 {all_dup,dup,test} 这类
-    //    三文件共同组出现；不足 2 个代表的组不算重复
-    for (const S of candidates) {
-      // common(S)：所有「出现文件集合 ⊇ S」的窗口共同构成该关系的内容。
-      // 对 S 中每个文件收集被这些窗口覆盖的源代码索引。
-      const idxByFile = new Map(); // file -> Set<idx>
-      for (const [hash, byFile] of hashFileWindows) {
-        const fset = hashFileSet.get(hash);
-        let allInS = true;
-        for (const f of S) if (!fset.has(f)) { allInS = false; break; }
-        if (!allInS) continue;
-        for (const f of S) {
-          const wins = byFile.get(f);
-          if (!wins) continue;
-          if (!idxByFile.has(f)) idxByFile.set(f, new Set());
-          for (const w of wins) {
-            for (let i = w.startIdx; i <= w.endIdx; i++) idxByFile.get(f).add(i);
-          }
-        }
-      }
-
-      // 折叠：S 中属于同一等价类的文件合并到代表，同组不再出现重复文件
-      const repOccIdx = new Map(); // rep -> Set<idx>
-      const repSet = new Set();
-      for (const f of S) {
-        const rep = fileToRep.get(f) || f;
-        repSet.add(rep);
-        const idxSet = idxByFile.get(f);
-        if (!idxSet) continue;
-        if (!repOccIdx.has(rep)) repOccIdx.set(rep, new Set());
-        for (const i of idxSet) repOccIdx.get(rep).add(i);
-      }
-      if (repSet.size < 2) continue; // 折叠后不足 2 个代表，不算重复
-
-      // 每个代表把连续索引合并为出现区间
+    // 3) 每个桶 = 一种「部分重复关系」：按代表合并连续索引为出现区间，成组输出
+    for (const { reps, idxByRep } of buckets.values()) {
+      if (reps.length < 2) continue;
       const fileOccs = [];
-      for (const [rep, idxSet] of repOccIdx) {
+      for (const rep of reps) {
+        const idxSet = idxByRep.get(rep);
+        if (!idxSet || idxSet.size === 0) continue;
         const sourceLines = fileSourceLines.get(rep);
         if (!sourceLines) continue;
         const sorted = [...idxSet].sort((a, b) => a - b);
@@ -827,13 +793,11 @@ class DuplicationDetector extends BaseDetector {
         }
         flush();
       }
-
       if (fileOccs.length < 2) continue; // 少于 2 个出现位置不算重复
-
       this.pushGroup(occurrences, fileOccs, sources, fileContents);
     }
 
-    // 5) 处理「完全一致文件」组：同一内容哈希的 ≥2 个文件单独成一组，
+    // 4) 处理「完全一致文件」组：同一内容哈希的 ≥2 个文件单独成一组，
     //    每个成员各占一条出现记录（整文件为重复块）
     //    只有源代码行数 ≥ minLines(10) 的文件才可能被滑窗检测为重复块，故以此作为阈值
     for (const files of contentHashToFiles.values()) {
@@ -852,7 +816,72 @@ class DuplicationDetector extends BaseDetector {
       this.pushGroup(occurrences, fileOccs, sources, fileContents);
     }
 
+    // 5) 跨组去重保险：同一 (file, startLine, endLine) 若出现在多个组，
+    //    只保留行覆盖最大的那个组中的出现位置，从其余组删除。
+    //    （理论上精确分桶后不应出现，此处作为防御性兜底，避免任何边界情形造成跨组重复）
+    this.dedupOccurrencesAcrossGroups(occurrences);
+
     return occurrences;
+  }
+
+  // 跨组去重：同一 (filePath, startLine, endLine) 出现在多个组时，
+  // 只保留组内「所有出现位置行覆盖并集」最大的那个组中的该出现位置，从其它组删除。
+  // 删除后若某组不足 2 条出现位置，则整组丢弃。
+  // 注意：此处以 occurrence 自身的 groupId 为分组依据，不依赖外部结构。
+  dedupOccurrencesAcrossGroups(occurrences) {
+    if (!occurrences || occurrences.length === 0) return;
+
+    // 统计每个组的行覆盖并集大小，用于决定保留哪个组
+    const groupLineSpan = new Map(); // groupId -> Set<lineKey>
+    for (const o of occurrences) {
+      if (!groupLineSpan.has(o.groupId)) groupLineSpan.set(o.groupId, new Set());
+      const span = groupLineSpan.get(o.groupId);
+      for (let ln = o.startLine; ln <= o.endLine; ln++) {
+        span.add(`${o.filePath}:${ln}`);
+      }
+    }
+
+    // 对每个 (filePath, startLine, endLine) 找出它所在的所有组，保留 span 最大者
+    const blockToGroups = new Map(); // blockKey -> Set<groupId>
+    for (const o of occurrences) {
+      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
+      if (!blockToGroups.has(k)) blockToGroups.set(k, new Set());
+      blockToGroups.get(k).add(o.groupId);
+    }
+    const dropGroupForBlock = new Map(); // blockKey -> Set<groupId>(要删除的组)
+    for (const [k, gids] of blockToGroups) {
+      if (gids.size < 2) continue;
+      let best = null, bestSize = -1;
+      for (const gid of gids) {
+        const sz = groupLineSpan.get(gid) ? groupLineSpan.get(gid).size : 0;
+        if (sz > bestSize) { bestSize = sz; best = gid; }
+      }
+      const drop = new Set();
+      for (const gid of gids) if (gid !== best) drop.add(gid);
+      dropGroupForBlock.set(k, drop);
+    }
+    if (dropGroupForBlock.size === 0) return;
+
+    // 执行删除：从被标记为删除的 (blockKey, groupId) 对中移除 occurrence
+    for (let i = occurrences.length - 1; i >= 0; i--) {
+      const o = occurrences[i];
+      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
+      const drop = dropGroupForBlock.get(k);
+      if (drop && drop.has(o.groupId)) {
+        occurrences.splice(i, 1);
+      }
+    }
+
+    // 删除后若某组不足 2 条，整组丢弃
+    const groupCount = new Map();
+    for (const o of occurrences) {
+      groupCount.set(o.groupId, (groupCount.get(o.groupId) || 0) + 1);
+    }
+    for (let i = occurrences.length - 1; i >= 0; i--) {
+      if (groupCount.get(occurrences[i].groupId) < 2) {
+        occurrences.splice(i, 1);
+      }
+    }
   }
 
   // 把一组出现位置(重复块)统一排序、生成 groupId 并写入 occurrences
