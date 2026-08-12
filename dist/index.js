@@ -700,12 +700,20 @@ class DuplicationDetector extends BaseDetector {
   /**
    * 从行级检测的共享滑动窗口构建重复块出现位置列表（主路径）
    *
-   * 分组策略（基于「共享窗口」的并查集，避免跨重复块桥接）：
-   * - 每个共享 hash（10 行连续窗口内容）的所有出现窗口天然属于同一组（规则 a）
-   * - 同一文件内相邻/重叠的窗口，仅在它们的「出现文件集合」完全一致时才合并（规则 b）
-   *   —— 这样当同一个文件的相邻重复块属于不同内容（如分别与不同文件重复）时不会被错误合并
-   * - 同组内按文件合并连续索引为出现区间，每个区间是一条 occurrence
-   * - 同一 (file, startLine, endLine) 跨多个 hash 时只产生一条记录（去重）
+   * 分组策略（基于「文件集合关系」+「完全一致文件去重」）：
+   * - 每个共享 hash（10 行连续窗口内容）都有一个「出现文件集合」F(hash)，即共同出现该内容的所有文件
+   * - 每个去重后的文件集合 S 代表一种「重复关系」；S 的重复内容 = 所有满足 F(hash) ⊇ S 的窗口之并集
+   *   （即这些内容在 S 中每个文件上都出现）
+   * - 内容完全一致的文件（trim 后 MD5 相同，如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp）
+   *   视为同一「等价类」，作为独立的一组；其它存在包含/重叠关系的文件，
+   *   与等价类「成对分组」——同一等价类在部分重复组里只保留一个代表，
+   *   从而把 {all_dup, dup, test} 这类含完全一致文件的三文件组收敛为 {all_dup, dup}。
+   *
+   * 最终分组示例（all_dup_cfile.cpp=A, test-codeql-cpp.cpp=T 完全一致，dup_cfile.cpp=D 为 A 的子集）：
+   * - 完全一致组：{A, T}（整块 1-46 行）
+   * - 部分重复组：{A, D}（共同部分），T 因与 A 完全一致被去重，不再重复出现
+   *
+   * 重复代码行数/重复率仍由行级检测（fileDuplicatedLines）取并集计算，与分组无关，不受影响。
    *
    * @param {Map} fileSourceLines file → [{lineNum, text}]（key 为 '/' 归一化路径）
    * @param {Map} fileContents file(原始路径) → 内容
@@ -716,98 +724,94 @@ class DuplicationDetector extends BaseDetector {
   buildDuplicationOccurrences(fileSourceLines, fileContents, sources, sharedHashWindows) {
     if (!sharedHashWindows || sharedHashWindows.size === 0) return [];
 
-    // 每个共享 hash 的出现文件集合 F(hash)
-    const hashFileSet = new Map(); // hash -> Set<file>
+    // 1) 计算「完全一致文件」的等价类：内容(trim 后)哈希相同的文件归为一类
+    //    （如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp 完全相同）
+    const contentHashToFiles = new Map(); // hash -> [归一化路径]
+    const fileToRep = new Map();          // 归一化路径 -> 该类代表
+    for (const [file, content] of fileContents) {
+      const norm = file.replace(/\\/g, '/');
+      const hash = crypto.createHash('md5').update(content.trim()).digest('hex');
+      if (!contentHashToFiles.has(hash)) contentHashToFiles.set(hash, []);
+      contentHashToFiles.get(hash).push(norm);
+    }
+    for (const files of contentHashToFiles.values()) {
+      const rep = files[0];
+      for (const f of files) fileToRep.set(f, rep);
+    }
+
+    // 2) 每个共享 hash：出现文件集合 F(hash)，以及按文件归类的窗口位置
+    const hashFileSet = new Map();      // hash -> Set<file>
+    const hashFileWindows = new Map();  // hash -> Map<file, [{startIdx,endIdx}]>
     for (const [hash, wins] of sharedHashWindows) {
       const set = new Set();
-      for (const w of wins) set.add(w.file);
-      hashFileSet.set(hash, set);
-    }
-
-    // 两个文件集合的共同文件数
-    const commonFileCount = (a, b) => {
-      let c = 0;
-      for (const x of a) if (b.has(x)) c++;
-      return c;
-    };
-
-    // 每个共享窗口作为并查集的一个节点
-    const nodes = []; // {file, startIdx, endIdx, hash}
-    const hashToNodeIds = new Map();
-    const fileToNodeIds = new Map();
-    for (const [hash, wins] of sharedHashWindows) {
+      const byFile = new Map();
       for (const w of wins) {
-        const id = nodes.length;
-        nodes.push({ file: w.file, startIdx: w.startIdx, endIdx: w.endIdx, hash });
-        if (!hashToNodeIds.has(hash)) hashToNodeIds.set(hash, []);
-        hashToNodeIds.get(hash).push(id);
-        if (!fileToNodeIds.has(w.file)) fileToNodeIds.set(w.file, []);
-        fileToNodeIds.get(w.file).push(id);
+        set.add(w.file);
+        if (!byFile.has(w.file)) byFile.set(w.file, []);
+        byFile.get(w.file).push({ startIdx: w.startIdx, endIdx: w.endIdx });
       }
-    }
-    if (nodes.length === 0) return [];
-
-    const parent = nodes.map((_, i) => i);
-    const find = (x) => {
-      while (parent[x] !== x) {
-        parent[x] = parent[parent[x]];
-        x = parent[x];
-      }
-      return x;
-    };
-    const union = (x, y) => {
-      const px = find(x), py = find(y);
-      if (px !== py) parent[px] = py;
-    };
-
-    // 规则 a：同一 hash（相同内容）的出现窗口归为同一组
-    for (const [, ids] of hashToNodeIds) {
-      for (let i = 1; i < ids.length; i++) union(ids[0], ids[i]);
+      hashFileSet.set(hash, set);
+      hashFileWindows.set(hash, byFile);
     }
 
-    // 规则 b：同一文件内相邻/重叠窗口，仅当它们「至少共享 2 个文件」时才合并。
-    // 原实现要求文件集合完全一致，导致「两个文件完全一致、但被第三个文件部分共享」
-    // 的场景（如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp）被误切分成两组。
-    // 改为共享 ≥2 个文件（即除当前文件外还共享至少一个其他文件）即可让完全一致的
-    // 文件合并成整块，同时仍能拆开 part_dup 这类重叠但连接不同文件的重复块。
-    for (const [, ids] of fileToNodeIds) {
-      ids.sort((a, b) => nodes[a].startIdx - nodes[b].startIdx);
-      for (let i = 1; i < ids.length; i++) {
-        const a = nodes[ids[i - 1]], b = nodes[ids[i]];
-        if (b.startIdx <= a.endIdx + 1
-            && commonFileCount(hashFileSet.get(a.hash), hashFileSet.get(b.hash)) >= 2) {
-          union(ids[i - 1], ids[i]);
-        }
+    // 3) 候选「重复关系」= 去重后的窗口文件集合（保留原始集合以计算共同内容）
+    const candidates = [];
+    const seen = new Set();
+    for (const set of hashFileSet.values()) {
+      const key = [...set].sort().join('\u0001');
+      if (set.size >= 2 && !seen.has(key)) {
+        seen.add(key);
+        candidates.push([...set].sort());
       }
-    }
-
-    // 按 root 分组
-    const groups = new Map();
-    for (let i = 0; i < nodes.length; i++) {
-      const root = find(i);
-      if (!groups.has(root)) groups.set(root, []);
-      groups.get(root).push(i);
     }
 
     const occurrences = [];
-    for (const [, ids] of groups) {
-      // 组内按文件收集被覆盖的源代码索引
+
+    // 4) 处理「部分重复」关系：每个候选折叠为等价类代表后成组
+    //    同一等价类（完全一致文件）在该组只保留一个代表，避免 {all_dup,dup,test} 这类
+    //    三文件共同组出现；不足 2 个代表的组不算重复
+    for (const S of candidates) {
+      // common(S)：所有「出现文件集合 ⊇ S」的窗口共同构成该关系的内容。
+      // 对 S 中每个文件收集被这些窗口覆盖的源代码索引。
       const idxByFile = new Map(); // file -> Set<idx>
-      for (const id of ids) {
-        const n = nodes[id];
-        if (!idxByFile.has(n.file)) idxByFile.set(n.file, new Set());
-        for (let i = n.startIdx; i <= n.endIdx; i++) idxByFile.get(n.file).add(i);
+      for (const [hash, byFile] of hashFileWindows) {
+        const fset = hashFileSet.get(hash);
+        let allInS = true;
+        for (const f of S) if (!fset.has(f)) { allInS = false; break; }
+        if (!allInS) continue;
+        for (const f of S) {
+          const wins = byFile.get(f);
+          if (!wins) continue;
+          if (!idxByFile.has(f)) idxByFile.set(f, new Set());
+          for (const w of wins) {
+            for (let i = w.startIdx; i <= w.endIdx; i++) idxByFile.get(f).add(i);
+          }
+        }
       }
 
-      // 每个文件合并连续索引为出现区间
+      // 折叠：S 中属于同一等价类的文件合并到代表，同组不再出现重复文件
+      const repOccIdx = new Map(); // rep -> Set<idx>
+      const repSet = new Set();
+      for (const f of S) {
+        const rep = fileToRep.get(f) || f;
+        repSet.add(rep);
+        const idxSet = idxByFile.get(f);
+        if (!idxSet) continue;
+        if (!repOccIdx.has(rep)) repOccIdx.set(rep, new Set());
+        for (const i of idxSet) repOccIdx.get(rep).add(i);
+      }
+      if (repSet.size < 2) continue; // 折叠后不足 2 个代表，不算重复
+
+      // 每个代表把连续索引合并为出现区间
       const fileOccs = [];
-      for (const [file, idxSet] of idxByFile) {
+      for (const [rep, idxSet] of repOccIdx) {
+        const sourceLines = fileSourceLines.get(rep);
+        if (!sourceLines) continue;
         const sorted = [...idxSet].sort((a, b) => a - b);
-        const sourceLines = fileSourceLines.get(file);
         let rs = sorted[0], re = sorted[0];
         const flush = () => {
           fileOccs.push({
-            file,
+            file: rep,
             startLine: sourceLines[rs].lineNum,
             endLine: sourceLines[re].lineNum
           });
@@ -826,36 +830,63 @@ class DuplicationDetector extends BaseDetector {
 
       if (fileOccs.length < 2) continue; // 少于 2 个出现位置不算重复
 
-      // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
-      fileOccs.sort((a, b) => {
-        const relA = this.toRelativePath(a.file, sources);
-        const relB = this.toRelativePath(b.file, sources);
-        if (relA !== relB) return relA.localeCompare(relB);
-        return a.startLine - b.startLine;
-      });
+      this.pushGroup(occurrences, fileOccs, sources, fileContents);
+    }
 
-      // 提取第一个出现位置的内容，计算 contentHash/groupId（SHA-256）
-      const first = fileOccs[0];
-      const firstContent = this.extractBlockContent(first.file, first.startLine, first.endLine, fileContents);
-      const contentHash = crypto.createHash('sha256').update(firstContent).digest('hex');
-
-      fileOccs.forEach((occ, i) => {
-        const content = (i === 0)
-            ? firstContent
-            : this.extractBlockContent(occ.file, occ.startLine, occ.endLine, fileContents);
-        occurrences.push({
-          groupId: contentHash,
-          contentHash: contentHash,
-          occurrenceIndex: i,
-          filePath: this.toRelativePath(occ.file, sources),
-          startLine: occ.startLine,
-          endLine: occ.endLine,
-          content: content
+    // 5) 处理「完全一致文件」组：同一内容哈希的 ≥2 个文件单独成一组，
+    //    每个成员各占一条出现记录（整文件为重复块）
+    //    只有源代码行数 ≥ minLines(10) 的文件才可能被滑窗检测为重复块，故以此作为阈值
+    for (const files of contentHashToFiles.values()) {
+      if (files.length < 2) continue;
+      const fileOccs = [];
+      for (const f of files) {
+        const sourceLines = fileSourceLines.get(f);
+        if (!sourceLines || sourceLines.length < this.minLines) continue;
+        fileOccs.push({
+          file: f,
+          startLine: sourceLines[0].lineNum,
+          endLine: sourceLines[sourceLines.length - 1].lineNum
         });
-      });
+      }
+      if (fileOccs.length < 2) continue;
+      this.pushGroup(occurrences, fileOccs, sources, fileContents);
     }
 
     return occurrences;
+  }
+
+  // 把一组出现位置(重复块)统一排序、生成 groupId 并写入 occurrences
+  pushGroup(occurrences, fileOccs, sources, fileContents) {
+    // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
+    fileOccs.sort((a, b) => {
+      const relA = this.toRelativePath(a.file, sources);
+      const relB = this.toRelativePath(b.file, sources);
+      if (relA !== relB) return relA.localeCompare(relB);
+      return a.startLine - b.startLine;
+    });
+
+    // groupId 用组内所有出现位置(文件+起止行)的结构化哈希，保证不同重复关系唯一。
+    // 同一关系内各 occurrence 的内容可能不同（如共同部分与完全一致块），
+    // 因此不能再用「单一内容哈希」作为组 ID，否则不同关系可能因首块内容相同而碰撞。
+    const groupId = crypto.createHash('sha256')
+      .update(fileOccs
+          .map(o => `${this.toRelativePath(o.file, sources)}:${o.startLine}-${o.endLine}`)
+          .sort()
+          .join('\u0001'))
+      .digest('hex');
+
+    fileOccs.forEach((occ, i) => {
+      const content = this.extractBlockContent(occ.file, occ.startLine, occ.endLine, fileContents);
+      occurrences.push({
+        groupId: groupId,
+        contentHash: groupId,
+        occurrenceIndex: i,
+        filePath: this.toRelativePath(occ.file, sources),
+        startLine: occ.startLine,
+        endLine: occ.endLine,
+        content: content
+      });
+    });
   }
 
   /**
@@ -59141,7 +59172,7 @@ async function run() {
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
     // 从环境变量获取 coderepo 信息（统一使用 OPENLIBING_APIG_KEY/SECRET，两个插件共用同一套 APIG 凭证）
-    const coderepoUrl = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com';
+    const coderepoUrl = 'https://apig.openlibing.com:443';
     const apigAppKey = getInput('apig_app_key') || '';
     const apigAppSecret = getInput('apig_app_secret') || '';
 
