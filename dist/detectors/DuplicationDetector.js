@@ -66,10 +66,9 @@ class DuplicationDetector extends BaseDetector {
     // 使用 let 声明：buildContextSegments 会返回带 snapshotData 的新 fileDetails
     let fileDetails = this.calculateFileDetailsFromLines(
         lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase, locByRel);
-    // 从合并区间构建重复块出现位置（union-find 分组，自动去重）
+    // 从共享滑动窗口构建重复块出现位置（窗口级 union-find 分组，自动去重）
     const duplicationOccurrences = this.buildDuplicationOccurrences(
-        lineResult.fileRanges, lineResult.fileSeedHashes, lineResult.fileSourceLines,
-        fileContents, pathBase);
+        lineResult.fileSourceLines, fileContents, pathBase, lineResult.sharedHashWindows);
 
     // 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData
     fileDetails = this.buildContextSegments(fileDetails, duplicationOccurrences, fileContents, pathBase);
@@ -124,7 +123,7 @@ class DuplicationDetector extends BaseDetector {
    *
    * @param {string[]} files 文件绝对路径列表
    * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（含 sourceLines，分类口径与 scc 一致）
-   * @returns {Object} {fileDuplicatedLines, fileRanges, fileSeedHashes, fileSourceLines}
+   * @returns {Object} {fileDuplicatedLines, fileSourceLines, sharedHashWindows}
    */
   detectWithLineLevel(files, fileSourceLineMaps) {
     const WINDOW_SIZE = this.minLines; // 10
@@ -156,63 +155,30 @@ class DuplicationDetector extends BaseDetector {
       }
     }
 
-    // Step 3: 标记重复行 + 收集 seed hash
+    // Step 3: 标记重复行 + 收集共享 hash 的滑动窗口（供分组使用）
     const fileDuplicatedLines = new Map();
-    const fileDuplicatedSourceIdx = new Map();
-    const fileSeedHashes = new Map();
+    // 仅含跨 2+ 个窗口的共享 hash：hash -> [{file, startIdx, endIdx}]
+    const sharedHashWindows = new Map();
 
     for (const [hash, windows] of hashToWindows) {
       if (windows.length < 2) continue;
+      sharedHashWindows.set(hash, windows);
 
       for (const win of windows) {
         const sourceLines = fileSourceLines.get(win.file);
         if (!sourceLines) continue;
 
         if (!fileDuplicatedLines.has(win.file)) fileDuplicatedLines.set(win.file, new Set());
-        if (!fileDuplicatedSourceIdx.has(win.file)) fileDuplicatedSourceIdx.set(win.file, new Set());
-        if (!fileSeedHashes.has(win.file)) fileSeedHashes.set(win.file, new Map());
 
         const lineSet = fileDuplicatedLines.get(win.file);
-        const idxSet = fileDuplicatedSourceIdx.get(win.file);
-        const seedMap = fileSeedHashes.get(win.file);
 
         for (let i = win.startIdx; i <= win.endIdx; i++) {
-          idxSet.add(i);
           lineSet.add(sourceLines[i].lineNum);
-          if (!seedMap.has(i)) seedMap.set(i, new Set());
-          seedMap.get(i).add(hash);
         }
       }
     }
 
-    // Step 4: 合并连续源代码行索引为最大区间
-    const fileRanges = new Map();
-    for (const [file, idxSet] of fileDuplicatedSourceIdx) {
-      const sortedIndices = [...idxSet].sort((a, b) => a - b);
-      const sourceLines = fileSourceLines.get(file);
-      const ranges = [];
-      let rangeStart = sortedIndices[0];
-      let rangeEnd = sortedIndices[0];
-      for (let i = 1; i < sortedIndices.length; i++) {
-        if (sortedIndices[i] === rangeEnd + 1) {
-          rangeEnd = sortedIndices[i];
-        } else {
-          ranges.push({ startIdx: rangeStart, endIdx: rangeEnd });
-          rangeStart = sortedIndices[i];
-          rangeEnd = sortedIndices[i];
-        }
-      }
-      ranges.push({ startIdx: rangeStart, endIdx: rangeEnd });
-
-      fileRanges.set(file, ranges.map(r => ({
-        startIdx: r.startIdx,
-        endIdx: r.endIdx,
-        startLine: sourceLines[r.startIdx].lineNum,
-        endLine: sourceLines[r.endIdx].lineNum
-      })));
-    }
-
-    return { fileDuplicatedLines, fileRanges, fileSeedHashes, fileSourceLines };
+    return { fileDuplicatedLines, fileSourceLines, sharedHashWindows };
   }
 
   /**
@@ -457,52 +423,55 @@ class DuplicationDetector extends BaseDetector {
   }
 
   /**
-   * 从行级检测的合并区间构建重复块出现位置列表（主路径）
+   * 从行级检测的共享滑动窗口构建重复块出现位置列表（主路径）
    *
-   * 分组策略（union-find）：
-   * - 不同文件中的区间如果共享至少一个 seed hash（即某个 10 行窗口在两个区间中都出现），则归为同一组
-   * - 同一文件内的多个不连续区间属于不同组（除非通过其他文件的区间桥接）
+   * 分组策略（基于「共享窗口」的并查集，避免跨重复块桥接）：
+   * - 每个共享 hash（10 行连续窗口内容）的所有出现窗口天然属于同一组（规则 a）
+   * - 同一文件内相邻/重叠的窗口，仅在它们的「出现文件集合」完全一致时才合并（规则 b）
+   *   —— 这样当同一个文件的相邻重复块属于不同内容（如分别与不同文件重复）时不会被错误合并
+   * - 同组内按文件合并连续索引为出现区间，每个区间是一条 occurrence
    * - 同一 (file, startLine, endLine) 跨多个 hash 时只产生一条记录（去重）
    *
-   * @param {Map} fileRanges file → [{startIdx, endIdx, startLine, endLine}]
-   * @param {Map} fileSeedHashes file → Map<sourceIdx, Set<hash>>
-   * @param {Map} fileSourceLines file → [{lineNum, text}]
+   * @param {Map} fileSourceLines file → [{lineNum, text}]（key 为 '/' 归一化路径）
    * @param {Map} fileContents file(原始路径) → 内容
    * @param {string[]} sources 源目录列表
+   * @param {Map} sharedHashWindows hash → [{file, startIdx, endIdx}]（仅跨 2+ 窗口的共享 hash）
    * @returns {Array} duplicationOccurrences 列表
    */
-  buildDuplicationOccurrences(fileRanges, fileSeedHashes, fileSourceLines, fileContents, sources) {
-    // 收集所有区间，建立全局索引
-    const allRanges = [];
-    for (const [file, ranges] of fileRanges) {
-      for (const range of ranges) {
-        allRanges.push({ file, ...range });
-      }
-    }
-    if (allRanges.length === 0) return [];
+  buildDuplicationOccurrences(fileSourceLines, fileContents, sources, sharedHashWindows) {
+    if (!sharedHashWindows || sharedHashWindows.size === 0) return [];
 
-    // 为每个区间收集其覆盖的所有 seed hash
-    const rangeHashSets = allRanges.map(range => {
-      const seedMap = fileSeedHashes.get(range.file);
-      const hashes = new Set();
-      for (let idx = range.startIdx; idx <= range.endIdx; idx++) {
-        const h = seedMap.get(idx);
-        if (h) for (const x of h) hashes.add(x);
-      }
-      return hashes;
-    });
-
-    // 建立 hash → [rangeIndex] 的倒排索引
-    const hashToRangeIndices = new Map();
-    for (let i = 0; i < allRanges.length; i++) {
-      for (const h of rangeHashSets[i]) {
-        if (!hashToRangeIndices.has(h)) hashToRangeIndices.set(h, []);
-        hashToRangeIndices.get(h).push(i);
-      }
+    // 每个共享 hash 的出现文件集合 F(hash)
+    const hashFileSet = new Map(); // hash -> Set<file>
+    for (const [hash, wins] of sharedHashWindows) {
+      const set = new Set();
+      for (const w of wins) set.add(w.file);
+      hashFileSet.set(hash, set);
     }
 
-    // Union-Find：共享 seed hash 的区间归为同一组
-    const parent = allRanges.map((_, i) => i);
+    const sameFileSet = (a, b) => {
+      if (a.size !== b.size) return false;
+      for (const x of a) if (!b.has(x)) return false;
+      return true;
+    };
+
+    // 每个共享窗口作为并查集的一个节点
+    const nodes = []; // {file, startIdx, endIdx, hash}
+    const hashToNodeIds = new Map();
+    const fileToNodeIds = new Map();
+    for (const [hash, wins] of sharedHashWindows) {
+      for (const w of wins) {
+        const id = nodes.length;
+        nodes.push({ file: w.file, startIdx: w.startIdx, endIdx: w.endIdx, hash });
+        if (!hashToNodeIds.has(hash)) hashToNodeIds.set(hash, []);
+        hashToNodeIds.get(hash).push(id);
+        if (!fileToNodeIds.has(w.file)) fileToNodeIds.set(w.file, []);
+        fileToNodeIds.get(w.file).push(id);
+      }
+    }
+    if (nodes.length === 0) return [];
+
+    const parent = nodes.map((_, i) => i);
     const find = (x) => {
       while (parent[x] !== x) {
         parent[x] = parent[parent[x]];
@@ -515,30 +484,70 @@ class DuplicationDetector extends BaseDetector {
       if (px !== py) parent[px] = py;
     };
 
-    for (const [, indices] of hashToRangeIndices) {
-      for (let i = 1; i < indices.length; i++) {
-        union(indices[0], indices[i]);
+    // 规则 a：同一 hash（相同内容）的出现窗口归为同一组
+    for (const [, ids] of hashToNodeIds) {
+      for (let i = 1; i < ids.length; i++) union(ids[0], ids[i]);
+    }
+
+    // 规则 b：同一文件内相邻/重叠窗口，仅当出现文件集合一致时才合并
+    for (const [, ids] of fileToNodeIds) {
+      ids.sort((a, b) => nodes[a].startIdx - nodes[b].startIdx);
+      for (let i = 1; i < ids.length; i++) {
+        const a = nodes[ids[i - 1]], b = nodes[ids[i]];
+        if (b.startIdx <= a.endIdx + 1
+            && sameFileSet(hashFileSet.get(a.hash), hashFileSet.get(b.hash))) {
+          union(ids[i - 1], ids[i]);
+        }
       }
     }
 
     // 按 root 分组
     const groups = new Map();
-    for (let i = 0; i < allRanges.length; i++) {
+    for (let i = 0; i < nodes.length; i++) {
       const root = find(i);
       if (!groups.has(root)) groups.set(root, []);
       groups.get(root).push(i);
     }
 
-    // 为每组构建 occurrences
     const occurrences = [];
-    for (const [, indices] of groups) {
-      // 2+ 个出现位置才算重复
-      if (indices.length < 2) continue;
+    for (const [, ids] of groups) {
+      // 组内按文件收集被覆盖的源代码索引
+      const idxByFile = new Map(); // file -> Set<idx>
+      for (const id of ids) {
+        const n = nodes[id];
+        if (!idxByFile.has(n.file)) idxByFile.set(n.file, new Set());
+        for (let i = n.startIdx; i <= n.endIdx; i++) idxByFile.get(n.file).add(i);
+      }
 
-      const groupRanges = indices.map(i => allRanges[i]);
+      // 每个文件合并连续索引为出现区间
+      const fileOccs = [];
+      for (const [file, idxSet] of idxByFile) {
+        const sorted = [...idxSet].sort((a, b) => a - b);
+        const sourceLines = fileSourceLines.get(file);
+        let rs = sorted[0], re = sorted[0];
+        const flush = () => {
+          fileOccs.push({
+            file,
+            startLine: sourceLines[rs].lineNum,
+            endLine: sourceLines[re].lineNum
+          });
+        };
+        for (let i = 1; i < sorted.length; i++) {
+          if (sorted[i] === re + 1) {
+            re = sorted[i];
+          } else {
+            flush();
+            rs = sorted[i];
+            re = sorted[i];
+          }
+        }
+        flush();
+      }
+
+      if (fileOccs.length < 2) continue; // 少于 2 个出现位置不算重复
 
       // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
-      groupRanges.sort((a, b) => {
+      fileOccs.sort((a, b) => {
         const relA = this.toRelativePath(a.file, sources);
         const relB = this.toRelativePath(b.file, sources);
         if (relA !== relB) return relA.localeCompare(relB);
@@ -546,26 +555,24 @@ class DuplicationDetector extends BaseDetector {
       });
 
       // 提取第一个出现位置的内容，计算 contentHash/groupId（SHA-256）
-      const first = groupRanges[0];
-      const firstContent = this.extractBlockContent(
-          first.file, first.startLine, first.endLine, fileContents);
+      const first = fileOccs[0];
+      const firstContent = this.extractBlockContent(first.file, first.startLine, first.endLine, fileContents);
       const contentHash = crypto.createHash('sha256').update(firstContent).digest('hex');
 
-      for (let i = 0; i < groupRanges.length; i++) {
-        const range = groupRanges[i];
+      fileOccs.forEach((occ, i) => {
         const content = (i === 0)
             ? firstContent
-            : this.extractBlockContent(range.file, range.startLine, range.endLine, fileContents);
+            : this.extractBlockContent(occ.file, occ.startLine, occ.endLine, fileContents);
         occurrences.push({
           groupId: contentHash,
           contentHash: contentHash,
           occurrenceIndex: i,
-          filePath: this.toRelativePath(range.file, sources),
-          startLine: range.startLine,
-          endLine: range.endLine,
+          filePath: this.toRelativePath(occ.file, sources),
+          startLine: occ.startLine,
+          endLine: occ.endLine,
           content: content
         });
-      }
+      });
     }
 
     return occurrences;
