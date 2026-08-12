@@ -744,57 +744,130 @@ class DuplicationDetector extends BaseDetector {
     }
 
     // 2) 每个共享 hash：按「代表集合」F' 精确分桶
-    //    bucketKey = 排序后的代表路径拼接；同一 F' 的窗口归入同一桶
-    const buckets = new Map(); // bucketKey -> { reps: [rep...], idxByRep: Map<rep, Set<idx>> }
+    //    bucketKey = 排序后的代表路径拼接；同一 F' 的窗口归入同一桶。
+    //    桶内记录每个窗口（代表 + 源代码索引 + 内容 hash），用于后续桶内连通性划分。
+    const buckets = new Map(); // bucketKey -> { reps: [rep...], windows: [{rep, idx, hash}] }
     for (const [hash, wins] of sharedHashWindows) {
       const reps = new Set();
       for (const w of wins) reps.add(fileToRep.get(w.file) || w.file);
       if (reps.size < 2) continue; // 代表集合 < 2 不构成重复关系
       const bucketKey = [...reps].sort().join('\u0001');
       if (!buckets.has(bucketKey)) {
-        buckets.set(bucketKey, { reps: [...reps].sort(), idxByRep: new Map() });
+        buckets.set(bucketKey, { reps: [...reps].sort(), windows: [] });
       }
       const bucket = buckets.get(bucketKey);
       for (const w of wins) {
         const rep = fileToRep.get(w.file) || w.file;
-        if (!bucket.idxByRep.has(rep)) bucket.idxByRep.set(rep, new Set());
-        for (let i = w.startIdx; i <= w.endIdx; i++) bucket.idxByRep.get(rep).add(i);
+        for (let i = w.startIdx; i <= w.endIdx; i++) {
+          bucket.windows.push({ rep, idx: i, hash });
+        }
       }
     }
 
     const occurrences = [];
 
-    // 3) 每个桶 = 一种「部分重复关系」：按代表合并连续索引为出现区间，成组输出
-    for (const { reps, idxByRep } of buckets.values()) {
+    // 3) 每个桶内：用 union-find 按「内容连通性」把窗口划分为多个子组，每组 = 一个连续重复关系。
+    //    - 同 hash（同一段 10 行内容）的窗口跨文件连通；
+    //    - 同一文件内相邻（idx+1）的窗口连通。
+    //    这样同一文件集合中「分散在不同位置、内容互不相关的多个重复块」会被拆成独立组，
+    //    避免把相同文件集合的所有窗口合并成一个组，导致组内出现大量无重复关系的代码块。
+    for (const { reps, windows } of buckets.values()) {
       if (reps.length < 2) continue;
-      const fileOccs = [];
-      for (const rep of reps) {
-        const idxSet = idxByRep.get(rep);
-        if (!idxSet || idxSet.size === 0) continue;
-        const sourceLines = fileSourceLines.get(rep);
-        if (!sourceLines) continue;
+
+      // 桶内 union-find（节点 key = `${rep}\u0001${idx}`）
+      const parent = new Map();
+      const winKey = (rep, idx) => `${rep}\u0001${idx}`;
+      const find = (k) => {
+        let root = k;
+        while (parent.get(root) !== root) root = parent.get(root);
+        while (parent.get(k) !== root) {
+          const next = parent.get(k);
+          parent.set(k, root);
+          k = next;
+        }
+        return root;
+      };
+      const union = (a, b) => {
+        const ra = find(a), rb = find(b);
+        if (ra !== rb) parent.set(ra, rb);
+      };
+
+      for (const w of windows) {
+        const k = winKey(w.rep, w.idx);
+        if (!parent.has(k)) parent.set(k, k);
+      }
+
+      // 同 hash 的窗口跨文件连通（同一段内容出现在多个文件）
+      const byHash = new Map();
+      for (const w of windows) {
+        if (!byHash.has(w.hash)) byHash.set(w.hash, []);
+        byHash.get(w.hash).push(winKey(w.rep, w.idx));
+      }
+      for (const keys of byHash.values()) {
+        for (let i = 1; i < keys.length; i++) union(keys[0], keys[i]);
+      }
+
+      // 同一文件内相邻窗口连通（把同一重复关系的连续窗口合并成一个块）
+      const byRep = new Map();
+      for (const w of windows) {
+        if (!byRep.has(w.rep)) byRep.set(w.rep, new Set());
+        byRep.get(w.rep).add(w.idx);
+      }
+      for (const [rep, idxSet] of byRep) {
         const sorted = [...idxSet].sort((a, b) => a - b);
-        let rs = sorted[0], re = sorted[0];
-        const flush = () => {
-          fileOccs.push({
-            file: rep,
-            startLine: sourceLines[rs].lineNum,
-            endLine: sourceLines[re].lineNum
-          });
-        };
         for (let i = 1; i < sorted.length; i++) {
-          if (sorted[i] === re + 1) {
-            re = sorted[i];
-          } else {
-            flush();
-            rs = sorted[i];
-            re = sorted[i];
+          if (sorted[i] === sorted[i - 1] + 1) {
+            union(winKey(rep, sorted[i - 1]), winKey(rep, sorted[i]));
           }
         }
-        flush();
       }
-      if (fileOccs.length < 2) continue; // 少于 2 个出现位置不算重复
-      this.pushGroup(occurrences, fileOccs, sources, fileContents);
+
+      // 按连通分量分组：每个分量 = 一个重复关系组
+      const compToKeys = new Map(); // root -> [keys]
+      for (const k of parent.keys()) {
+        const r = find(k);
+        if (!compToKeys.has(r)) compToKeys.set(r, []);
+        compToKeys.get(r).push(k);
+      }
+
+      for (const keys of compToKeys.values()) {
+        // 每个分量：按代表收集 idx，合并连续 idx 为出现区间，成组输出
+        const idxByRep = new Map(); // rep -> Set<idx>
+        for (const k of keys) {
+          const sep = k.indexOf('\u0001');
+          const rep = k.slice(0, sep), idx = Number(k.slice(sep + 1));
+          if (!idxByRep.has(rep)) idxByRep.set(rep, new Set());
+          idxByRep.get(rep).add(idx);
+        }
+        const fileOccs = [];
+        for (const rep of reps) {
+          const idxSet = idxByRep.get(rep);
+          if (!idxSet || idxSet.size === 0) continue;
+          const sourceLines = fileSourceLines.get(rep);
+          if (!sourceLines) continue;
+          const sorted = [...idxSet].sort((a, b) => a - b);
+          let rs = sorted[0], re = sorted[0];
+          const flush = () => {
+            fileOccs.push({
+              file: rep,
+              startLine: sourceLines[rs].lineNum,
+              endLine: sourceLines[re].lineNum
+            });
+          };
+          for (let i = 1; i < sorted.length; i++) {
+            if (sorted[i] === re + 1) {
+              re = sorted[i];
+            } else {
+              flush();
+              rs = sorted[i];
+              re = sorted[i];
+            }
+          }
+          flush();
+        }
+        if (fileOccs.length < 2) continue; // 少于 2 个出现位置不算重复
+        this.pushGroup(occurrences, fileOccs, sources, fileContents);
+      }
     }
 
     // 4) 处理「完全一致文件」组：同一内容哈希的 ≥2 个文件单独成一组，
