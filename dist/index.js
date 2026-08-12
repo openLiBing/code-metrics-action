@@ -724,10 +724,11 @@ class DuplicationDetector extends BaseDetector {
       hashFileSet.set(hash, set);
     }
 
-    const sameFileSet = (a, b) => {
-      if (a.size !== b.size) return false;
-      for (const x of a) if (!b.has(x)) return false;
-      return true;
+    // 两个文件集合的共同文件数
+    const commonFileCount = (a, b) => {
+      let c = 0;
+      for (const x of a) if (b.has(x)) c++;
+      return c;
     };
 
     // 每个共享窗口作为并查集的一个节点
@@ -764,13 +765,17 @@ class DuplicationDetector extends BaseDetector {
       for (let i = 1; i < ids.length; i++) union(ids[0], ids[i]);
     }
 
-    // 规则 b：同一文件内相邻/重叠窗口，仅当出现文件集合一致时才合并
+    // 规则 b：同一文件内相邻/重叠窗口，仅当它们「至少共享 2 个文件」时才合并。
+    // 原实现要求文件集合完全一致，导致「两个文件完全一致、但被第三个文件部分共享」
+    // 的场景（如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp）被误切分成两组。
+    // 改为共享 ≥2 个文件（即除当前文件外还共享至少一个其他文件）即可让完全一致的
+    // 文件合并成整块，同时仍能拆开 part_dup 这类重叠但连接不同文件的重复块。
     for (const [, ids] of fileToNodeIds) {
       ids.sort((a, b) => nodes[a].startIdx - nodes[b].startIdx);
       for (let i = 1; i < ids.length; i++) {
         const a = nodes[ids[i - 1]], b = nodes[ids[i]];
         if (b.startIdx <= a.endIdx + 1
-            && sameFileSet(hashFileSet.get(a.hash), hashFileSet.get(b.hash))) {
+            && commonFileCount(hashFileSet.get(a.hash), hashFileSet.get(b.hash)) >= 2) {
           union(ids[i - 1], ids[i]);
         }
       }
