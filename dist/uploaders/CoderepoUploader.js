@@ -242,21 +242,42 @@ class CoderepoUploader {
     this.timeout = config.timeout || 30000;
     this.apigAppKey = config.apigAppKey || '';
     this.apigAppSecret = config.apigAppSecret || '';
+    // 单批重复块上报上限，与 APIG 网关 10MB 体量限制对齐
+    this.duplicationBatchSize = config.duplicationBatchSize || 5000;
   }
 
+  /**
+   * 上报代码度量指标。
+   *
+   * 流程：
+   * 1. 主报告（含 fileDetails + snapshotData + identicalFileDetails + 总体指标 + 首批 duplicationOccurrences）
+   *    → 后端创建 record 并返回 recordId
+   * 2. 若 duplicationOccurrences 超过单批上限，剩余部分分批上报到 /metrics/code/duplication-blocks
+   *
+   * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
+   */
   async upload(metricsData, options = {}) {
-    // 从 metricsData 中分离出 fileDetails、identicalFileDetails 和总体指标
-    const { fileDetails, identicalFileDetails, ...overallMetrics } = metricsData;
+    // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
+    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
+
+    // 重复块分批：首批随主报告上报，剩余走批量接口
+    const occurrences = duplicationOccurrences || [];
+    const firstBatch = occurrences.slice(0, this.duplicationBatchSize);
+    const remainingBatches = [];
+    for (let i = this.duplicationBatchSize; i < occurrences.length; i += this.duplicationBatchSize) {
+      remainingBatches.push(occurrences.slice(i, i + this.duplicationBatchSize));
+    }
 
     const payload = {
       gitUrl: options.gitUrl,
       branchName: options.branchName,
-      repository: options.repository,
       pipelineRunId: options.pipelineRunId,
       runNumber: options.runNumber,
       metricsData: overallMetrics,
       fileDetails: fileDetails || [],
       identicalFileDetails: identicalFileDetails || [],
+      // 首批重复块（≤5000 条），content 已 Base64 编码为 contentB64
+      duplicationOccurrences: this.encodeOccurrences(firstBatch),
       detectionStartedAt: options.startTime,
       detectionCompletedAt: options.endTime,
       status: options.status || 0
@@ -266,17 +287,102 @@ class CoderepoUploader {
       payload.errorMessage = options.errorMessage;
     }
 
-    const body = JSON.stringify(payload);
-    // 拼接请求 URL：baseUrl 已包含 /openlibing-coderepo 前缀，追加 /metrics/code/report
-    // 不使用 new URL() 构造，避免路径拼接歧义
-    const url = this.baseUrl.replace(/\/+$/, '') + '/openlibing-coderepo/metrics/code/report';
+    // 主报告上报
+    const mainUrl = this.buildUrl('/metrics/code/report');
+    const mainBody = JSON.stringify(payload);
+    const mainResult = await this.sendSignedRequest('POST', mainUrl, mainBody);
+    if (!mainResult.success) {
+      return mainResult;
+    }
+    const recordId = mainResult.recordId;
 
-    // 使用 APIG 签名认证（SDK-HMAC-SHA256），替代原 AppCode 方式
+    // 剩余重复块分批上报（若有）
+    if (remainingBatches.length > 0) {
+      const batchResult = await this.uploadDuplicationBlocksInBatches(recordId, remainingBatches);
+      if (!batchResult.success) {
+        // 分批上报失败不阻塞主流程，记录警告（主报告已成功，重复块部分丢失可重扫补齐）
+        console.warn(`Duplication blocks batch upload partially failed: ${batchResult.error}`);
+      }
+    }
+
+    return { success: true, recordId: recordId };
+  }
+
+  /**
+   * 分批上报剩余的重复块出现位置到 /metrics/code/duplication-blocks。
+   * 单批失败不阻塞后续批次，最终汇总成功/失败计数。
+   */
+  async uploadDuplicationBlocksInBatches(recordId, batches) {
+    const batchUrl = this.buildUrl('/metrics/code/duplication-blocks');
+    let totalFailed = 0;
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      const body = JSON.stringify({
+        recordId: recordId,
+        blocks: this.encodeOccurrences(batch)
+      });
+      const result = await this.sendSignedRequest('POST', batchUrl, body);
+      if (!result.success) {
+        totalFailed++;
+        console.warn(`Duplication blocks batch ${i + 1}/${batches.length} failed: ${result.error}`);
+      }
+    }
+    if (totalFailed > 0) {
+      return { success: false, error: `${totalFailed}/${batches.length} batches failed` };
+    }
+    return { success: true };
+  }
+
+  /**
+   * 把出现位置列表中的明文 content 编码为 contentB64，移除明文字段。
+   * 已编码数据跳过（防二次编码）。
+   */
+  encodeOccurrences(occurrences) {
+    return occurrences.map(occ => ({
+      groupId: occ.groupId,
+      contentHash: occ.contentHash,
+      occurrenceIndex: occ.occurrenceIndex,
+      filePath: occ.filePath,
+      startLine: occ.startLine,
+      endLine: occ.endLine,
+      contentB64: this.encodeB64(occ.content)
+    }));
+  }
+
+  /**
+   * Base64 编码字符串（UTF-8）。
+   * 已编码数据（通过回检判定）跳过，防二次编码。
+   */
+  encodeB64(str) {
+    if (!str) return '';
+    // 简单回检：若解码后重新编码与原值一致，视为已编码
+    try {
+      const decoded = Buffer.from(str, 'base64').toString('utf8');
+      const reEncoded = Buffer.from(decoded, 'utf8').toString('base64');
+      if (reEncoded === str) return str;
+    } catch (e) {
+      // 解码失败说明是明文，继续编码
+    }
+    return Buffer.from(str, 'utf8').toString('base64');
+  }
+
+  /**
+   * 拼接完整请求 URL：baseUrl 已包含 /openlibing-coderepo 前缀
+   */
+  buildUrl(path) {
+    return this.baseUrl.replace(/\/+$/, '') + '/openlibing-coderepo' + path;
+  }
+
+  /**
+   * 发送 APIG 签名请求，解析 DataResult 响应。
+   * 返回 { success, recordId?, error? }
+   */
+  async sendSignedRequest(method, url, body) {
     let headers = { 'Content-Type': 'application/json' };
     if (this.apigAppKey && this.apigAppSecret) {
       const signer = new ApigSigner(this.apigAppKey, this.apigAppSecret);
       headers = signer.sign({
-        method: 'POST',
+        method: method,
         url: url,
         headers: headers,
         body: body

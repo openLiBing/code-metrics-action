@@ -5,9 +5,6 @@ const os = require('os');
 const BaseDetector = require('./BaseDetector');
 const FileCollector = require('../utils/fileCollector');
 
-// Windows 命令行最大长度限制
-const MAX_CMD_LENGTH = 8000;
-
 class LizardDetector extends BaseDetector {
   constructor(config = {}) {
     super(config);
@@ -34,41 +31,22 @@ class LizardDetector extends BaseDetector {
       return this.getEmptyResult();
     }
 
-    const pythonFiles = uniqueFiles.filter(f => f.endsWith('.py'));
-    const nonPythonFiles = uniqueFiles.filter(f => !f.endsWith('.py'));
-
-    // Lizard 处理所有文件，获取 nloc（函数代码行数）和函数位置信息
-    let lizardAllResult = { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+    // Lizard 处理所有文件，统一获取函数数、函数代码行数和圈复杂度
+    let lizardResult = { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
     if (uniqueFiles.length > 0) {
-      lizardAllResult = this.runLizard(uniqueFiles);
+      lizardResult = this.runLizard(uniqueFiles);
     }
 
-    // radon 处理 Python 文件，获取圈复杂度（将类作为整体计算，与 cmetrics 一致）
-    let radonResult = { totalFunctions: 0, totalCC: 0 };
-    if (pythonFiles.length > 0) {
-      radonResult = this.runRadon(pythonFiles);
-    }
-
-    // Lizard 处理非 Python 文件，获取函数数和圈复杂度
-    let lizardNonPyResult = { totalFunctions: 0, totalNloc: 0, totalCC: 0 };
-    if (nonPythonFiles.length > 0) {
-      lizardNonPyResult = this.runLizard(nonPythonFiles);
-    }
-
-    // 合并结果：
-    // - totalNloc：使用 Lizard 全量结果（radon 不提供 nloc），已排除函数定义行
-    // - totalFunctions：Python 用 radon（类算一个函数），非 Python 用 Lizard
-    // - totalCC：Python 用 radon（类复杂度包含方法），非 Python 用 Lizard
-    const totalFunctions = radonResult.totalFunctions + lizardNonPyResult.totalFunctions;
-    const totalNloc = lizardAllResult.totalNloc;
-    const totalCC = radonResult.totalCC + lizardNonPyResult.totalCC;
+    const totalFunctions = lizardResult.totalFunctions;
+    const totalNloc = lizardResult.totalNloc;
+    const totalCC = lizardResult.totalCC;
 
     if (totalFunctions === 0) {
       return this.getEmptyResult();
     }
 
     // 按文件聚合函数数据，计算文件级指标
-    const fileDetails = this.aggregateFileDetails(lizardAllResult.functions, sources);
+    const fileDetails = this.aggregateFileDetails(lizardResult.functions, sources);
 
     return {
       totalFunctions,
@@ -156,89 +134,6 @@ class LizardDetector extends BaseDetector {
       console.warn(`Lizard detection warning: ${error.message}`);
       return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
     }
-  }
-
-  // 使用 radon 检测 Python 文件的圈复杂度
-  // radon 将类作为整体计算复杂度（类CC = 基线1 + 所有方法CC之和），与 cmetrics 一致
-  // 分批处理文件，避免命令行长度限制
-  runRadon(pythonFiles) {
-    let totalFunctions = 0;
-    let totalCC = 0;
-
-    const batches = this.splitIntoBatches(pythonFiles);
-    for (const batch of batches) {
-      try {
-        const args = batch.map(f => `"${f}"`).join(' ');
-        const result = execSync(`radon cc ${args} -s`, {
-          encoding: 'utf8',
-          maxBuffer: 50 * 1024 * 1024,
-          timeout: 300000,
-          stdio: ['pipe', 'pipe', 'pipe']
-        });
-
-        const parsed = this.parseRadonOutput(result);
-        totalFunctions += parsed.totalFunctions;
-        totalCC += parsed.totalCC;
-      } catch (error) {
-        console.warn(`Radon detection warning: ${error.message}`);
-      }
-    }
-
-    return { totalFunctions, totalCC };
-  }
-
-  // 将文件列表分批，每批不超过命令行长度限制
-  splitIntoBatches(files) {
-    const batches = [];
-    let currentBatch = [];
-    let currentLength = 0;
-
-    for (const file of files) {
-      const fileArg = `"${file}" `;
-      if (currentLength + fileArg.length > MAX_CMD_LENGTH && currentBatch.length > 0) {
-        batches.push(currentBatch);
-        currentBatch = [];
-        currentLength = 0;
-      }
-      currentBatch.push(file);
-      currentLength += fileArg.length;
-    }
-
-    if (currentBatch.length > 0) {
-      batches.push(currentBatch);
-    }
-
-    return batches;
-  }
-
-  // 解析 radon cc 输出
-  parseRadonOutput(output) {
-    let totalFunctions = 0;
-    let totalCC = 0;
-
-    const lines = output.split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      const match = trimmed.match(/^([FCM])\s+\d+:\d+\s+\S+\s+-\s+\w+\s+\((\d+)\)/);
-      if (match) {
-        const type = match[1];
-        const cc = parseInt(match[2], 10);
-
-        if (type === 'F') {
-          totalFunctions++;
-          totalCC += cc;
-        } else if (type === 'C') {
-          // 类：将类作为一个整体计数（CC 已包含所有方法的复杂度）
-          totalFunctions++;
-          totalCC += cc;
-        }
-        // M（方法）：跳过，因为其复杂度已包含在所属类的 CC 中
-      }
-    }
-
-    return { totalFunctions, totalCC };
   }
 
   parseTextOutput(content) {

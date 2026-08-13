@@ -40,9 +40,7 @@ class MetricsScanner {
       allowedExtensions: allowedExtensions,
       // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"
       // - minLines=10：连续代码块至少 10 行才算一次重复
-      // - minTokens=85：滑动窗口大小
-      minLines: config.detectors?.jscpd?.minLines || 10,
-      minTokens: config.detectors?.jscpd?.minTokens || 85
+      minLines: config.detectors?.duplication?.minLines || 10
     });
 
     this.uploader = new CoderepoUploader({
@@ -94,9 +92,10 @@ class MetricsScanner {
         this.logger.debug('lizard result:', JSON.stringify(lizardResult));
       }
 
-      if (this.config.detectors?.jscpd?.enabled !== false) {
+      if (this.config.detectors?.duplication?.enabled !== false) {
         this.logger.info('Running duplication detector (code duplication)...');
-        duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult.codeScale);
+        // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
+        duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
         this.logger.debug('duplication result:', JSON.stringify(duplicationResult));
       }
 
@@ -122,7 +121,7 @@ class MetricsScanner {
           tools: {
             sloc: this.config.detectors?.sloc?.enabled !== false,
             lizard: this.config.detectors?.lizard?.enabled !== false,
-            duplication: this.config.detectors?.jscpd?.enabled !== false
+            duplication: this.config.detectors?.duplication?.enabled !== false
           }
         }
       };
@@ -141,7 +140,6 @@ class MetricsScanner {
         const uploadResult = await this.uploader.upload(formattedMetrics, {
           gitUrl: options.gitUrl,
           branchName: options.branchName,
-          repository: options.repository,
           pipelineRunId: options.pipelineRunId,
           runNumber: options.runNumber,
           startTime: startTimeFormatted,
@@ -170,7 +168,6 @@ class MetricsScanner {
           await this.uploader.upload({}, {
             gitUrl: options.gitUrl,
             branchName: options.branchName,
-            repository: options.repository,
             pipelineRunId: options.pipelineRunId,
             runNumber: options.runNumber,
             startTime: startTimeFormatted,
