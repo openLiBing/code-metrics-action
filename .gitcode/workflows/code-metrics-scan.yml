@@ -18,6 +18,6 @@ jobs:
 
       - name: code-metrics-scan
         uses: openlibing/code-metrics-action@master
-        env:
-          OPENLIBING_APIG_KEY: ${{ secrets.OPENLIBING_APIG_KEY }}
-          OPENLIBING_APIG_SECRET: ${{ secrets.OPENLIBING_APIG_SECRET }}
+        with:
+          apig_app_key: ${{ secrets.OPENLIBING_APIG_KEY }}
+          apig_app_secret: ${{ secrets.OPENLIBING_APIG_SECRET }}
