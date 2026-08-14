@@ -796,13 +796,16 @@ class DuplicationDetector extends BaseDetector {
       const lines = content.split('\n');
       const totalLines = lines.length;
 
-      // 4. 构建 segments
+      // 4. 构建 segments（限制数量，避免 snapshotData 过大导致序列化炸内存）
+      const MAX_SEGMENTS = 200;
+      const MAX_JSON_SIZE = 100 * 1024; // 100KB
       const segments = [];
+      let truncated = false;
       for (const interval of mergedExtended) {
+        if (segments.length >= MAX_SEGMENTS) { truncated = true; break; }
         const start = Math.max(1, interval.startLine);
         const end = Math.min(totalLines, interval.endLine);
         const segmentContent = lines.slice(start - 1, end).join('\n');
-        // 每个片段的 contentB64 内部再次 Base64 编码
         const contentB64 = Buffer.from(segmentContent, 'utf8').toString('base64');
         segments.push({
           originalStartLine: start,
@@ -811,13 +814,22 @@ class DuplicationDetector extends BaseDetector {
         });
       }
 
-      // 5. 构建 snapshotData JSON 并整体 Base64 编码
+      // 5. 构建 snapshotData JSON 并整体 Base64 编码（超限则截断）
       const snapshotDataObj = {
         totalLines: totalLines,
         contextLines: contextLines,
-        segments: segments
+        segments: segments,
+        truncated: truncated
       };
-      const snapshotJson = JSON.stringify(snapshotDataObj);
+      let snapshotJson = JSON.stringify(snapshotDataObj);
+      if (snapshotJson.length > MAX_JSON_SIZE) {
+        // 逐段移除直到 JSON 小于限制
+        while (segments.length > 0 && snapshotJson.length > MAX_JSON_SIZE) {
+          segments.pop();
+          snapshotDataObj.truncated = true;
+          snapshotJson = JSON.stringify(snapshotDataObj);
+        }
+      }
       fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
     }
 
