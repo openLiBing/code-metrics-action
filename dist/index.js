@@ -1071,9 +1071,16 @@ class DuplicationDetector extends BaseDetector {
       const lines = content.split('\n');
       const totalLines = lines.length;
 
-      // 4. 构建 segments
+      // 4. 构建 segments（限制数量，避免 snapshotData 过大导致序列化炸内存）
+      const MAX_SEGMENTS = 200;
+      const MAX_JSON_SIZE = 100 * 1024; // 100KB
       const segments = [];
+      let truncated = false;
       for (const interval of mergedExtended) {
+        if (segments.length >= MAX_SEGMENTS) {
+          truncated = true;
+          break;
+        }
         const start = Math.max(1, interval.startLine);
         const end = Math.min(totalLines, interval.endLine);
         const segmentContent = lines.slice(start - 1, end).join('\n');
@@ -1086,13 +1093,22 @@ class DuplicationDetector extends BaseDetector {
         });
       }
 
-      // 5. 构建 snapshotData JSON 并整体 Base64 编码
+      // 5. 构建 snapshotData JSON 并整体 Base64 编码（超限则截断）
       const snapshotDataObj = {
         totalLines: totalLines,
         contextLines: contextLines,
-        segments: segments
+        segments: segments,
+        truncated: truncated
       };
-      const snapshotJson = JSON.stringify(snapshotDataObj);
+      let snapshotJson = JSON.stringify(snapshotDataObj);
+      if (snapshotJson.length > MAX_JSON_SIZE) {
+        // 逐段移除直到 JSON 小于限制
+        while (segments.length > 0 && snapshotJson.length > MAX_JSON_SIZE) {
+          segments.pop();
+          snapshotDataObj.truncated = true;
+          snapshotJson = JSON.stringify(snapshotDataObj);
+        }
+      }
       fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
     }
 
@@ -1928,7 +1944,16 @@ class MetricsScanner {
         const outputPath = path.isAbsolute(options.output || this.config.output)
           ? (options.output || this.config.output)
           : path.resolve(this.workingDir, options.output || this.config.output);
-        FileUtils.writeJsonFile(outputPath, result);
+        // 本地输出文件剥离 snapshotData（体量大且仅详情页展示用，DB 上报另有一份），
+        // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length
+        const compactResult = {
+          ...result,
+          fileDetails: (result.fileDetails || []).map(fd => {
+            const { snapshotData, ...rest } = fd;
+            return rest;
+          })
+        };
+        FileUtils.writeJsonFile(outputPath, compactResult);
         this.logger.info(`Results saved to: ${outputPath}`);
       }
 
@@ -2285,6 +2310,11 @@ class CoderepoUploader {
       payload.errorMessage = options.errorMessage;
     }
 
+    // 主报告体量保护：单次 JSON.stringify 超过 V8 字符串上限（~268MB）会抛 Invalid string length。
+    // 体量主要来自 fileDetails 的 snapshotData 与首批 occurrence 的 contentB64。
+    // 超限时从最大文件开始剥离 snapshotData，确保主报告始终可序列化、核心指标不丢。
+    this.shrinkMainPayload(payload);
+
     // 主报告上报
     const mainUrl = this.buildUrl('/metrics/code/report');
     const mainBody = JSON.stringify(payload);
@@ -2304,6 +2334,41 @@ class CoderepoUploader {
     }
 
     return { success: true, recordId: recordId };
+  }
+
+  /**
+   * 主报告体量保护：估算 payload 体量，超限时从最大的文件开始剥离 snapshotData。
+   * snapshotData 仅影响详情页代码高亮，剥离后核心指标与 occurrence 仍完整上报。
+   */
+  shrinkMainPayload(payload) {
+    const MAX_MAIN_BODY = 150 * 1024 * 1024; // 150MB 安全阈值（V8 单字符串上限 ~268MB）
+    const details = payload.fileDetails || [];
+    let estimated = 0;
+    for (const d of details) {
+      if (d.snapshotData) estimated += d.snapshotData.length;
+    }
+    for (const o of payload.duplicationOccurrences || []) {
+      if (o.contentB64) estimated += o.contentB64.length;
+    }
+    if (estimated <= MAX_MAIN_BODY) return;
+
+    // 从 snapshotData 最大的文件开始剥离，直到体量达标
+    const withSnapshot = details
+      .map(d => ({ d, len: d.snapshotData ? d.snapshotData.length : 0 }))
+      .filter(x => x.len > 0)
+      .sort((a, b) => b.len - a.len);
+    let stripped = 0;
+    for (const item of withSnapshot) {
+      if (estimated <= MAX_MAIN_BODY) break;
+      estimated -= item.len;
+      delete item.d.snapshotData;
+      stripped++;
+    }
+    if (stripped > 0) {
+      console.warn(
+        `Code metrics main payload exceeds safe size, stripped snapshotData from ${stripped} largest file(s)`
+      );
+    }
   }
 
   /**
@@ -2336,15 +2401,23 @@ class CoderepoUploader {
    * 已编码数据跳过（防二次编码）。
    */
   encodeOccurrences(occurrences) {
-    return occurrences.map(occ => ({
-      groupId: occ.groupId,
-      contentHash: occ.contentHash,
-      occurrenceIndex: occ.occurrenceIndex,
-      filePath: occ.filePath,
-      startLine: occ.startLine,
-      endLine: occ.endLine,
-      contentB64: this.encodeB64(occ.content)
-    }));
+    // 单条重复块内容上限（明文 15KB ≈ Base64 20KB），防止超大重复块把主报告 JSON 撑爆
+    const MAX_CONTENT_CHARS = 15 * 1024;
+    return occurrences.map(occ => {
+      const content =
+        typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS
+          ? occ.content.slice(0, MAX_CONTENT_CHARS)
+          : occ.content;
+      return {
+        groupId: occ.groupId,
+        contentHash: occ.contentHash,
+        occurrenceIndex: occ.occurrenceIndex,
+        filePath: occ.filePath,
+        startLine: occ.startLine,
+        endLine: occ.endLine,
+        contentB64: this.encodeB64(content)
+      };
+    });
   }
 
   /**
