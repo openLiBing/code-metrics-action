@@ -2367,8 +2367,10 @@ class CoderepoUploader {
   /**
    * 按字节体量将列表拆分为多批，单批 ≤ maxBatchBytes。
    *
-   * <p>单条体量用 JSON.stringify 估算：单条 fileDetail/occurrence 均有截断保护
-   * （snapshotData ≤100KB、content ≤15KB），远小于 V8 单字符串上限，单条估算安全。
+   * <p>单条体量用 UTF-8 字节数估算（Buffer.byteLength）：避免中文等多字节字符
+   * 使 char 计数低估实际请求体字节数而再次触发 APIG 413。
+   * 单条 fileDetail/occurrence 均有截断保护（snapshotData ≤100KB、content ≤15KB），
+   * 远小于 V8 单字符串上限，单条估算安全。
    */
   splitByBytes(items) {
     const batches = [];
@@ -2377,7 +2379,7 @@ class CoderepoUploader {
     for (const item of items) {
       let bytes = 0;
       try {
-        bytes = JSON.stringify(item).length;
+        bytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
       } catch (e) {
         bytes = 0;
       }
