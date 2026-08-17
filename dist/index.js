@@ -1940,6 +1940,15 @@ class MetricsScanner {
 
       this.logger.info(`Scan completed in ${durationMs}ms`);
 
+      // 诊断日志：输出扫描结果规模，用于定位大数据量下的序列化超限问题
+      let snapshotTotal = 0;
+      for (const fd of fileDetails || []) {
+        if (fd.snapshotData) snapshotTotal += fd.snapshotData.length;
+      }
+      this.logger.info(
+        `Result scale: fileDetails=${(fileDetails || []).length}, snapshotDataTotal=${snapshotTotal} bytes, occurrences=${(formattedMetrics.duplicationOccurrences || []).length}`
+      );
+
       if (options.output || this.config.output) {
         const outputPath = path.isAbsolute(options.output || this.config.output)
           ? (options.output || this.config.output)
@@ -1955,6 +1964,7 @@ class MetricsScanner {
         };
         FileUtils.writeJsonFile(outputPath, compactResult);
         this.logger.info(`Results saved to: ${outputPath}`);
+        this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
       }
 
       if (options.upload || this.config.uploader?.enabled) {
@@ -1981,6 +1991,10 @@ class MetricsScanner {
 
     } catch (error) {
       this.logger.error(`Scan failed: ${error.message}`);
+      if (error && error.stack) {
+        // 输出堆栈头部，辅助定位是哪个 JSON.stringify / 哪个阶段抛错
+        this.logger.error(`Stack head: ${error.stack.split('\n').slice(0, 12).join('\n')}`);
+      }
 
       // 失败时也上传报告，附带错误信息
       if (options.upload || this.config.uploader?.enabled) {
@@ -2318,6 +2332,10 @@ class CoderepoUploader {
     // 主报告上报
     const mainUrl = this.buildUrl('/metrics/code/report');
     const mainBody = JSON.stringify(payload);
+    // 诊断日志：主报告序列化后实际大小，判断是否接近 V8 字符串上限
+    console.log(
+      `[upload] main report serialized=${mainBody.length} bytes, fileDetails=${(payload.fileDetails || []).length}, firstBatchOccurrences=${(payload.duplicationOccurrences || []).length}, remainingBatches=${remainingBatches.length}`
+    );
     const mainResult = await this.sendSignedRequest('POST', mainUrl, mainBody);
     if (!mainResult.success) {
       return mainResult;
@@ -2350,6 +2368,8 @@ class CoderepoUploader {
     for (const o of payload.duplicationOccurrences || []) {
       if (o.contentB64) estimated += o.contentB64.length;
     }
+    // 诊断日志：主报告估算体量
+    console.log(`[upload] main payload estimated=${estimated} bytes, limit=${MAX_MAIN_BODY} bytes`);
     if (estimated <= MAX_MAIN_BODY) return;
 
     // 从 snapshotData 最大的文件开始剥离，直到体量达标
@@ -2384,6 +2404,8 @@ class CoderepoUploader {
         recordId: recordId,
         blocks: this.encodeOccurrences(batch)
       });
+      // 诊断日志：每批体量
+      console.log(`[upload] duplication batch ${i + 1}/${batches.length}: ${batch.length} blocks, ${body.length} bytes`);
       const result = await this.sendSignedRequest('POST', batchUrl, body);
       if (!result.success) {
         totalFailed++;
