@@ -1889,6 +1889,7 @@ class MetricsScanner {
       this.config.excludeDirs || [],
       this.config.allowedExtensions || []
     );
+
     let slocResult = {};
     let lizardResult = {};
     let duplicationResult = {};
