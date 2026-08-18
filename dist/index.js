@@ -1868,17 +1868,11 @@ class MetricsScanner {
       path.isAbsolute(src) ? src : path.resolve(this.workingDir, src)
     );
 
-    this.logger.debug('Config summary:');
-    this.logger.debug(`  excludeDirs: ${JSON.stringify(this.config.excludeDirs || [])}`);
-    this.logger.debug(`  allowedExtensions: ${JSON.stringify(this.config.allowedExtensions || [])}`);
-    this.logger.debug(`  sources: ${resolvedSources.join(', ')}`);
-
     const previewFiles = FileCollector.collectFiles(
       resolvedSources,
       this.config.excludeDirs || [],
       this.config.allowedExtensions || []
     );
-    this.logger.debug(`Found ${previewFiles.length} files to scan`);
 
     let slocResult = {};
     let lizardResult = {};
@@ -1889,20 +1883,17 @@ class MetricsScanner {
       if (this.config.detectors?.sloc?.enabled !== false) {
         this.logger.info('Running scc detector (code size)...');
         slocResult = await this.slocDetector.detect(resolvedSources);
-        this.logger.debug('scc result:', JSON.stringify(slocResult));
       }
 
       if (this.config.detectors?.lizard?.enabled !== false) {
         this.logger.info('Running lizard detector (function complexity)...');
         lizardResult = await this.lizardDetector.detect(resolvedSources);
-        this.logger.debug('lizard result:', JSON.stringify(lizardResult));
       }
 
       if (this.config.detectors?.duplication?.enabled !== false) {
         this.logger.info('Running duplication detector (code duplication)...');
         // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
         duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
-        this.logger.debug('duplication result:', JSON.stringify(duplicationResult));
       }
 
       const mergedMetrics = MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
