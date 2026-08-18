@@ -69,13 +69,13 @@ jobs:
 ## 输入参数
 
 | 参数               | 必填 | 默认值       | 说明                                                    |
-| ------------------ | ---- | ------------ | ------------------------------------------------------- |
-| exclude-dirs       | 否   | -            | 排除目录列表，逗号分隔，不填时默认扫描全部路径          |
-| allowed-extensions | 否   | -            | 允许的文件扩展名，逗号分隔，不填时默认扫描所有文件类型  |
-| output             | 否   | metrics.json | 结果输出文件路径                                        |
-| upload             | 否   | true         | 是否上传检测结果到 openLiBing 平台                      |
-| apig_app_key       | 否   | -            | APIG 网关 AppKey，用于上传检测结果到 openLiBing 平台    |
-| apig_app_secret    | 否   | -            | APIG 网关 AppSecret，用于上传检测结果到 openLiBing 平台 |
+| ------------------ |----| ------------ | ------------------------------------------------------- |
+| exclude-dirs       | 否  | -            | 排除目录列表，逗号分隔，不填时默认扫描全部路径          |
+| allowed-extensions | 否  | -            | 允许的文件扩展名，逗号分隔，不填时默认扫描所有文件类型  |
+| output             | 否  | metrics.json | 结果输出文件路径                                        |
+| upload             | 否  | true         | 是否上传检测结果到 openLiBing 平台                      |
+| apig_app_key       | 是  | -            | APIG 网关 AppKey，用于上传检测结果到 openLiBing 平台    |
+| apig_app_secret    | 是  | -            | APIG 网关 AppSecret，用于上传检测结果到 openLiBing 平台 |
 
 注：上传功能需要环境变量（通过 APIG 网关调用 openLiBing 接口），请在 `项目设置 -> Actions 密钥与变量 -> 仓库密钥` 中进行配置。
 
