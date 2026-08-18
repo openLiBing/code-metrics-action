@@ -797,31 +797,46 @@ class DuplicationDetector extends BaseDetector {
       const totalLines = lines.length;
 
       // 4. 构建 segments（限制数量与单段大小，避免 snapshotData 过大导致序列化炸内存）
-      //    大区间按 MAX_SEGMENT_LINES 拆成小段：若整个合并区间当成单段，JSON 超限兜底
-      //    会把 segments 全部 pop 掉导致为空（/file-content 接口取不到内容），
-      //    拆分成小段后即使部分段被截断，仍能保留前面若干段。
+      //    大区间按「字符数预算」拆成小段（而非固定行数）：行长可能差异很大
+      //    （如压测文件单行最长 479 字符），固定行数切段仍可能让单段 JSON 超过 100KB，
+      //    触发下方兜底把 segments 全部 pop 掉导致为空（/file-content 接口取不到内容）。
+      //    按字符数动态切段 + 兜底至少保留 1 段，保证 /file-content 始终能拿到部分代码。
       const MAX_SEGMENTS = 200;
-      const MAX_SEGMENT_LINES = 200; // 单段最大行数，防止单段过大
+      const MAX_SEGMENT_CHARS = 24 * 1024; // 单段原始内容字符数上限（双重 base64 后约占 100KB 预算的 1/3）
       const MAX_JSON_SIZE = 100 * 1024; // 100KB
       const segments = [];
       let truncated = false;
+      // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
+      const pushSegment = (segStart, segEnd) => {
+        const segmentContent = lines.slice(segStart - 1, segEnd).join('\n');
+        segments.push({
+          originalStartLine: segStart,
+          originalEndLine: segEnd,
+          contentB64: Buffer.from(segmentContent, 'utf8').toString('base64')
+        });
+      };
       for (const interval of mergedExtended) {
+        if (truncated) break;
         const start = Math.max(1, interval.startLine);
         const end = Math.min(totalLines, interval.endLine);
-        // 将区间按 MAX_SEGMENT_LINES 切分为多个小段
-        for (let s = start; s <= end; s += MAX_SEGMENT_LINES) {
-          if (segments.length >= MAX_SEGMENTS) { truncated = true; break; }
-          const segEnd = Math.min(end, s + MAX_SEGMENT_LINES - 1);
-          const segmentContent = lines.slice(s - 1, segEnd).join('\n');
-          // 每个片段的 contentB64 内部再次 Base64 编码
-          const contentB64 = Buffer.from(segmentContent, 'utf8').toString('base64');
-          segments.push({
-            originalStartLine: s,
-            originalEndLine: segEnd,
-            contentB64: contentB64
-          });
+        let segStart = start;
+        let segChars = 0;
+        for (let ln = start; ln <= end; ln++) {
+          const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
+          const lineLen = lineText.length + 1; // 行内容 + 换行符
+          // 达到单段字符上限：闭合当前段并开启新段
+          if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
+            pushSegment(segStart, ln - 1);
+            segStart = ln;
+            segChars = 0;
+            if (segments.length >= MAX_SEGMENTS) { truncated = true; break; }
+          }
+          segChars += lineLen;
         }
-        if (truncated) break;
+        // 区间末尾：剩余行构成最后一段
+        if (!truncated && segChars > 0) {
+          pushSegment(segStart, end);
+        }
       }
 
       // 5. 构建 snapshotData JSON 并整体 Base64 编码（超限则截断）
@@ -833,8 +848,9 @@ class DuplicationDetector extends BaseDetector {
       };
       let snapshotJson = JSON.stringify(snapshotDataObj);
       if (snapshotJson.length > MAX_JSON_SIZE) {
-        // 逐段移除直到 JSON 小于限制
-        while (segments.length > 0 && snapshotJson.length > MAX_JSON_SIZE) {
+        // 从尾部逐段移除直到 JSON 小于限制；至少保留 1 段，避免 segments 全空
+        // （极端情形下单段本身超限时，保留首段也比全空好，/file-content 仍能拿到部分内容）
+        while (segments.length > 1 && snapshotJson.length > MAX_JSON_SIZE) {
           segments.pop();
           snapshotDataObj.truncated = true;
           snapshotJson = JSON.stringify(snapshotDataObj);
