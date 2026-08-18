@@ -1071,23 +1071,32 @@ class DuplicationDetector extends BaseDetector {
       const lines = content.split('\n');
       const totalLines = lines.length;
 
-      // 4. 构建 segments（限制数量，避免 snapshotData 过大导致序列化炸内存）
+      // 4. 构建 segments（限制数量与单段大小，避免 snapshotData 过大导致序列化炸内存）
+      //    大区间按 MAX_SEGMENT_LINES 拆成小段：若整个合并区间当成单段，JSON 超限兜底
+      //    会把 segments 全部 pop 掉导致为空（/file-content 接口取不到内容），
+      //    拆分成小段后即使部分段被截断，仍能保留前面若干段。
       const MAX_SEGMENTS = 200;
+      const MAX_SEGMENT_LINES = 200; // 单段最大行数，防止单段过大
       const MAX_JSON_SIZE = 100 * 1024; // 100KB
       const segments = [];
       let truncated = false;
       for (const interval of mergedExtended) {
-        if (segments.length >= MAX_SEGMENTS) { truncated = true; break; }
         const start = Math.max(1, interval.startLine);
         const end = Math.min(totalLines, interval.endLine);
-        const segmentContent = lines.slice(start - 1, end).join('\n');
-        // 每个片段的 contentB64 内部再次 Base64 编码
-        const contentB64 = Buffer.from(segmentContent, 'utf8').toString('base64');
-        segments.push({
-          originalStartLine: start,
-          originalEndLine: end,
-          contentB64: contentB64
-        });
+        // 将区间按 MAX_SEGMENT_LINES 切分为多个小段
+        for (let s = start; s <= end; s += MAX_SEGMENT_LINES) {
+          if (segments.length >= MAX_SEGMENTS) { truncated = true; break; }
+          const segEnd = Math.min(end, s + MAX_SEGMENT_LINES - 1);
+          const segmentContent = lines.slice(s - 1, segEnd).join('\n');
+          // 每个片段的 contentB64 内部再次 Base64 编码
+          const contentB64 = Buffer.from(segmentContent, 'utf8').toString('base64');
+          segments.push({
+            originalStartLine: s,
+            originalEndLine: segEnd,
+            contentB64: contentB64
+          });
+        }
+        if (truncated) break;
       }
 
       // 5. 构建 snapshotData JSON 并整体 Base64 编码（超限则截断）
