@@ -1955,12 +1955,21 @@ class MetricsScanner {
           ? (options.output || this.config.output)
           : path.resolve(this.workingDir, options.output || this.config.output);
         // 本地输出文件剥离 snapshotData（体量大且仅详情页展示用，DB 上报另有一份），
+        // 同时把重复块明文 content 截断到 15KB 上限（与上报路径 encodeOccurrences 一致），
         // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length
         const compactResult = {
           ...result,
           fileDetails: (result.fileDetails || []).map(fd => {
             const { snapshotData, ...rest } = fd;
             return rest;
+          }),
+          // 重复块出现位置：截断超大明文 content，防止累计超 V8 单字符串上限
+          duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
+            const MAX_CONTENT_CHARS = 15 * 1024;
+            if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
+              return { ...occ, content: occ.content.slice(0, MAX_CONTENT_CHARS) };
+            }
+            return occ;
           })
         };
         FileUtils.writeJsonFile(outputPath, compactResult);
