@@ -142,11 +142,20 @@ class MetricsScanner {
             const { snapshotData, ...rest } = fd;
             return rest;
           }),
-          // 重复块出现位置：截断超大明文 content，防止累计超 V8 单字符串上限
+          // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
+          // 防止累计超 V8 单字符串上限（与上报侧 clipOversizeContent 行为一致）
           duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
             const MAX_CONTENT_CHARS = 15 * 1024;
             if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
-              return { ...occ, content: occ.content.slice(0, MAX_CONTENT_CHARS) };
+              const headChars = Math.floor(MAX_CONTENT_CHARS * 0.35);
+              const tailChars = Math.floor(MAX_CONTENT_CHARS * 0.35);
+              return {
+                ...occ,
+                content:
+                  occ.content.slice(0, headChars) +
+                  `\n... ${occ.content.length - headChars - tailChars} chars omitted ...\n` +
+                  occ.content.slice(occ.content.length - tailChars)
+              };
             }
             return occ;
           })

@@ -427,10 +427,7 @@ class CoderepoUploader {
     // 单条重复块内容上限（明文 15KB ≈ Base64 20KB），防止超大重复块把主报告 JSON 撑爆
     const MAX_CONTENT_CHARS = 15 * 1024;
     return occurrences.map(occ => {
-      const content =
-        typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS
-          ? occ.content.slice(0, MAX_CONTENT_CHARS)
-          : occ.content;
+      const content = this.clipOversizeContent(occ.content, MAX_CONTENT_CHARS);
       return {
         groupId: occ.groupId,
         contentHash: occ.contentHash,
@@ -441,6 +438,25 @@ class CoderepoUploader {
         contentB64: this.encodeB64(content)
       };
     });
+  }
+
+  /**
+   * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
+   * 仅针对超长场景（超过 maxChars）触发；未超长时原样返回，不丢任何内容。
+   */
+  clipOversizeContent(content, maxChars) {
+    if (typeof content !== 'string' || content.length <= maxChars) {
+      return content;
+    }
+    // 头/尾各保留预算的 35%，留 30% 给省略标记与换行符
+    const headChars = Math.floor(maxChars * 0.35);
+    const tailChars = Math.floor(maxChars * 0.35);
+    const omittedChars = content.length - headChars - tailChars;
+    return (
+      content.slice(0, headChars) +
+      `\n... ${omittedChars} chars omitted ...\n` +
+      content.slice(content.length - tailChars)
+    );
   }
 
   /**

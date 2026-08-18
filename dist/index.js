@@ -1071,46 +1071,76 @@ class DuplicationDetector extends BaseDetector {
       const lines = content.split('\n');
       const totalLines = lines.length;
 
-      // 4. 构建 segments（限制数量与单段大小，避免 snapshotData 过大导致序列化炸内存）
-      //    大区间按「字符数预算」拆成小段（而非固定行数）：行长可能差异很大
-      //    （如压测文件单行最长 479 字符），固定行数切段仍可能让单段 JSON 超过 100KB，
-      //    触发下方兜底把 segments 全部 pop 掉导致为空（/file-content 接口取不到内容）。
-      //    按字符数动态切段 + 兜底至少保留 1 段，保证 /file-content 始终能拿到部分代码。
+      // 4. 构建 segments
+      //    放得下就整体完整保留（按字符预算切段，避免单段 JSON 超限）；
+      //    超大块（总内容超过 OVERSIZE_CHARS）只保留「头部 + 省略标记 + 尾部」，
+      //    中间直接省略——避免 snapshotData 塞满连续的前段窗口（/file-content 只看到开头），
+      //    也避免 JSON 超限兜底把 segments 全部 pop 掉导致为空。
+      //    该省略策略仅针对超大场景，正常大小内容不受影响。
       const MAX_SEGMENTS = 200;
-      const MAX_SEGMENT_CHARS = 24 * 1024; // 单段原始内容字符数上限（双重 base64 后约占 100KB 预算的 1/3）
       const MAX_JSON_SIZE = 100 * 1024; // 100KB
+      const MAX_SEGMENT_CHARS = 24 * 1024; // 完整保留路径下：单段原始内容字符数上限
+      const OVERSIZE_CHARS = 48 * 1024; // 区间总内容字符数超过该阈值视为超大块
+      const HEAD_LINES = 20; // 超大块保留：头部行数
+      const TAIL_LINES = 20; // 超大块保留：尾部行数
       const segments = [];
       let truncated = false;
       // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
-      const pushSegment = (segStart, segEnd) => {
-        const segmentContent = lines.slice(segStart - 1, segEnd).join('\n');
+      const pushSegment = (segStart, segEnd, contentText) => {
         segments.push({
           originalStartLine: segStart,
           originalEndLine: segEnd,
-          contentB64: Buffer.from(segmentContent, 'utf8').toString('base64')
+          contentB64: Buffer.from(contentText, 'utf8').toString('base64')
         });
       };
       for (const interval of mergedExtended) {
         if (truncated) break;
         const start = Math.max(1, interval.startLine);
         const end = Math.min(totalLines, interval.endLine);
-        let segStart = start;
-        let segChars = 0;
+        // 预估区间全部内容的总字符数（行内容 + 换行符），用于判断是否超大
+        let totalChars = 0;
         for (let ln = start; ln <= end; ln++) {
-          const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
-          const lineLen = lineText.length + 1; // 行内容 + 换行符
-          // 达到单段字符上限：闭合当前段并开启新段
-          if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
-            pushSegment(segStart, ln - 1);
-            segStart = ln;
-            segChars = 0;
-            if (segments.length >= MAX_SEGMENTS) { truncated = true; break; }
-          }
-          segChars += lineLen;
+          const lineText = lines[ln - 1];
+          totalChars += (lineText ? lineText.length : 0) + 1;
         }
-        // 区间末尾：剩余行构成最后一段
-        if (!truncated && segChars > 0) {
-          pushSegment(segStart, end);
+        if (totalChars <= OVERSIZE_CHARS) {
+          // 完整保留路径：整体放得下，按字符预算切段（避免单段 JSON 超限）
+          let segStart = start;
+          let segChars = 0;
+          for (let ln = start; ln <= end; ln++) {
+            const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
+            const lineLen = lineText.length + 1; // 行内容 + 换行符
+            if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
+              pushSegment(segStart, ln - 1, lines.slice(segStart - 1, ln - 1).join('\n'));
+              segStart = ln;
+              segChars = 0;
+              if (segments.length >= MAX_SEGMENTS) { truncated = true; break; }
+            }
+            segChars += lineLen;
+          }
+          if (!truncated && segChars > 0) {
+            pushSegment(segStart, end, lines.slice(segStart - 1, end).join('\n'));
+          }
+        } else {
+          // 超大块：只保留「头部 + 省略标记 + 尾部」，中间直接省略（仅超大场景触发）
+          const headEnd = Math.min(end, start + HEAD_LINES - 1);
+          const tailStart = Math.max(start, end - TAIL_LINES + 1);
+          if (headEnd < tailStart) {
+            // 头尾不重叠：头段（真实内容）+ 省略标记段 + 尾段（真实内容）
+            pushSegment(start, headEnd, lines.slice(start - 1, headEnd).join('\n'));
+            const omittedLines = tailStart - headEnd - 1;
+            segments.push({
+              originalStartLine: headEnd + 1,
+              originalEndLine: tailStart - 1,
+              omitted: true, // 省略标记段：/file-content 展示为「N lines omitted」，detail 上下文提取应跳过
+              contentB64: Buffer.from(`... ${omittedLines} lines omitted ...`, 'utf8').toString('base64')
+            });
+            pushSegment(tailStart, end, lines.slice(tailStart - 1, end).join('\n'));
+          } else {
+            // 头尾重叠（区间行数很少但单行超长）：整体作为一段真实内容
+            pushSegment(start, end, lines.slice(start - 1, end).join('\n'));
+          }
+          if (segments.length >= MAX_SEGMENTS) { truncated = true; }
         }
       }
 
@@ -1986,11 +2016,20 @@ class MetricsScanner {
             const { snapshotData, ...rest } = fd;
             return rest;
           }),
-          // 重复块出现位置：截断超大明文 content，防止累计超 V8 单字符串上限
+          // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
+          // 防止累计超 V8 单字符串上限（与上报侧 clipOversizeContent 行为一致）
           duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
             const MAX_CONTENT_CHARS = 15 * 1024;
             if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
-              return { ...occ, content: occ.content.slice(0, MAX_CONTENT_CHARS) };
+              const headChars = Math.floor(MAX_CONTENT_CHARS * 0.35);
+              const tailChars = Math.floor(MAX_CONTENT_CHARS * 0.35);
+              return {
+                ...occ,
+                content:
+                  occ.content.slice(0, headChars) +
+                  `\n... ${occ.content.length - headChars - tailChars} chars omitted ...\n` +
+                  occ.content.slice(occ.content.length - tailChars)
+              };
             }
             return occ;
           })
@@ -2497,10 +2536,7 @@ class CoderepoUploader {
     // 单条重复块内容上限（明文 15KB ≈ Base64 20KB），防止超大重复块把主报告 JSON 撑爆
     const MAX_CONTENT_CHARS = 15 * 1024;
     return occurrences.map(occ => {
-      const content =
-        typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS
-          ? occ.content.slice(0, MAX_CONTENT_CHARS)
-          : occ.content;
+      const content = this.clipOversizeContent(occ.content, MAX_CONTENT_CHARS);
       return {
         groupId: occ.groupId,
         contentHash: occ.contentHash,
@@ -2511,6 +2547,25 @@ class CoderepoUploader {
         contentB64: this.encodeB64(content)
       };
     });
+  }
+
+  /**
+   * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
+   * 仅针对超长场景（超过 maxChars）触发；未超长时原样返回，不丢任何内容。
+   */
+  clipOversizeContent(content, maxChars) {
+    if (typeof content !== 'string' || content.length <= maxChars) {
+      return content;
+    }
+    // 头/尾各保留预算的 35%，留 30% 给省略标记与换行符
+    const headChars = Math.floor(maxChars * 0.35);
+    const tailChars = Math.floor(maxChars * 0.35);
+    const omittedChars = content.length - headChars - tailChars;
+    return (
+      content.slice(0, headChars) +
+      `\n... ${omittedChars} chars omitted ...\n` +
+      content.slice(content.length - tailChars)
+    );
   }
 
   /**
