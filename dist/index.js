@@ -2017,18 +2017,13 @@ class MetricsScanner {
             return rest;
           }),
           // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
-          // 防止累计超 V8 单字符串上限（与上报侧 clipOversizeContent 行为一致）
+          // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
           duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
             const MAX_CONTENT_CHARS = 15 * 1024;
             if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
-              const headChars = Math.floor(MAX_CONTENT_CHARS * 0.35);
-              const tailChars = Math.floor(MAX_CONTENT_CHARS * 0.35);
               return {
                 ...occ,
-                content:
-                  occ.content.slice(0, headChars) +
-                  `\n... ${occ.content.length - headChars - tailChars} chars omitted ...\n` +
-                  occ.content.slice(occ.content.length - tailChars)
+                content: this.uploader.clipOversizeContent(occ.content, MAX_CONTENT_CHARS)
               };
             }
             return occ;
@@ -2551,21 +2546,54 @@ class CoderepoUploader {
 
   /**
    * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
-   * 仅针对超长场景（超过 maxChars）触发；未超长时原样返回，不丢任何内容。
+   * 按行省略：头/尾各保留若干整行，省略标记显示被省略的行数（与 /file-content 的
+   * segments 省略样式一致）。仅针对超长场景（超过 maxChars）触发；未超长时原样返回。
    */
   clipOversizeContent(content, maxChars) {
     if (typeof content !== 'string' || content.length <= maxChars) {
       return content;
     }
-    // 头/尾各保留预算的 35%，留 30% 给省略标记与换行符
-    const headChars = Math.floor(maxChars * 0.35);
-    const tailChars = Math.floor(maxChars * 0.35);
-    const omittedChars = content.length - headChars - tailChars;
-    return (
-      content.slice(0, headChars) +
-      `\n... ${omittedChars} chars omitted ...\n` +
-      content.slice(content.length - tailChars)
-    );
+    // 按行拆分；头/尾各以预算的 35% 为字符配额累积整行，保证裁剪后总量仍受控
+    const lines = content.split('\n');
+    const totalLines = lines.length;
+    const sideChars = Math.floor(maxChars * 0.35);
+    // 头部：从首行开始累积整行，直到逼近 sideChars
+    let headLines = 0;
+    let headChars = 0;
+    for (let i = 0; i < totalLines; i++) {
+      const len = lines[i].length + 1; // 行内容 + 换行符
+      if (headLines > 0 && headChars + len > sideChars) break;
+      headChars += len;
+      headLines++;
+    }
+    // 尾部：从末行开始累积整行，直到逼近 sideChars
+    let tailLines = 0;
+    let tailChars = 0;
+    for (let i = totalLines - 1; i >= 0; i--) {
+      const len = lines[i].length + 1;
+      if (tailLines > 0 && tailChars + len > sideChars) break;
+      tailChars += len;
+      tailLines++;
+    }
+    const omittedLines = Math.max(0, totalLines - headLines - tailLines);
+    const head = lines.slice(0, headLines).join('\n');
+    const tail = lines.slice(totalLines - tailLines).join('\n');
+    const clipped =
+      (headLines > 0 ? head : '') +
+      (omittedLines > 0 ? `\n... ${omittedLines} lines omitted ...\n` : '') +
+      (tailLines > 0 ? tail : '');
+    // 兜底：单行超长导致按行裁剪后仍超限时，退化为按字符裁剪
+    if (clipped.length > maxChars) {
+      const headChars2 = Math.floor(maxChars * 0.35);
+      const tailChars2 = Math.floor(maxChars * 0.35);
+      const omittedChars = content.length - headChars2 - tailChars2;
+      return (
+        content.slice(0, headChars2) +
+        `\n... ${omittedChars} chars omitted ...\n` +
+        content.slice(content.length - tailChars2)
+      );
+    }
+    return clipped;
   }
 
   /**
