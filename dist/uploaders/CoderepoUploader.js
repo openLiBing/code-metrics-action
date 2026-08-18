@@ -242,17 +242,21 @@ class CoderepoUploader {
     this.timeout = config.timeout || 30000;
     this.apigAppKey = config.apigAppKey || '';
     this.apigAppSecret = config.apigAppSecret || '';
-    // 单批重复块上报上限，与 APIG 网关 10MB 体量限制对齐
+    // 单批请求体字节上限：华为云 APIG 网关默认请求体限制 10MB，取 8MB 留安全余量，
+    // 避免主报告/批量请求触发 HTTP 413（APIG.0201 Request entity too large）
+    this.maxBatchBytes = config.maxBatchBytes || 8 * 1024 * 1024;
+    // 兼容旧配置：按条数分批（duplicationBatchSize=5000）已废弃，改为按字节分批
     this.duplicationBatchSize = config.duplicationBatchSize || 5000;
   }
 
   /**
    * 上报代码度量指标。
    *
-   * 流程：
-   * 1. 主报告（含 fileDetails + snapshotData + identicalFileDetails + 总体指标 + 首批 duplicationOccurrences）
-   *    → 后端创建 record 并返回 recordId
-   * 2. 若 duplicationOccurrences 超过单批上限，剩余部分分批上报到 /metrics/code/duplication-blocks
+   * 流程（主报告无任何大数据，彻底规避 APIG 413 与 V8 单字符串上限）：
+   * 1. 主报告（仅总体指标）POST /metrics/code/report → 后端创建 record 并返回 recordId
+   * 2. fileDetails（含 snapshotData）按字节分批 POST /metrics/code/file-details，
+   *    identicalFileDetails 仅随最后一批附带（其保存依赖 file_detail 记录已存在）
+   * 3. duplicationOccurrences 按字节分批 POST /metrics/code/duplication-blocks
    *
    * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
    */
@@ -260,29 +264,17 @@ class CoderepoUploader {
     // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
     const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
 
-    // 重复块分批：首批随主报告上报，剩余走批量接口
-    const occurrences = duplicationOccurrences || [];
-    const firstBatch = occurrences.slice(0, this.duplicationBatchSize);
-    const remainingBatches = [];
-    for (let i = this.duplicationBatchSize; i < occurrences.length; i += this.duplicationBatchSize) {
-      remainingBatches.push(occurrences.slice(i, i + this.duplicationBatchSize));
-    }
-
+    // 1. 主报告只传总体指标（不含 fileDetails/identical/occurrences 等大数据），体量恒定极小
     const payload = {
       gitUrl: options.gitUrl,
       branchName: options.branchName,
       pipelineRunId: options.pipelineRunId,
       runNumber: options.runNumber,
       metricsData: overallMetrics,
-      fileDetails: fileDetails || [],
-      identicalFileDetails: identicalFileDetails || [],
-      // 首批重复块（≤5000 条），content 已 Base64 编码为 contentB64
-      duplicationOccurrences: this.encodeOccurrences(firstBatch),
       detectionStartedAt: options.startTime,
       detectionCompletedAt: options.endTime,
       status: options.status || 0
     };
-
     if (options.errorMessage) {
       payload.errorMessage = options.errorMessage;
     }
@@ -290,18 +282,45 @@ class CoderepoUploader {
     // 主报告上报
     const mainUrl = this.buildUrl('/metrics/code/report');
     const mainBody = JSON.stringify(payload);
+    // 诊断日志：主报告序列化后实际大小（应为 KB 级，不含大数据）
+    console.log(`[upload] main report serialized=${mainBody.length} bytes`);
     const mainResult = await this.sendSignedRequest('POST', mainUrl, mainBody);
     if (!mainResult.success) {
       return mainResult;
     }
     const recordId = mainResult.recordId;
 
-    // 剩余重复块分批上报（若有）
-    if (remainingBatches.length > 0) {
-      const batchResult = await this.uploadDuplicationBlocksInBatches(recordId, remainingBatches);
-      if (!batchResult.success) {
+    // 2. fileDetails（含 snapshotData）按字节分批上传到 /file-details
+    const fdBatches = this.splitByBytes(fileDetails || []);
+    if (fdBatches.length === 0) {
+      // 无 fileDetails 但有 identicalFileDetails：单独走一批（空 fileDetails + identical）
+      if ((identicalFileDetails || []).length > 0) {
+        const fdResult =
+            await this.uploadFileDetailsBatch(recordId, [], identicalFileDetails || [], 1, 1);
+        if (!fdResult.success) {
+          console.warn(`File details batch 1/1 failed: ${fdResult.error}`);
+        }
+      }
+    } else {
+      for (let i = 0; i < fdBatches.length; i++) {
+        // identicalFileDetails 依赖 file_detail 记录已存在，只随最后一批附带
+        const identical = i === fdBatches.length - 1 ? identicalFileDetails || [] : [];
+        const fdResult = await this.uploadFileDetailsBatch(
+            recordId, fdBatches[i], identical, i + 1, fdBatches.length);
+        if (!fdResult.success) {
+          console.warn(`File details batch ${i + 1}/${fdBatches.length} failed: ${fdResult.error}`);
+        }
+      }
+    }
+
+    // 3. duplicationOccurrences 按字节分批上传到 /duplication-blocks
+    const encodedOccurrences = this.encodeOccurrences(duplicationOccurrences || []);
+    const occBatches = this.splitByBytes(encodedOccurrences);
+    if (occBatches.length > 0) {
+      const occResult = await this.uploadDuplicationBlocksInBatches(recordId, occBatches);
+      if (!occResult.success) {
         // 分批上报失败不阻塞主流程，记录警告（主报告已成功，重复块部分丢失可重扫补齐）
-        console.warn(`Duplication blocks batch upload partially failed: ${batchResult.error}`);
+        console.warn(`Duplication blocks batch upload partially failed: ${occResult.error}`);
       }
     }
 
@@ -309,8 +328,73 @@ class CoderepoUploader {
   }
 
   /**
-   * 分批上报剩余的重复块出现位置到 /metrics/code/duplication-blocks。
+   * 按字节体量将列表拆分为多批，单批 ≤ maxBatchBytes。
+   *
+   * <p>单条体量用 UTF-8 字节数估算（Buffer.byteLength）：避免中文等多字节字符
+   * 使 char 计数低估实际请求体字节数而再次触发 APIG 413。
+   * 单条 fileDetail/occurrence 均有截断保护（snapshotData ≤100KB、content ≤15KB），
+   * 远小于 V8 单字符串上限，单条估算安全。
+   */
+  splitByBytes(items) {
+    const batches = [];
+    let current = [];
+    let currentBytes = 0;
+    for (const item of items) {
+      let bytes = 0;
+      try {
+        bytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+      } catch (e) {
+        bytes = 0;
+      }
+      if (current.length > 0 && currentBytes + bytes > this.maxBatchBytes) {
+        batches.push(current);
+        current = [];
+        currentBytes = 0;
+      }
+      current.push(item);
+      currentBytes += bytes;
+    }
+    if (current.length > 0) {
+      batches.push(current);
+    }
+    return batches;
+  }
+
+  /**
+   * 分批上报文件级指标明细到 /metrics/code/file-details。
+   *
+   * <p>identicalFileDetails 仅最后一批附带（其保存依赖 file_detail 记录已存在）。
+   *
+   * @param recordId 主表记录ID
+   * @param fileDetails 本批文件级指标明细
+   * @param identicalFileDetails 完全一致文件明细（仅最后一批传入，可空）
+   * @param batchIndex 当前批次序号（日志用）
+   * @param batchTotal 总批次数（日志用）
+   */
+  async uploadFileDetailsBatch(recordId, fileDetails, identicalFileDetails, batchIndex, batchTotal) {
+    const batchUrl = this.buildUrl('/metrics/code/file-details');
+    const body = JSON.stringify({
+      recordId: recordId,
+      fileDetails: fileDetails,
+      identicalFileDetails: identicalFileDetails
+    });
+    // 诊断日志：每批体量
+    console.log(
+      `[upload] file-details batch ${batchIndex}/${batchTotal}: ${fileDetails.length} files, ${body.length} bytes`
+    );
+    const result = await this.sendSignedRequest('POST', batchUrl, body);
+    if (!result.success) {
+      return result;
+    }
+    return { success: true };
+  }
+
+  /**
+   * 分批上报重复块出现位置到 /metrics/code/duplication-blocks。
    * 单批失败不阻塞后续批次，最终汇总成功/失败计数。
+   *
+   * @param recordId 主表记录ID
+   * @param batches 已按字节拆分好的批次（元素为已编码的 occurrence 对象）
    */
   async uploadDuplicationBlocksInBatches(recordId, batches) {
     const batchUrl = this.buildUrl('/metrics/code/duplication-blocks');
@@ -319,8 +403,10 @@ class CoderepoUploader {
       const batch = batches[i];
       const body = JSON.stringify({
         recordId: recordId,
-        blocks: this.encodeOccurrences(batch)
+        blocks: batch
       });
+      // 诊断日志：每批体量
+      console.log(`[upload] duplication batch ${i + 1}/${batches.length}: ${batch.length} blocks, ${body.length} bytes`);
       const result = await this.sendSignedRequest('POST', batchUrl, body);
       if (!result.success) {
         totalFailed++;
@@ -338,15 +424,23 @@ class CoderepoUploader {
    * 已编码数据跳过（防二次编码）。
    */
   encodeOccurrences(occurrences) {
-    return occurrences.map(occ => ({
-      groupId: occ.groupId,
-      contentHash: occ.contentHash,
-      occurrenceIndex: occ.occurrenceIndex,
-      filePath: occ.filePath,
-      startLine: occ.startLine,
-      endLine: occ.endLine,
-      contentB64: this.encodeB64(occ.content)
-    }));
+    // 单条重复块内容上限（明文 15KB ≈ Base64 20KB），防止超大重复块把主报告 JSON 撑爆
+    const MAX_CONTENT_CHARS = 15 * 1024;
+    return occurrences.map(occ => {
+      const content =
+        typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS
+          ? occ.content.slice(0, MAX_CONTENT_CHARS)
+          : occ.content;
+      return {
+        groupId: occ.groupId,
+        contentHash: occ.contentHash,
+        occurrenceIndex: occ.occurrenceIndex,
+        filePath: occ.filePath,
+        startLine: occ.startLine,
+        endLine: occ.endLine,
+        contentB64: this.encodeB64(content)
+      };
+    });
   }
 
   /**

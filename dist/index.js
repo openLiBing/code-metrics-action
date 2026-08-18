@@ -1077,10 +1077,7 @@ class DuplicationDetector extends BaseDetector {
       const segments = [];
       let truncated = false;
       for (const interval of mergedExtended) {
-        if (segments.length >= MAX_SEGMENTS) {
-          truncated = true;
-          break;
-        }
+        if (segments.length >= MAX_SEGMENTS) { truncated = true; break; }
         const start = Math.max(1, interval.startLine);
         const end = Math.min(totalLines, interval.endLine);
         const segmentContent = lines.slice(start - 1, end).join('\n');
@@ -1889,7 +1886,6 @@ class MetricsScanner {
       this.config.excludeDirs || [],
       this.config.allowedExtensions || []
     );
-
     let slocResult = {};
     let lizardResult = {};
     let duplicationResult = {};
@@ -1954,9 +1950,11 @@ class MetricsScanner {
         const outputPath = path.isAbsolute(options.output || this.config.output)
           ? (options.output || this.config.output)
           : path.resolve(this.workingDir, options.output || this.config.output);
-        // 本地输出文件剥离 snapshotData（体量大且仅详情页展示用，DB 上报另有一份），
-        // 同时把重复块明文 content 截断到 15KB 上限（与上报路径 encodeOccurrences 一致），
-        // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length
+        // 本地输出文件剥离大数据字段（snapshotData 与 duplicationOccurrences 的明文 content），
+        // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length。
+        // - snapshotData 仅详情页展示用，DB 上报另有一份
+        // - occurrence 的明文 content 仅上报用（uploader 已 Base64 编码后分批上报），
+        //   本地保留 groupId/filePath/起止行等元数据即可
         const compactResult = {
           ...result,
           fileDetails: (result.fileDetails || []).map(fd => {

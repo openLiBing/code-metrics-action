@@ -806,6 +806,7 @@ class DuplicationDetector extends BaseDetector {
         const start = Math.max(1, interval.startLine);
         const end = Math.min(totalLines, interval.endLine);
         const segmentContent = lines.slice(start - 1, end).join('\n');
+        // 每个片段的 contentB64 内部再次 Base64 编码
         const contentB64 = Buffer.from(segmentContent, 'utf8').toString('base64');
         segments.push({
           originalStartLine: start,
