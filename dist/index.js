@@ -59493,17 +59493,17 @@ async function run() {
     // 官方定义："连续超过 10 行代码块在其他地方重复记为一次重复"
     // - minLines=10：连续代码块至少 10 行才算一次重复
     const minLines = parseInt(getInput('min-lines') || '10', 10);
-    const shouldUpload = getInput('upload') === 'true';
     const outputFile = getInput('output') || 'metrics.json';
 
     // atomgit 上下文：当前工作流所属仓的分支/标签名
     // GitCode runner 自动注入 ATOMGIT_REF_NAME / ATOMGIT_TOKEN 等环境变量
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
-    // 从环境变量获取 coderepo 信息（统一使用 OPENLIBING_APIG_KEY/SECRET，两个插件共用同一套 APIG 凭证）
+    // coderepo 服务地址硬编码到插件（部署时确定的固定值）
+    // APIG 凭证通过 apig-app-key / apig-app-secret 输入参数获取（工作流 with 传入）
     const coderepoUrl = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com';
-    const apigAppKey = getInput('apig_app_key') || '';
-    const apigAppSecret = getInput('apig_app_secret') || '';
+    const apigAppKey = getInput('apig-app-key') || '';
+    const apigAppSecret = getInput('apig-app-secret') || '';
 
     // 上报用 git_url 和 branch_name：
     // 从 sourceDir 沿目录树向上找 .git（修复：sourceDir 是构建产物子目录如 source-code/target 时，
@@ -59581,8 +59581,8 @@ async function run() {
     config.detectors.duplication.minLines = minLines;
     config.output = outputFile;
 
-    // 上传配置
-    if (shouldUpload && coderepoUrl) {
+    // 上传配置：插件默认上传到 openLiBing（已移除 upload 开关）
+    if (coderepoUrl) {
       config.uploader = {
         enabled: true,
         coderepoUrl: coderepoUrl,
@@ -59618,7 +59618,7 @@ async function run() {
     const result = await scanner.scan({
       sourceDir: config.sourceDir,
       output: config.output,
-      upload: shouldUpload,
+      upload: true,
       gitUrl: gitUrl,
       branchName: branchName,
       pipelineRunId: pipelineRunId,

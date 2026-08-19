@@ -39,14 +39,9 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
-  upload:
-    description: "是否上传检测结果到 openLiBing"
-    required: false
-    default: "true"
-  apig_app_key:
-    description: "APIG 网关 AppKey（AK），用于上传检测结果到 openLiBing 平台"
-    required: false
-    default: ""
+  apig-app-key:
+    description: "APIG 网关 AppKey（AK），用于上传检测结果到 openLiBing 平台。上传功能默认开启，此项必填"
+    required: true
     layout:
       type: "input"
       label: "APIG AppKey"
@@ -55,10 +50,9 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
-  apig_app_secret:
-    description: "APIG 网关 AppSecret（SK），用于上传检测结果到 openLiBing 平台"
-    required: false
-    default: ""
+  apig-app-secret:
+    description: "APIG 网关 AppSecret（SK），用于上传检测结果到 openLiBing 平台。上传功能默认开启，此项必填"
+    required: true
     layout:
       type: "input"
       label: "APIG AppSecret"
