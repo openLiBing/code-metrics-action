@@ -996,15 +996,17 @@ class DuplicationDetector extends BaseDetector {
   mergeIntervals(intervals, mergeAdjacent = true) {
     if (intervals.length === 0) return [];
     const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
-    const merged = [{ startLine: sorted[0].startLine, endLine: sorted[0].endLine }];
+    const merged = [Object.assign({}, sorted[0])];
     // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
     const overlapThreshold = mergeAdjacent ? 1 : 0;
     for (let i = 1; i < sorted.length; i++) {
       const last = merged[merged.length - 1];
       if (sorted[i].startLine <= last.endLine + overlapThreshold) {
         last.endLine = Math.max(last.endLine, sorted[i].endLine);
+        // 合并时透传附加属性（如 oversized）：任一子区间为真则合并区间视为真
+        if (sorted[i].oversized) last.oversized = true;
       } else {
-        merged.push({ startLine: sorted[i].startLine, endLine: sorted[i].endLine });
+        merged.push(Object.assign({}, sorted[i]));
       }
     }
     return merged;
@@ -1012,7 +1014,13 @@ class DuplicationDetector extends BaseDetector {
 
   /**
    * 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData。
-   * 不读取/上报完整文件内容，其他部分由前端用 "... N lines omitted ..." 占位。
+   *
+   * segments 生成策略：
+   * - 正常重复块：完整保留其代码内容（含 ±contextLines 上下文），无论数量多少都不省略，
+   *   保证前端能展示/高亮所有重复代码块；相邻块的上下文重叠时会合并成一个连续区间。
+   * - 超大重复块（单个块自身内容超过 OVERSIZE_CHARS）：只保留「头部 + 省略标记 + 尾部」，
+   *   中间直接省略，避免单个大块把字符串撑爆。这是允许 segments 省略内容的唯一场景。
+   * - 未覆盖的行段由前端根据相邻片段的行号差用 "... N lines omitted ..." 占位。
    *
    * snapshotData 结构（整体 Base64 编码）：
    * {
@@ -1057,32 +1065,44 @@ class DuplicationDetector extends BaseDetector {
       // 1. 合并重叠的重复块区间
       const mergedBlocks = this.mergeIntervals(blocks);
 
-      // 2. 每个合并后的块扩展 ±contextLines，再次合并重叠的扩展区间
-      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间
-      const extended = mergedBlocks.map(b => ({
-        startLine: Math.max(1, b.startLine - contextLines),
-        endLine: b.endLine + contextLines
-      }));
-      const mergedExtended = this.mergeIntervals(extended, false);
-
-      // 3. 获取文件内容和总行数
+      // 2. 获取文件内容和总行数
       const content = relativeToContent.get(fileDetail.filePath);
       if (!content) continue;
       const lines = content.split('\n');
       const totalLines = lines.length;
 
-      // 4. 构建 segments
-      //    放得下就整体完整保留（按字符预算切段，避免单段 JSON 超限）；
-      //    超大块（总内容超过 OVERSIZE_CHARS）只保留「头部 + 省略标记 + 尾部」，
-      //    中间直接省略——避免 snapshotData 塞满连续的前段窗口（/file-content 只看到开头），
-      //    也避免 JSON 超限兜底把 segments 全部 pop 掉导致为空。
-      //    该省略策略仅针对超大场景，正常大小内容不受影响。
-      const MAX_SEGMENTS = 200;
-      const MAX_JSON_SIZE = 100 * 1024; // 100KB
-      const MAX_SEGMENT_CHARS = 24 * 1024; // 完整保留路径下：单段原始内容字符数上限
-      const OVERSIZE_CHARS = 48 * 1024; // 区间总内容字符数超过该阈值视为超大块
+      // 3. 判定每个「合并后的重复块」是否超大：
+      //    超大 = 单个重复块自身内容超过 OVERSIZE_CHARS（块极大，字符串会超长）。
+      //    只有超大块才允许省略中间（头+省略+尾）；正常块无论多少个都完整保留，
+      //    避免"重复块数量多"被误判成超大块而把全部重复内容省略掉。
+      const OVERSIZE_CHARS = 48 * 1024; // 单个重复块自身内容超过该阈值才视为超大
       const HEAD_LINES = 20; // 超大块保留：头部行数
       const TAIL_LINES = 20; // 超大块保留：尾部行数
+      const oversizedBlocks = mergedBlocks.map((b) => {
+        let blockChars = 0;
+        for (let ln = b.startLine; ln <= b.endLine; ln++) {
+          const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
+          blockChars += lineText.length + 1; // 行内容 + 换行符
+        }
+        return { startLine: b.startLine, endLine: b.endLine, oversized: blockChars > OVERSIZE_CHARS };
+      });
+
+      // 4. 每个块扩展 ±contextLines，再次合并重叠的扩展区间
+      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间。
+      //    mergeIntervals 会透传 oversized：合并区间只要包含超大块即按超大处理。
+      const extended = oversizedBlocks.map((b) => ({
+        startLine: Math.max(1, b.startLine - contextLines),
+        endLine: b.endLine + contextLines,
+        oversized: b.oversized
+      }));
+      const mergedExtended = this.mergeIntervals(extended, false);
+
+      // 5. 构建 segments
+      //    非超大区间：完整保留（按字符预算切段，避免单段 JSON 超限）；
+      //    超大区间：只保留「头部 + 省略标记 + 尾部」，中间直接省略。
+      const MAX_SEGMENTS = 1000;
+      const MAX_JSON_SIZE = 512 * 1024; // 512KB（DB snapshot_data 为 longtext，实际可承载 MB 级）
+      const MAX_SEGMENT_CHARS = 24 * 1024; // 完整保留路径下：单段原始内容字符数上限
       const segments = [];
       let truncated = false;
       // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
@@ -1097,14 +1117,8 @@ class DuplicationDetector extends BaseDetector {
         if (truncated) break;
         const start = Math.max(1, interval.startLine);
         const end = Math.min(totalLines, interval.endLine);
-        // 预估区间全部内容的总字符数（行内容 + 换行符），用于判断是否超大
-        let totalChars = 0;
-        for (let ln = start; ln <= end; ln++) {
-          const lineText = lines[ln - 1];
-          totalChars += (lineText ? lineText.length : 0) + 1;
-        }
-        if (totalChars <= OVERSIZE_CHARS) {
-          // 完整保留路径：整体放得下，按字符预算切段（避免单段 JSON 超限）
+        if (!interval.oversized) {
+          // 非超大区间：完整保留路径，按字符预算切段（避免单段 JSON 超限）
           let segStart = start;
           let segChars = 0;
           for (let ln = start; ln <= end; ln++) {
@@ -1122,7 +1136,7 @@ class DuplicationDetector extends BaseDetector {
             pushSegment(segStart, end, lines.slice(segStart - 1, end).join('\n'));
           }
         } else {
-          // 超大块：只保留「头部 + 省略标记 + 尾部」，中间直接省略（仅超大场景触发）
+          // 超大块：只保留「头部 + 省略标记 + 尾部」，中间直接省略
           const headEnd = Math.min(end, start + HEAD_LINES - 1);
           const tailStart = Math.max(start, end - TAIL_LINES + 1);
           if (headEnd < tailStart) {
@@ -1144,7 +1158,7 @@ class DuplicationDetector extends BaseDetector {
         }
       }
 
-      // 5. 构建 snapshotData JSON 并整体 Base64 编码（超限则截断）
+      // 6. 构建 snapshotData JSON 并整体 Base64 编码
       const snapshotDataObj = {
         totalLines: totalLines,
         contextLines: contextLines,
@@ -1153,8 +1167,9 @@ class DuplicationDetector extends BaseDetector {
       };
       let snapshotJson = JSON.stringify(snapshotDataObj);
       if (snapshotJson.length > MAX_JSON_SIZE) {
-        // 从尾部逐段移除直到 JSON 小于限制；至少保留 1 段，避免 segments 全空
-        // （极端情形下单段本身超限时，保留首段也比全空好，/file-content 仍能拿到部分内容）
+        // 超限兜底：仅极端场景（重复块数量极多导致总内容超过 512KB）触发。
+        // 正常块不再因总大小被省略（必须完整保留给前端展示）；
+        // 兜底只从尾部逐段移除并标记 truncated，至少保留 1 段避免 segments 全空。
         while (segments.length > 1 && snapshotJson.length > MAX_JSON_SIZE) {
           segments.pop();
           snapshotDataObj.truncated = true;
