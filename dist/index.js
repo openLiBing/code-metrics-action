@@ -996,15 +996,17 @@ class DuplicationDetector extends BaseDetector {
   mergeIntervals(intervals, mergeAdjacent = true) {
     if (intervals.length === 0) return [];
     const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
-    const merged = [{ startLine: sorted[0].startLine, endLine: sorted[0].endLine }];
+    const merged = [Object.assign({}, sorted[0])];
     // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
     const overlapThreshold = mergeAdjacent ? 1 : 0;
     for (let i = 1; i < sorted.length; i++) {
       const last = merged[merged.length - 1];
       if (sorted[i].startLine <= last.endLine + overlapThreshold) {
         last.endLine = Math.max(last.endLine, sorted[i].endLine);
+        // 合并时透传附加属性（如 oversized）：任一子区间为真则合并区间视为真
+        if (sorted[i].oversized) last.oversized = true;
       } else {
-        merged.push({ startLine: sorted[i].startLine, endLine: sorted[i].endLine });
+        merged.push(Object.assign({}, sorted[i]));
       }
     }
     return merged;
@@ -1012,7 +1014,13 @@ class DuplicationDetector extends BaseDetector {
 
   /**
    * 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData。
-   * 不读取/上报完整文件内容，其他部分由前端用 "... N lines omitted ..." 占位。
+   *
+   * segments 生成策略：
+   * - 正常重复块：完整保留其代码内容（含 ±contextLines 上下文），无论数量多少都不省略，
+   *   保证前端能展示/高亮所有重复代码块；相邻块的上下文重叠时会合并成一个连续区间。
+   * - 超大重复块（单个块自身内容超过 OVERSIZE_CHARS）：只保留「头部 + 省略标记 + 尾部」，
+   *   中间直接省略，避免单个大块把字符串撑爆。这是允许 segments 省略内容的唯一场景。
+   * - 未覆盖的行段由前端根据相邻片段的行号差用 "... N lines omitted ..." 占位。
    *
    * snapshotData 结构（整体 Base64 编码）：
    * {
@@ -1057,42 +1065,117 @@ class DuplicationDetector extends BaseDetector {
       // 1. 合并重叠的重复块区间
       const mergedBlocks = this.mergeIntervals(blocks);
 
-      // 2. 每个合并后的块扩展 ±contextLines，再次合并重叠的扩展区间
-      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间
-      const extended = mergedBlocks.map(b => ({
-        startLine: Math.max(1, b.startLine - contextLines),
-        endLine: b.endLine + contextLines
-      }));
-      const mergedExtended = this.mergeIntervals(extended, false);
-
-      // 3. 获取文件内容和总行数
+      // 2. 获取文件内容和总行数
       const content = relativeToContent.get(fileDetail.filePath);
       if (!content) continue;
       const lines = content.split('\n');
       const totalLines = lines.length;
 
-      // 4. 构建 segments
+      // 3. 判定每个「合并后的重复块」是否超大：
+      //    超大 = 单个重复块自身内容超过 OVERSIZE_CHARS（块极大，字符串会超长）。
+      //    只有超大块才允许省略中间（头+省略+尾）；正常块无论多少个都完整保留，
+      //    避免"重复块数量多"被误判成超大块而把全部重复内容省略掉。
+      const OVERSIZE_CHARS = 48 * 1024; // 单个重复块自身内容超过该阈值才视为超大
+      const HEAD_LINES = 20; // 超大块保留：头部行数
+      const TAIL_LINES = 20; // 超大块保留：尾部行数
+      const oversizedBlocks = mergedBlocks.map((b) => {
+        let blockChars = 0;
+        for (let ln = b.startLine; ln <= b.endLine; ln++) {
+          const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
+          blockChars += lineText.length + 1; // 行内容 + 换行符
+        }
+        return { startLine: b.startLine, endLine: b.endLine, oversized: blockChars > OVERSIZE_CHARS };
+      });
+
+      // 4. 每个块扩展 ±contextLines，再次合并重叠的扩展区间
+      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间。
+      //    mergeIntervals 会透传 oversized：合并区间只要包含超大块即按超大处理。
+      const extended = oversizedBlocks.map((b) => ({
+        startLine: Math.max(1, b.startLine - contextLines),
+        endLine: b.endLine + contextLines,
+        oversized: b.oversized
+      }));
+      const mergedExtended = this.mergeIntervals(extended, false);
+
+      // 5. 构建 segments
+      //    非超大区间：完整保留（按字符预算切段，避免单段 JSON 超限）；
+      //    超大区间：只保留「头部 + 省略标记 + 尾部」，中间直接省略。
+      const MAX_SEGMENTS = 1000;
+      const MAX_JSON_SIZE = 512 * 1024; // 512KB（DB snapshot_data 为 longtext，实际可承载 MB 级）
+      const MAX_SEGMENT_CHARS = 24 * 1024; // 完整保留路径下：单段原始内容字符数上限
       const segments = [];
+      let truncated = false;
+      // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
+      const pushSegment = (segStart, segEnd, contentText) => {
+        segments.push({
+          originalStartLine: segStart,
+          originalEndLine: segEnd,
+          contentB64: Buffer.from(contentText, 'utf8').toString('base64')
+        });
+      };
       for (const interval of mergedExtended) {
+        if (truncated) break;
         const start = Math.max(1, interval.startLine);
         const end = Math.min(totalLines, interval.endLine);
-        const segmentContent = lines.slice(start - 1, end).join('\n');
-        // 每个片段的 contentB64 内部再次 Base64 编码
-        const contentB64 = Buffer.from(segmentContent, 'utf8').toString('base64');
-        segments.push({
-          originalStartLine: start,
-          originalEndLine: end,
-          contentB64: contentB64
-        });
+        if (!interval.oversized) {
+          // 非超大区间：完整保留路径，按字符预算切段（避免单段 JSON 超限）
+          let segStart = start;
+          let segChars = 0;
+          for (let ln = start; ln <= end; ln++) {
+            const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
+            const lineLen = lineText.length + 1; // 行内容 + 换行符
+            if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
+              pushSegment(segStart, ln - 1, lines.slice(segStart - 1, ln - 1).join('\n'));
+              segStart = ln;
+              segChars = 0;
+              if (segments.length >= MAX_SEGMENTS) { truncated = true; break; }
+            }
+            segChars += lineLen;
+          }
+          if (!truncated && segChars > 0) {
+            pushSegment(segStart, end, lines.slice(segStart - 1, end).join('\n'));
+          }
+        } else {
+          // 超大块：只保留「头部 + 省略标记 + 尾部」，中间直接省略
+          const headEnd = Math.min(end, start + HEAD_LINES - 1);
+          const tailStart = Math.max(start, end - TAIL_LINES + 1);
+          if (headEnd < tailStart) {
+            // 头尾不重叠：头段（真实内容）+ 省略标记段 + 尾段（真实内容）
+            pushSegment(start, headEnd, lines.slice(start - 1, headEnd).join('\n'));
+            const omittedLines = tailStart - headEnd - 1;
+            segments.push({
+              originalStartLine: headEnd + 1,
+              originalEndLine: tailStart - 1,
+              omitted: true, // 省略标记段：/file-content 展示为「N lines omitted」，detail 上下文提取应跳过
+              contentB64: Buffer.from(`... ${omittedLines} lines omitted ...`, 'utf8').toString('base64')
+            });
+            pushSegment(tailStart, end, lines.slice(tailStart - 1, end).join('\n'));
+          } else {
+            // 头尾重叠（区间行数很少但单行超长）：整体作为一段真实内容
+            pushSegment(start, end, lines.slice(start - 1, end).join('\n'));
+          }
+          if (segments.length >= MAX_SEGMENTS) { truncated = true; }
+        }
       }
 
-      // 5. 构建 snapshotData JSON 并整体 Base64 编码
+      // 6. 构建 snapshotData JSON 并整体 Base64 编码
       const snapshotDataObj = {
         totalLines: totalLines,
         contextLines: contextLines,
-        segments: segments
+        segments: segments,
+        truncated: truncated
       };
-      const snapshotJson = JSON.stringify(snapshotDataObj);
+      let snapshotJson = JSON.stringify(snapshotDataObj);
+      if (snapshotJson.length > MAX_JSON_SIZE) {
+        // 超限兜底：仅极端场景（重复块数量极多导致总内容超过 512KB）触发。
+        // 正常块不再因总大小被省略（必须完整保留给前端展示）；
+        // 兜底只从尾部逐段移除并标记 truncated，至少保留 1 段避免 segments 全空。
+        while (segments.length > 1 && snapshotJson.length > MAX_JSON_SIZE) {
+          segments.pop();
+          snapshotDataObj.truncated = true;
+          snapshotJson = JSON.stringify(snapshotDataObj);
+        }
+      }
       fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
     }
 
@@ -1868,18 +1951,11 @@ class MetricsScanner {
       path.isAbsolute(src) ? src : path.resolve(this.workingDir, src)
     );
 
-    this.logger.debug('Config summary:');
-    this.logger.debug(`  excludeDirs: ${JSON.stringify(this.config.excludeDirs || [])}`);
-    this.logger.debug(`  allowedExtensions: ${JSON.stringify(this.config.allowedExtensions || [])}`);
-    this.logger.debug(`  sources: ${resolvedSources.join(', ')}`);
-
     const previewFiles = FileCollector.collectFiles(
       resolvedSources,
       this.config.excludeDirs || [],
       this.config.allowedExtensions || []
     );
-    this.logger.debug(`Found ${previewFiles.length} files to scan`);
-
     let slocResult = {};
     let lizardResult = {};
     let duplicationResult = {};
@@ -1889,20 +1965,17 @@ class MetricsScanner {
       if (this.config.detectors?.sloc?.enabled !== false) {
         this.logger.info('Running scc detector (code size)...');
         slocResult = await this.slocDetector.detect(resolvedSources);
-        this.logger.debug('scc result:', JSON.stringify(slocResult));
       }
 
       if (this.config.detectors?.lizard?.enabled !== false) {
         this.logger.info('Running lizard detector (function complexity)...');
         lizardResult = await this.lizardDetector.detect(resolvedSources);
-        this.logger.debug('lizard result:', JSON.stringify(lizardResult));
       }
 
       if (this.config.detectors?.duplication?.enabled !== false) {
         this.logger.info('Running duplication detector (code duplication)...');
         // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
         duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
-        this.logger.debug('duplication result:', JSON.stringify(duplicationResult));
       }
 
       const mergedMetrics = MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
@@ -1934,12 +2007,46 @@ class MetricsScanner {
 
       this.logger.info(`Scan completed in ${durationMs}ms`);
 
+      // 诊断日志：输出扫描结果规模，用于定位大数据量下的序列化超限问题
+      let snapshotTotal = 0;
+      for (const fd of fileDetails || []) {
+        if (fd.snapshotData) snapshotTotal += fd.snapshotData.length;
+      }
+      this.logger.info(
+        `Result scale: fileDetails=${(fileDetails || []).length}, snapshotDataTotal=${snapshotTotal} bytes, occurrences=${(formattedMetrics.duplicationOccurrences || []).length}`
+      );
+
       if (options.output || this.config.output) {
         const outputPath = path.isAbsolute(options.output || this.config.output)
           ? (options.output || this.config.output)
           : path.resolve(this.workingDir, options.output || this.config.output);
-        FileUtils.writeJsonFile(outputPath, result);
+        // 本地输出文件剥离大数据字段（snapshotData 与 duplicationOccurrences 的明文 content），
+        // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length。
+        // - snapshotData 仅详情页展示用，DB 上报另有一份
+        // - occurrence 的明文 content 仅上报用（uploader 已 Base64 编码后分批上报），
+        //   本地保留 groupId/filePath/起止行等元数据即可
+        const compactResult = {
+          ...result,
+          fileDetails: (result.fileDetails || []).map(fd => {
+            const { snapshotData, ...rest } = fd;
+            return rest;
+          }),
+          // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
+          // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
+          duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
+            const MAX_CONTENT_CHARS = 15 * 1024;
+            if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
+              return {
+                ...occ,
+                content: this.uploader.clipOversizeContent(occ.content, MAX_CONTENT_CHARS)
+              };
+            }
+            return occ;
+          })
+        };
+        FileUtils.writeJsonFile(outputPath, compactResult);
         this.logger.info(`Results saved to: ${outputPath}`);
+        this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
       }
 
       if (options.upload || this.config.uploader?.enabled) {
@@ -1966,6 +2073,10 @@ class MetricsScanner {
 
     } catch (error) {
       this.logger.error(`Scan failed: ${error.message}`);
+      if (error && error.stack) {
+        // 输出堆栈头部，辅助定位是哪个 JSON.stringify / 哪个阶段抛错
+        this.logger.error(`Stack head: ${error.stack.split('\n').slice(0, 12).join('\n')}`);
+      }
 
       // 失败时也上传报告，附带错误信息
       if (options.upload || this.config.uploader?.enabled) {
@@ -2250,17 +2361,21 @@ class CoderepoUploader {
     this.timeout = config.timeout || 30000;
     this.apigAppKey = config.apigAppKey || '';
     this.apigAppSecret = config.apigAppSecret || '';
-    // 单批重复块上报上限，与 APIG 网关 10MB 体量限制对齐
+    // 单批请求体字节上限：华为云 APIG 网关默认请求体限制 10MB，取 8MB 留安全余量，
+    // 避免主报告/批量请求触发 HTTP 413（APIG.0201 Request entity too large）
+    this.maxBatchBytes = config.maxBatchBytes || 8 * 1024 * 1024;
+    // 兼容旧配置：按条数分批（duplicationBatchSize=5000）已废弃，改为按字节分批
     this.duplicationBatchSize = config.duplicationBatchSize || 5000;
   }
 
   /**
    * 上报代码度量指标。
    *
-   * 流程：
-   * 1. 主报告（含 fileDetails + snapshotData + identicalFileDetails + 总体指标 + 首批 duplicationOccurrences）
-   *    → 后端创建 record 并返回 recordId
-   * 2. 若 duplicationOccurrences 超过单批上限，剩余部分分批上报到 /metrics/code/duplication-blocks
+   * 流程（主报告无任何大数据，彻底规避 APIG 413 与 V8 单字符串上限）：
+   * 1. 主报告（仅总体指标）POST /metrics/code/report → 后端创建 record 并返回 recordId
+   * 2. fileDetails（含 snapshotData）按字节分批 POST /metrics/code/file-details，
+   *    identicalFileDetails 仅随最后一批附带（其保存依赖 file_detail 记录已存在）
+   * 3. duplicationOccurrences 按字节分批 POST /metrics/code/duplication-blocks
    *
    * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
    */
@@ -2268,29 +2383,17 @@ class CoderepoUploader {
     // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
     const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
 
-    // 重复块分批：首批随主报告上报，剩余走批量接口
-    const occurrences = duplicationOccurrences || [];
-    const firstBatch = occurrences.slice(0, this.duplicationBatchSize);
-    const remainingBatches = [];
-    for (let i = this.duplicationBatchSize; i < occurrences.length; i += this.duplicationBatchSize) {
-      remainingBatches.push(occurrences.slice(i, i + this.duplicationBatchSize));
-    }
-
+    // 1. 主报告只传总体指标（不含 fileDetails/identical/occurrences 等大数据），体量恒定极小
     const payload = {
       gitUrl: options.gitUrl,
       branchName: options.branchName,
       pipelineRunId: options.pipelineRunId,
       runNumber: options.runNumber,
       metricsData: overallMetrics,
-      fileDetails: fileDetails || [],
-      identicalFileDetails: identicalFileDetails || [],
-      // 首批重复块（≤5000 条），content 已 Base64 编码为 contentB64
-      duplicationOccurrences: this.encodeOccurrences(firstBatch),
       detectionStartedAt: options.startTime,
       detectionCompletedAt: options.endTime,
       status: options.status || 0
     };
-
     if (options.errorMessage) {
       payload.errorMessage = options.errorMessage;
     }
@@ -2298,18 +2401,45 @@ class CoderepoUploader {
     // 主报告上报
     const mainUrl = this.buildUrl('/metrics/code/report');
     const mainBody = JSON.stringify(payload);
+    // 诊断日志：主报告序列化后实际大小（应为 KB 级，不含大数据）
+    console.log(`[upload] main report serialized=${mainBody.length} bytes`);
     const mainResult = await this.sendSignedRequest('POST', mainUrl, mainBody);
     if (!mainResult.success) {
       return mainResult;
     }
     const recordId = mainResult.recordId;
 
-    // 剩余重复块分批上报（若有）
-    if (remainingBatches.length > 0) {
-      const batchResult = await this.uploadDuplicationBlocksInBatches(recordId, remainingBatches);
-      if (!batchResult.success) {
+    // 2. fileDetails（含 snapshotData）按字节分批上传到 /file-details
+    const fdBatches = this.splitByBytes(fileDetails || []);
+    if (fdBatches.length === 0) {
+      // 无 fileDetails 但有 identicalFileDetails：单独走一批（空 fileDetails + identical）
+      if ((identicalFileDetails || []).length > 0) {
+        const fdResult =
+            await this.uploadFileDetailsBatch(recordId, [], identicalFileDetails || [], 1, 1);
+        if (!fdResult.success) {
+          console.warn(`File details batch 1/1 failed: ${fdResult.error}`);
+        }
+      }
+    } else {
+      for (let i = 0; i < fdBatches.length; i++) {
+        // identicalFileDetails 依赖 file_detail 记录已存在，只随最后一批附带
+        const identical = i === fdBatches.length - 1 ? identicalFileDetails || [] : [];
+        const fdResult = await this.uploadFileDetailsBatch(
+            recordId, fdBatches[i], identical, i + 1, fdBatches.length);
+        if (!fdResult.success) {
+          console.warn(`File details batch ${i + 1}/${fdBatches.length} failed: ${fdResult.error}`);
+        }
+      }
+    }
+
+    // 3. duplicationOccurrences 按字节分批上传到 /duplication-blocks
+    const encodedOccurrences = this.encodeOccurrences(duplicationOccurrences || []);
+    const occBatches = this.splitByBytes(encodedOccurrences);
+    if (occBatches.length > 0) {
+      const occResult = await this.uploadDuplicationBlocksInBatches(recordId, occBatches);
+      if (!occResult.success) {
         // 分批上报失败不阻塞主流程，记录警告（主报告已成功，重复块部分丢失可重扫补齐）
-        console.warn(`Duplication blocks batch upload partially failed: ${batchResult.error}`);
+        console.warn(`Duplication blocks batch upload partially failed: ${occResult.error}`);
       }
     }
 
@@ -2317,8 +2447,73 @@ class CoderepoUploader {
   }
 
   /**
-   * 分批上报剩余的重复块出现位置到 /metrics/code/duplication-blocks。
+   * 按字节体量将列表拆分为多批，单批 ≤ maxBatchBytes。
+   *
+   * <p>单条体量用 UTF-8 字节数估算（Buffer.byteLength）：避免中文等多字节字符
+   * 使 char 计数低估实际请求体字节数而再次触发 APIG 413。
+   * 单条 fileDetail/occurrence 均有截断保护（snapshotData ≤100KB、content ≤15KB），
+   * 远小于 V8 单字符串上限，单条估算安全。
+   */
+  splitByBytes(items) {
+    const batches = [];
+    let current = [];
+    let currentBytes = 0;
+    for (const item of items) {
+      let bytes = 0;
+      try {
+        bytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+      } catch (e) {
+        bytes = 0;
+      }
+      if (current.length > 0 && currentBytes + bytes > this.maxBatchBytes) {
+        batches.push(current);
+        current = [];
+        currentBytes = 0;
+      }
+      current.push(item);
+      currentBytes += bytes;
+    }
+    if (current.length > 0) {
+      batches.push(current);
+    }
+    return batches;
+  }
+
+  /**
+   * 分批上报文件级指标明细到 /metrics/code/file-details。
+   *
+   * <p>identicalFileDetails 仅最后一批附带（其保存依赖 file_detail 记录已存在）。
+   *
+   * @param recordId 主表记录ID
+   * @param fileDetails 本批文件级指标明细
+   * @param identicalFileDetails 完全一致文件明细（仅最后一批传入，可空）
+   * @param batchIndex 当前批次序号（日志用）
+   * @param batchTotal 总批次数（日志用）
+   */
+  async uploadFileDetailsBatch(recordId, fileDetails, identicalFileDetails, batchIndex, batchTotal) {
+    const batchUrl = this.buildUrl('/metrics/code/file-details');
+    const body = JSON.stringify({
+      recordId: recordId,
+      fileDetails: fileDetails,
+      identicalFileDetails: identicalFileDetails
+    });
+    // 诊断日志：每批体量
+    console.log(
+      `[upload] file-details batch ${batchIndex}/${batchTotal}: ${fileDetails.length} files, ${body.length} bytes`
+    );
+    const result = await this.sendSignedRequest('POST', batchUrl, body);
+    if (!result.success) {
+      return result;
+    }
+    return { success: true };
+  }
+
+  /**
+   * 分批上报重复块出现位置到 /metrics/code/duplication-blocks。
    * 单批失败不阻塞后续批次，最终汇总成功/失败计数。
+   *
+   * @param recordId 主表记录ID
+   * @param batches 已按字节拆分好的批次（元素为已编码的 occurrence 对象）
    */
   async uploadDuplicationBlocksInBatches(recordId, batches) {
     const batchUrl = this.buildUrl('/metrics/code/duplication-blocks');
@@ -2327,8 +2522,10 @@ class CoderepoUploader {
       const batch = batches[i];
       const body = JSON.stringify({
         recordId: recordId,
-        blocks: this.encodeOccurrences(batch)
+        blocks: batch
       });
+      // 诊断日志：每批体量
+      console.log(`[upload] duplication batch ${i + 1}/${batches.length}: ${batch.length} blocks, ${body.length} bytes`);
       const result = await this.sendSignedRequest('POST', batchUrl, body);
       if (!result.success) {
         totalFailed++;
@@ -2346,15 +2543,72 @@ class CoderepoUploader {
    * 已编码数据跳过（防二次编码）。
    */
   encodeOccurrences(occurrences) {
-    return occurrences.map(occ => ({
-      groupId: occ.groupId,
-      contentHash: occ.contentHash,
-      occurrenceIndex: occ.occurrenceIndex,
-      filePath: occ.filePath,
-      startLine: occ.startLine,
-      endLine: occ.endLine,
-      contentB64: this.encodeB64(occ.content)
-    }));
+    // 单条重复块内容上限（明文 15KB ≈ Base64 20KB），防止超大重复块把主报告 JSON 撑爆
+    const MAX_CONTENT_CHARS = 15 * 1024;
+    return occurrences.map(occ => {
+      const content = this.clipOversizeContent(occ.content, MAX_CONTENT_CHARS);
+      return {
+        groupId: occ.groupId,
+        contentHash: occ.contentHash,
+        occurrenceIndex: occ.occurrenceIndex,
+        filePath: occ.filePath,
+        startLine: occ.startLine,
+        endLine: occ.endLine,
+        contentB64: this.encodeB64(content)
+      };
+    });
+  }
+
+  /**
+   * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
+   * 按行省略：头/尾各保留若干整行，省略标记显示被省略的行数（与 /file-content 的
+   * segments 省略样式一致）。仅针对超长场景（超过 maxChars）触发；未超长时原样返回。
+   */
+  clipOversizeContent(content, maxChars) {
+    if (typeof content !== 'string' || content.length <= maxChars) {
+      return content;
+    }
+    // 按行拆分；头/尾各以预算的 35% 为字符配额累积整行，保证裁剪后总量仍受控
+    const lines = content.split('\n');
+    const totalLines = lines.length;
+    const sideChars = Math.floor(maxChars * 0.35);
+    // 头部：从首行开始累积整行，直到逼近 sideChars
+    let headLines = 0;
+    let headChars = 0;
+    for (let i = 0; i < totalLines; i++) {
+      const len = lines[i].length + 1; // 行内容 + 换行符
+      if (headLines > 0 && headChars + len > sideChars) break;
+      headChars += len;
+      headLines++;
+    }
+    // 尾部：从末行开始累积整行，直到逼近 sideChars
+    let tailLines = 0;
+    let tailChars = 0;
+    for (let i = totalLines - 1; i >= 0; i--) {
+      const len = lines[i].length + 1;
+      if (tailLines > 0 && tailChars + len > sideChars) break;
+      tailChars += len;
+      tailLines++;
+    }
+    const omittedLines = Math.max(0, totalLines - headLines - tailLines);
+    const head = lines.slice(0, headLines).join('\n');
+    const tail = lines.slice(totalLines - tailLines).join('\n');
+    const clipped =
+      (headLines > 0 ? head : '') +
+      (omittedLines > 0 ? `\n... ${omittedLines} lines omitted ...\n` : '') +
+      (tailLines > 0 ? tail : '');
+    // 兜底：单行超长导致按行裁剪后仍超限时，退化为按字符裁剪
+    if (clipped.length > maxChars) {
+      const headChars2 = Math.floor(maxChars * 0.35);
+      const tailChars2 = Math.floor(maxChars * 0.35);
+      const omittedChars = content.length - headChars2 - tailChars2;
+      return (
+        content.slice(0, headChars2) +
+        `\n... ${omittedChars} chars omitted ...\n` +
+        content.slice(content.length - tailChars2)
+      );
+    }
+    return clipped;
   }
 
   /**
@@ -59239,17 +59493,17 @@ async function run() {
     // 官方定义："连续超过 10 行代码块在其他地方重复记为一次重复"
     // - minLines=10：连续代码块至少 10 行才算一次重复
     const minLines = parseInt(getInput('min-lines') || '10', 10);
-    const shouldUpload = getInput('upload') === 'true';
     const outputFile = getInput('output') || 'metrics.json';
 
     // atomgit 上下文：当前工作流所属仓的分支/标签名
     // GitCode runner 自动注入 ATOMGIT_REF_NAME / ATOMGIT_TOKEN 等环境变量
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
-    // 从环境变量获取 coderepo 信息（统一使用 OPENLIBING_APIG_KEY/SECRET，两个插件共用同一套 APIG 凭证）
+    // coderepo 服务地址硬编码到插件（部署时确定的固定值）
+    // APIG 凭证通过 apig-app-key / apig-app-secret 输入参数获取（工作流 with 传入）
     const coderepoUrl = 'https://apig.openlibing.com:443';
-    const apigAppKey = getInput('apig_app_key') || '';
-    const apigAppSecret = getInput('apig_app_secret') || '';
+    const apigAppKey = getInput('apig-app-key') || '';
+    const apigAppSecret = getInput('apig-app-secret') || '';
 
     // 上报用 git_url 和 branch_name：
     // 从 sourceDir 沿目录树向上找 .git（修复：sourceDir 是构建产物子目录如 source-code/target 时，
@@ -59327,8 +59581,8 @@ async function run() {
     config.detectors.duplication.minLines = minLines;
     config.output = outputFile;
 
-    // 上传配置
-    if (shouldUpload && coderepoUrl) {
+    // 上传配置：插件默认上传到 openLiBing（已移除 upload 开关）
+    if (coderepoUrl) {
       config.uploader = {
         enabled: true,
         coderepoUrl: coderepoUrl,
@@ -59364,7 +59618,7 @@ async function run() {
     const result = await scanner.scan({
       sourceDir: config.sourceDir,
       output: config.output,
-      upload: shouldUpload,
+      upload: true,
       gitUrl: gitUrl,
       branchName: branchName,
       pipelineRunId: pipelineRunId,

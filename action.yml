@@ -1,24 +1,66 @@
 name: "openlibing-code-metrics-action"
 author: "openLiBing"
-version: 1.0.5
+version: 1.0.6
 description: "代码度量扫描插件 - 检测代码规模、平均函数代码行数、平均圈复杂度、代码重复率和文件重复率"
 inputs:
   exclude-dirs:
     description: "排除目录列表，逗号分隔"
     required: false
     default: ""
+    layout:
+      type: "input"
+      label: "排除目录列表"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
   allowed-extensions:
     description: "允许的文件扩展名，逗号分隔"
     required: false
     default: ""
+    layout:
+      type: "input"
+      label: "允许的文件扩展名"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
   output:
     description: "结果输出文件路径"
     required: false
     default: "metrics.json"
-  upload:
-    description: "是否上传检测结果到 openLiBing"
-    required: false
-    default: "true"
+    layout:
+      type: "input"
+      label: "结果输出文件路径"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
+  apig-app-key:
+    description: "APIG 网关 AppKey（AK），用于上传检测结果到 openLiBing 平台。上传功能默认开启，此项必填"
+    required: true
+    layout:
+      type: "input"
+      label: "APIG AppKey"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
+  apig-app-secret:
+    description: "APIG 网关 AppSecret（SK），用于上传检测结果到 openLiBing 平台。上传功能默认开启，此项必填"
+    required: true
+    layout:
+      type: "input"
+      label: "APIG AppSecret"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
 runs:
   using: "node16"
   main: "dist/index.js"

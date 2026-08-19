@@ -54,8 +54,8 @@ jobs:
           # exclude-dirs: "node_modules,target,dist,.git,.gitcode,.mvn,.trae,vendor"
           # 可选：扫描指定文件后缀的文件，不传 allowed-extensions 默认扫描全部文件
           # allowed-extensions: ".c,.cpp,.h"
-          apig_app_key: ${{ secrets.OPENLIBING_APIG_KEY }}
-          apig_app_secret: ${{ secrets.OPENLIBING_APIG_SECRET }}
+          apig-app-key: ${{ secrets.OPENLIBING_APIG_KEY }}
+          apig-app-secret: ${{ secrets.OPENLIBING_APIG_SECRET }}
 ```
 
 ## 触发方式
@@ -68,16 +68,15 @@ jobs:
 
 ## 输入参数
 
-| 参数               | 必填 | 默认值       | 说明                                                    |
-| ------------------ | ---- | ------------ | ------------------------------------------------------- |
-| exclude-dirs       | 否   | -            | 排除目录列表，逗号分隔，不填时默认扫描全部路径          |
-| allowed-extensions | 否   | -            | 允许的文件扩展名，逗号分隔，不填时默认扫描所有文件类型  |
-| output             | 否   | metrics.json | 结果输出文件路径                                        |
-| upload             | 否   | true         | 是否上传检测结果到 openLiBing 平台                      |
-| apig_app_key       | 否   | -            | APIG 网关 AppKey，用于上传检测结果到 openLiBing 平台    |
-| apig_app_secret    | 否   | -            | APIG 网关 AppSecret，用于上传检测结果到 openLiBing 平台 |
+| 参数               | 必填 | 默认值       | 说明                                                                                                  |
+| ------------------ | ---- | ------------ | ----------------------------------------------------------------------------------------------------- |
+| exclude-dirs       | 否   | -            | 排除目录列表，逗号分隔，不填时默认扫描全部路径                                                        |
+| allowed-extensions | 否   | -            | 允许的文件扩展名，逗号分隔，不填时默认扫描所有文件类型                                                |
+| output             | 否   | metrics.json | 结果输出文件路径                                                                                      |
+| apig-app-key       | 是   | -            | APIG 网关 AppKey，用于上传检测结果到 openLiBing 平台（上传功能默认开启，此项必填，经 `with` 传入）    |
+| apig-app-secret    | 是   | -            | APIG 网关 AppSecret，用于上传检测结果到 openLiBing 平台（上传功能默认开启，此项必填，经 `with` 传入） |
 
-注：上传功能需要环境变量（通过 APIG 网关调用 openLiBing 接口），请在 `项目设置 -> Actions 密钥与变量 -> 仓库密钥` 中进行配置。
+上传功能默认开启，凭据通过以下输入参数传入（通过 APIG 网关调用 openLiBing 接口）：`apig-app-key` / `apig-app-secret`。请在 workflow 的 `with` 中传入，凭证值使用 `${{ secrets.OPENLIBING_APIG_KEY }}` / `${{ secrets.OPENLIBING_APIG_SECRET }}` 引用。
 
 ## 输出
 

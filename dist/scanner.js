@@ -62,18 +62,11 @@ class MetricsScanner {
       path.isAbsolute(src) ? src : path.resolve(this.workingDir, src)
     );
 
-    this.logger.debug('Config summary:');
-    this.logger.debug(`  excludeDirs: ${JSON.stringify(this.config.excludeDirs || [])}`);
-    this.logger.debug(`  allowedExtensions: ${JSON.stringify(this.config.allowedExtensions || [])}`);
-    this.logger.debug(`  sources: ${resolvedSources.join(', ')}`);
-
     const previewFiles = FileCollector.collectFiles(
       resolvedSources,
       this.config.excludeDirs || [],
       this.config.allowedExtensions || []
     );
-    this.logger.debug(`Found ${previewFiles.length} files to scan`);
-
     let slocResult = {};
     let lizardResult = {};
     let duplicationResult = {};
@@ -83,20 +76,17 @@ class MetricsScanner {
       if (this.config.detectors?.sloc?.enabled !== false) {
         this.logger.info('Running scc detector (code size)...');
         slocResult = await this.slocDetector.detect(resolvedSources);
-        this.logger.debug('scc result:', JSON.stringify(slocResult));
       }
 
       if (this.config.detectors?.lizard?.enabled !== false) {
         this.logger.info('Running lizard detector (function complexity)...');
         lizardResult = await this.lizardDetector.detect(resolvedSources);
-        this.logger.debug('lizard result:', JSON.stringify(lizardResult));
       }
 
       if (this.config.detectors?.duplication?.enabled !== false) {
         this.logger.info('Running duplication detector (code duplication)...');
         // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
         duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
-        this.logger.debug('duplication result:', JSON.stringify(duplicationResult));
       }
 
       const mergedMetrics = MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
@@ -128,12 +118,46 @@ class MetricsScanner {
 
       this.logger.info(`Scan completed in ${durationMs}ms`);
 
+      // 诊断日志：输出扫描结果规模，用于定位大数据量下的序列化超限问题
+      let snapshotTotal = 0;
+      for (const fd of fileDetails || []) {
+        if (fd.snapshotData) snapshotTotal += fd.snapshotData.length;
+      }
+      this.logger.info(
+        `Result scale: fileDetails=${(fileDetails || []).length}, snapshotDataTotal=${snapshotTotal} bytes, occurrences=${(formattedMetrics.duplicationOccurrences || []).length}`
+      );
+
       if (options.output || this.config.output) {
         const outputPath = path.isAbsolute(options.output || this.config.output)
           ? (options.output || this.config.output)
           : path.resolve(this.workingDir, options.output || this.config.output);
-        FileUtils.writeJsonFile(outputPath, result);
+        // 本地输出文件剥离大数据字段（snapshotData 与 duplicationOccurrences 的明文 content），
+        // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length。
+        // - snapshotData 仅详情页展示用，DB 上报另有一份
+        // - occurrence 的明文 content 仅上报用（uploader 已 Base64 编码后分批上报），
+        //   本地保留 groupId/filePath/起止行等元数据即可
+        const compactResult = {
+          ...result,
+          fileDetails: (result.fileDetails || []).map(fd => {
+            const { snapshotData, ...rest } = fd;
+            return rest;
+          }),
+          // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
+          // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
+          duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
+            const MAX_CONTENT_CHARS = 15 * 1024;
+            if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
+              return {
+                ...occ,
+                content: this.uploader.clipOversizeContent(occ.content, MAX_CONTENT_CHARS)
+              };
+            }
+            return occ;
+          })
+        };
+        FileUtils.writeJsonFile(outputPath, compactResult);
         this.logger.info(`Results saved to: ${outputPath}`);
+        this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
       }
 
       if (options.upload || this.config.uploader?.enabled) {
@@ -160,6 +184,10 @@ class MetricsScanner {
 
     } catch (error) {
       this.logger.error(`Scan failed: ${error.message}`);
+      if (error && error.stack) {
+        // 输出堆栈头部，辅助定位是哪个 JSON.stringify / 哪个阶段抛错
+        this.logger.error(`Stack head: ${error.stack.split('\n').slice(0, 12).join('\n')}`);
+      }
 
       // 失败时也上传报告，附带错误信息
       if (options.upload || this.config.uploader?.enabled) {

@@ -721,15 +721,17 @@ class DuplicationDetector extends BaseDetector {
   mergeIntervals(intervals, mergeAdjacent = true) {
     if (intervals.length === 0) return [];
     const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
-    const merged = [{ startLine: sorted[0].startLine, endLine: sorted[0].endLine }];
+    const merged = [Object.assign({}, sorted[0])];
     // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
     const overlapThreshold = mergeAdjacent ? 1 : 0;
     for (let i = 1; i < sorted.length; i++) {
       const last = merged[merged.length - 1];
       if (sorted[i].startLine <= last.endLine + overlapThreshold) {
         last.endLine = Math.max(last.endLine, sorted[i].endLine);
+        // 合并时透传附加属性（如 oversized）：任一子区间为真则合并区间视为真
+        if (sorted[i].oversized) last.oversized = true;
       } else {
-        merged.push({ startLine: sorted[i].startLine, endLine: sorted[i].endLine });
+        merged.push(Object.assign({}, sorted[i]));
       }
     }
     return merged;
@@ -737,7 +739,13 @@ class DuplicationDetector extends BaseDetector {
 
   /**
    * 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData。
-   * 不读取/上报完整文件内容，其他部分由前端用 "... N lines omitted ..." 占位。
+   *
+   * segments 生成策略：
+   * - 正常重复块：完整保留其代码内容（含 ±contextLines 上下文），无论数量多少都不省略，
+   *   保证前端能展示/高亮所有重复代码块；相邻块的上下文重叠时会合并成一个连续区间。
+   * - 超大重复块（单个块自身内容超过 OVERSIZE_CHARS）：只保留「头部 + 省略标记 + 尾部」，
+   *   中间直接省略，避免单个大块把字符串撑爆。这是允许 segments 省略内容的唯一场景。
+   * - 未覆盖的行段由前端根据相邻片段的行号差用 "... N lines omitted ..." 占位。
    *
    * snapshotData 结构（整体 Base64 编码）：
    * {
@@ -782,42 +790,117 @@ class DuplicationDetector extends BaseDetector {
       // 1. 合并重叠的重复块区间
       const mergedBlocks = this.mergeIntervals(blocks);
 
-      // 2. 每个合并后的块扩展 ±contextLines，再次合并重叠的扩展区间
-      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间
-      const extended = mergedBlocks.map(b => ({
-        startLine: Math.max(1, b.startLine - contextLines),
-        endLine: b.endLine + contextLines
-      }));
-      const mergedExtended = this.mergeIntervals(extended, false);
-
-      // 3. 获取文件内容和总行数
+      // 2. 获取文件内容和总行数
       const content = relativeToContent.get(fileDetail.filePath);
       if (!content) continue;
       const lines = content.split('\n');
       const totalLines = lines.length;
 
-      // 4. 构建 segments
+      // 3. 判定每个「合并后的重复块」是否超大：
+      //    超大 = 单个重复块自身内容超过 OVERSIZE_CHARS（块极大，字符串会超长）。
+      //    只有超大块才允许省略中间（头+省略+尾）；正常块无论多少个都完整保留，
+      //    避免"重复块数量多"被误判成超大块而把全部重复内容省略掉。
+      const OVERSIZE_CHARS = 48 * 1024; // 单个重复块自身内容超过该阈值才视为超大
+      const HEAD_LINES = 20; // 超大块保留：头部行数
+      const TAIL_LINES = 20; // 超大块保留：尾部行数
+      const oversizedBlocks = mergedBlocks.map((b) => {
+        let blockChars = 0;
+        for (let ln = b.startLine; ln <= b.endLine; ln++) {
+          const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
+          blockChars += lineText.length + 1; // 行内容 + 换行符
+        }
+        return { startLine: b.startLine, endLine: b.endLine, oversized: blockChars > OVERSIZE_CHARS };
+      });
+
+      // 4. 每个块扩展 ±contextLines，再次合并重叠的扩展区间
+      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间。
+      //    mergeIntervals 会透传 oversized：合并区间只要包含超大块即按超大处理。
+      const extended = oversizedBlocks.map((b) => ({
+        startLine: Math.max(1, b.startLine - contextLines),
+        endLine: b.endLine + contextLines,
+        oversized: b.oversized
+      }));
+      const mergedExtended = this.mergeIntervals(extended, false);
+
+      // 5. 构建 segments
+      //    非超大区间：完整保留（按字符预算切段，避免单段 JSON 超限）；
+      //    超大区间：只保留「头部 + 省略标记 + 尾部」，中间直接省略。
+      const MAX_SEGMENTS = 1000;
+      const MAX_JSON_SIZE = 512 * 1024; // 512KB（DB snapshot_data 为 longtext，实际可承载 MB 级）
+      const MAX_SEGMENT_CHARS = 24 * 1024; // 完整保留路径下：单段原始内容字符数上限
       const segments = [];
+      let truncated = false;
+      // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
+      const pushSegment = (segStart, segEnd, contentText) => {
+        segments.push({
+          originalStartLine: segStart,
+          originalEndLine: segEnd,
+          contentB64: Buffer.from(contentText, 'utf8').toString('base64')
+        });
+      };
       for (const interval of mergedExtended) {
+        if (truncated) break;
         const start = Math.max(1, interval.startLine);
         const end = Math.min(totalLines, interval.endLine);
-        const segmentContent = lines.slice(start - 1, end).join('\n');
-        // 每个片段的 contentB64 内部再次 Base64 编码
-        const contentB64 = Buffer.from(segmentContent, 'utf8').toString('base64');
-        segments.push({
-          originalStartLine: start,
-          originalEndLine: end,
-          contentB64: contentB64
-        });
+        if (!interval.oversized) {
+          // 非超大区间：完整保留路径，按字符预算切段（避免单段 JSON 超限）
+          let segStart = start;
+          let segChars = 0;
+          for (let ln = start; ln <= end; ln++) {
+            const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
+            const lineLen = lineText.length + 1; // 行内容 + 换行符
+            if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
+              pushSegment(segStart, ln - 1, lines.slice(segStart - 1, ln - 1).join('\n'));
+              segStart = ln;
+              segChars = 0;
+              if (segments.length >= MAX_SEGMENTS) { truncated = true; break; }
+            }
+            segChars += lineLen;
+          }
+          if (!truncated && segChars > 0) {
+            pushSegment(segStart, end, lines.slice(segStart - 1, end).join('\n'));
+          }
+        } else {
+          // 超大块：只保留「头部 + 省略标记 + 尾部」，中间直接省略
+          const headEnd = Math.min(end, start + HEAD_LINES - 1);
+          const tailStart = Math.max(start, end - TAIL_LINES + 1);
+          if (headEnd < tailStart) {
+            // 头尾不重叠：头段（真实内容）+ 省略标记段 + 尾段（真实内容）
+            pushSegment(start, headEnd, lines.slice(start - 1, headEnd).join('\n'));
+            const omittedLines = tailStart - headEnd - 1;
+            segments.push({
+              originalStartLine: headEnd + 1,
+              originalEndLine: tailStart - 1,
+              omitted: true, // 省略标记段：/file-content 展示为「N lines omitted」，detail 上下文提取应跳过
+              contentB64: Buffer.from(`... ${omittedLines} lines omitted ...`, 'utf8').toString('base64')
+            });
+            pushSegment(tailStart, end, lines.slice(tailStart - 1, end).join('\n'));
+          } else {
+            // 头尾重叠（区间行数很少但单行超长）：整体作为一段真实内容
+            pushSegment(start, end, lines.slice(start - 1, end).join('\n'));
+          }
+          if (segments.length >= MAX_SEGMENTS) { truncated = true; }
+        }
       }
 
-      // 5. 构建 snapshotData JSON 并整体 Base64 编码
+      // 6. 构建 snapshotData JSON 并整体 Base64 编码
       const snapshotDataObj = {
         totalLines: totalLines,
         contextLines: contextLines,
-        segments: segments
+        segments: segments,
+        truncated: truncated
       };
-      const snapshotJson = JSON.stringify(snapshotDataObj);
+      let snapshotJson = JSON.stringify(snapshotDataObj);
+      if (snapshotJson.length > MAX_JSON_SIZE) {
+        // 超限兜底：仅极端场景（重复块数量极多导致总内容超过 512KB）触发。
+        // 正常块不再因总大小被省略（必须完整保留给前端展示）；
+        // 兜底只从尾部逐段移除并标记 truncated，至少保留 1 段避免 segments 全空。
+        while (segments.length > 1 && snapshotJson.length > MAX_JSON_SIZE) {
+          segments.pop();
+          snapshotDataObj.truncated = true;
+          snapshotJson = JSON.stringify(snapshotDataObj);
+        }
+      }
       fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
     }
 
