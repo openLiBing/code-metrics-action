@@ -80,7 +80,7 @@ jobs:
 | obs-ak             | 是   | -            | OBS 访问密钥 AK，全量上报文件上传到 openLiBing 统一桶（openlibing-gitcode-action/code-metrics-action/），与 upload-sarif-action 复用同一套凭证 |
 | obs-sk             | 是   | -            | OBS 访问密钥 SK，与 obs-ak 配套                                                                                                                |
 
-上传功能默认开启：全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences）先上传到 OBS（openlibing-gitcode-action/code-metrics-action/ 前缀），再通过 APIG 网关单接口 `/metrics/code/report` 只上报元数据与 OBS 下载链接，规避大请求体超限。凭据通过 `apig-app-key` / `apig-app-secret`（APIG）与 `obs-ak` / `obs-sk`（OBS）传入，请在 workflow 的 `with` 中传入，凭证值使用 `${{ secrets.OPENLIBING_APIG_KEY }}` / `${{ secrets.OPENLIBING_APIG_SECRET }}` / `${{ secrets.OPENLIBING_OBS_AK }}` / `${{ secrets.OPENLIBING_OBS_SK }}` 引用。
+上传功能默认开启：全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences）先上传到 OBS，再通过 APIG 接口上报元数据与 OBS 下载链接。凭据通过 `apig-app-key` / `apig-app-secret`（APIG）与 `obs-ak` / `obs-sk`（OBS）传入，请在 workflow 的 `with` 中传入。
 
 ## 输出
 
