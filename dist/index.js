@@ -2484,35 +2484,35 @@ class CoderepoUploader {
    * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
    * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
    *
-   * 安全处理：
-   * 1. 用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
-   *    外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令；
-   * 2. AK/SK 写入临时 .obsutilconfig 并通过 -config 参数传入，不再出现在命令行参数中，
-   *    规避进程列表/CI 日志泄露凭证的风险。临时配置文件权限 0600，用完即删。
+   * 凭证传递：与 upload-sarif-action 生产验证一致，用 -e/-i/-k 命令行参数传 endpoint/AK/SK。
+   * （曾改为临时 .obsutilconfig + -config 方式，但 runner 上无法正确应用 AK/SK 导致鉴权失败，
+   * 已回退为命令行参数方式。AK/SK 会出现在进程参数中，CI 平台对 secrets 会自动掩码，不会明文落日志。）
+   *
+   * 安全处理：用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
+   * 外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令。
    */
   async uploadToOBS(localFilePath, objectKey) {
     const obsutil = await this.ensureObsutil();
-    // 生成临时配置文件：endpoint + AK/SK（obsutil 支持 -config 指定自定义配置文件）
-    const configPath = path.join(os.tmpdir(), `.obsutilconfig-${process.pid}-${Date.now()}`);
-    fs.writeFileSync(
-      configPath,
-      `endpoint=${this.obsEndpoint}\nak=${this.obsAk}\nsk=${this.obsSk}\n`,
-      { mode: 0o600 }
-    );
+    // 记录 obsutil 版本，便于排查 runner 与本地环境差异
     try {
-      execFileSync(
-        obsutil,
-        ['cp', localFilePath, `obs://${this.obsBucket}/${objectKey}`, '-f', `-config=${configPath}`],
-        { stdio: 'inherit' }
-      );
-    } finally {
-      // 清理临时配置文件，避免在 runner 上残留凭证
-      try {
-        fs.unlinkSync(configPath);
-      } catch (e) {
-        // 忽略清理失败
-      }
+      const versionOut = execFileSync(obsutil, ['version'], { encoding: 'utf8' }).trim();
+      console.log(`[upload] obsutil version: ${versionOut}`);
+    } catch (e) {
+      console.log(`[upload] obsutil version check failed: ${e.message}`);
     }
+    const args = [
+      'cp',
+      localFilePath,
+      `obs://${this.obsBucket}/${objectKey}`,
+      '-f',
+      `-e=${this.obsEndpoint}`,
+      `-i=${this.obsAk}`,
+      `-k=${this.obsSk}`
+    ];
+    // 打印执行命令（-k 参数脱敏），便于定位上传失败原因
+    const maskedArgs = args.map(a => (a.startsWith('-k=') ? '-k=***' : a));
+    console.log(`[upload] exec obsutil ${maskedArgs.join(' ')}`);
+    execFileSync(obsutil, args, { stdio: 'inherit' });
   }
 
   /**
@@ -2708,8 +2708,12 @@ class CoderepoUploader {
       });
       const resData = response.data;
 
-      // DataResult 响应格式：{ code, msg, data }，code=200 表示业务成功
+      // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功
       if (resData?.code !== 200) {
+        // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因
+        console.error(
+          `[upload] report business failed: code=${resData?.code}, msg=${resData?.msg}, adviceMsg=${resData?.adviceMsg}`
+        );
         return { success: false, error: resData?.msg || 'Unknown error' };
       }
 
