@@ -21,3 +21,5 @@ jobs:
         with:
           apig-app-key: ${{ secrets.OPENLIBING_APIG_KEY }}
           apig-app-secret: ${{ secrets.OPENLIBING_APIG_SECRET }}
+          obs-ak: ${{ secrets.OPENLIBING_OBS_AK }}
+          obs-sk: ${{ secrets.OPENLIBING_OBS_SK }}
