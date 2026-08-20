@@ -1,5 +1,9 @@
 const axios = require('axios');
 const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execSync } = require('child_process');
 
 /**
  * 华为云 APIG 签名器（SDK-HMAC-SHA256）
@@ -242,21 +246,26 @@ class CoderepoUploader {
     this.timeout = config.timeout || 30000;
     this.apigAppKey = config.apigAppKey || '';
     this.apigAppSecret = config.apigAppSecret || '';
-    // 单批请求体字节上限：华为云 APIG 网关默认请求体限制 10MB，取 8MB 留安全余量，
-    // 避免主报告/批量请求触发 HTTP 413（APIG.0201 Request entity too large）
-    this.maxBatchBytes = config.maxBatchBytes || 8 * 1024 * 1024;
-    // 兼容旧配置：按条数分批（duplicationBatchSize=5000）已废弃，改为按字节分批
-    this.duplicationBatchSize = config.duplicationBatchSize || 5000;
+    // OBS 上传凭证：复用 openlibing 平台 gitcode-action 统一桶（私有对象，供后端按 objectKey 下载）
+    this.obsAk = config.obsAk || '';
+    this.obsSk = config.obsSk || '';
+    // 平台所有 gitcode-action 插件上报结果的统一桶，code-metrics-action 目录存放代码度量上报
+    this.obsBucket = config.obsBucket || 'openlibing-gitcode-action';
+    // OBS 写/读 endpoint（华为云西南-贵阳一）
+    this.obsEndpoint = config.obsEndpoint || 'obs.cn-southwest-2.myhuaweicloud.com';
+    this.obsutilPath = '';
   }
 
   /**
    * 上报代码度量指标。
    *
-   * 流程（主报告无任何大数据，彻底规避 APIG 413 与 V8 单字符串上限）：
-   * 1. 主报告（仅总体指标）POST /metrics/code/report → 后端创建 record 并返回 recordId
-   * 2. fileDetails（含 snapshotData）按字节分批 POST /metrics/code/file-details，
-   *    identicalFileDetails 仅随最后一批附带（其保存依赖 file_detail 记录已存在）
-   * 3. duplicationOccurrences 按字节分批 POST /metrics/code/duplication-blocks
+   * 流程（OBS 中转 + 单接口，彻底规避 APIG 12MB 请求体上限）：
+   * 1. 组装全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences），写本地临时 json
+   * 2. 上传到 OBS（桶 openlibing-gitcode-action / code-metrics-action/ 前缀，私有对象）
+   * 3. 仅调一次 POST /metrics/code/report：只传元数据 + obsUrl（固定格式下载链接），后端按 objectKey 下载解析入库
+   *
+   * 兜底：即使第 3 步上报失败（网络原因），第 2 步 OBS 文件已完整上传，可通过平台保底定时任务
+   * （入参 objectKey）下载补导入，保证数据不丢失。
    *
    * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
    */
@@ -264,8 +273,8 @@ class CoderepoUploader {
     // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
     const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
 
-    // 1. 主报告只传总体指标（不含 fileDetails/identical/occurrences 等大数据），体量恒定极小
-    const payload = {
+    // 1. 组装全量上报文件：元数据 + 全部指标明细（含 snapshotData / contentB64 等大 payload）
+    const fullPayload = {
       gitUrl: options.gitUrl,
       branchName: options.branchName,
       pipelineRunId: options.pipelineRunId,
@@ -273,150 +282,166 @@ class CoderepoUploader {
       metricsData: overallMetrics,
       detectionStartedAt: options.startTime,
       detectionCompletedAt: options.endTime,
-      status: options.status || 0
+      status: options.status || 0,
+      fileDetails: fileDetails || [],
+      identicalFileDetails: identicalFileDetails || [],
+      duplicationOccurrences: this.encodeOccurrences(duplicationOccurrences || [])
+    };
+    if (options.errorMessage) {
+      fullPayload.errorMessage = options.errorMessage;
+    }
+
+    // 2. 上传全量文件到 OBS，得到固定格式下载链接
+    const obsResult = await this.uploadFullPayloadToOBS(fullPayload, options);
+    if (!obsResult.success) {
+      // OBS 上传失败：数据未落盘，直接返回失败（可整体重扫重传）
+      return obsResult;
+    }
+
+    // 3. 单次 /report：只传元数据 + obsUrl（body 恒定极小，远低于 APIG 12MB 上限）
+    const payload = {
+      gitUrl: options.gitUrl,
+      branchName: options.branchName,
+      pipelineRunId: options.pipelineRunId,
+      runNumber: options.runNumber,
+      detectionStartedAt: options.startTime,
+      detectionCompletedAt: options.endTime,
+      status: options.status || 0,
+      obsUrl: obsResult.obsUrl
     };
     if (options.errorMessage) {
       payload.errorMessage = options.errorMessage;
     }
 
-    // 主报告上报
     const mainUrl = this.buildUrl('/metrics/code/report');
     const mainBody = JSON.stringify(payload);
-    // 诊断日志：主报告序列化后实际大小（应为 KB 级，不含大数据）
-    console.log(`[upload] main report serialized=${mainBody.length} bytes`);
+    console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${obsResult.obsUrl}`);
     const mainResult = await this.sendSignedRequest('POST', mainUrl, mainBody);
     if (!mainResult.success) {
-      return mainResult;
-    }
-    const recordId = mainResult.recordId;
-
-    // 2. fileDetails（含 snapshotData）按字节分批上传到 /file-details
-    const fdBatches = this.splitByBytes(fileDetails || []);
-    if (fdBatches.length === 0) {
-      // 无 fileDetails 但有 identicalFileDetails：单独走一批（空 fileDetails + identical）
-      if ((identicalFileDetails || []).length > 0) {
-        const fdResult =
-            await this.uploadFileDetailsBatch(recordId, [], identicalFileDetails || [], 1, 1);
-        if (!fdResult.success) {
-          console.warn(`File details batch 1/1 failed: ${fdResult.error}`);
-        }
-      }
-    } else {
-      for (let i = 0; i < fdBatches.length; i++) {
-        // identicalFileDetails 依赖 file_detail 记录已存在，只随最后一批附带
-        const identical = i === fdBatches.length - 1 ? identicalFileDetails || [] : [];
-        const fdResult = await this.uploadFileDetailsBatch(
-            recordId, fdBatches[i], identical, i + 1, fdBatches.length);
-        if (!fdResult.success) {
-          console.warn(`File details batch ${i + 1}/${fdBatches.length} failed: ${fdResult.error}`);
-        }
-      }
+      // 上报失败但 OBS 文件已完整上传：打印固定格式链接，提示可走保底定时任务补导入
+      console.warn(
+        `[upload] report failed: ${mainResult.error}. 全量数据已上传 OBS(${obsResult.obsUrl})，` +
+          '可通过平台保底定时任务(入参 objectKey)补导入'
+      );
+      return { ...mainResult, obsUrl: obsResult.obsUrl };
     }
 
-    // 3. duplicationOccurrences 按字节分批上传到 /duplication-blocks
-    const encodedOccurrences = this.encodeOccurrences(duplicationOccurrences || []);
-    const occBatches = this.splitByBytes(encodedOccurrences);
-    if (occBatches.length > 0) {
-      const occResult = await this.uploadDuplicationBlocksInBatches(recordId, occBatches);
-      if (!occResult.success) {
-        // 分批上报失败不阻塞主流程，记录警告（主报告已成功，重复块部分丢失可重扫补齐）
-        console.warn(`Duplication blocks batch upload partially failed: ${occResult.error}`);
-      }
-    }
-
-    return { success: true, recordId: recordId };
+    return { success: true, recordId: mainResult.recordId, obsUrl: obsResult.obsUrl };
   }
 
   /**
-   * 按字节体量将列表拆分为多批，单批 ≤ maxBatchBytes。
-   *
-   * <p>单条体量用 UTF-8 字节数估算（Buffer.byteLength）：避免中文等多字节字符
-   * 使 char 计数低估实际请求体字节数而再次触发 APIG 413。
-   * 单条 fileDetail/occurrence 均有截断保护（snapshotData ≤100KB、content ≤15KB），
-   * 远小于 V8 单字符串上限，单条估算安全。
+   * 组装全量上报文件并上传到 OBS，返回固定格式下载链接与 objectKey。
    */
-  splitByBytes(items) {
-    const batches = [];
-    let current = [];
-    let currentBytes = 0;
-    for (const item of items) {
-      let bytes = 0;
+  async uploadFullPayloadToOBS(fullPayload, options) {
+    if (!this.obsAk || !this.obsSk) {
+      return { success: false, error: '缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
+    }
+    // 写本地临时文件（runner 上临时目录，用完即删）
+    const tmpFile = path.join(os.tmpdir(), `code-metrics-${Date.now()}.json`);
+    fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), 'utf-8');
+
+    const objectKey = this.buildObjectKey(options);
+    try {
+      await this.uploadToOBS(tmpFile, objectKey);
+      const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
+      console.log(`[upload] OBS uploaded: ${obsUrl}`);
+      return { success: true, obsUrl: obsUrl, objectKey: objectKey };
+    } catch (e) {
+      return { success: false, error: `OBS 上传失败: ${e.message}` };
+    } finally {
+      // 清理本地临时文件，避免在 runner 上残留大文件
       try {
-        bytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+        fs.unlinkSync(tmpFile);
       } catch (e) {
-        bytes = 0;
+        // 忽略清理失败
       }
-      if (current.length > 0 && currentBytes + bytes > this.maxBatchBytes) {
-        batches.push(current);
-        current = [];
-        currentBytes = 0;
-      }
-      current.push(item);
-      currentBytes += bytes;
     }
-    if (current.length > 0) {
-      batches.push(current);
-    }
-    return batches;
   }
 
   /**
-   * 分批上报文件级指标明细到 /metrics/code/file-details。
-   *
-   * <p>identicalFileDetails 仅最后一批附带（其保存依赖 file_detail 记录已存在）。
-   *
-   * @param recordId 主表记录ID
-   * @param fileDetails 本批文件级指标明细
-   * @param identicalFileDetails 完全一致文件明细（仅最后一批传入，可空）
-   * @param batchIndex 当前批次序号（日志用）
-   * @param batchTotal 总批次数（日志用）
+   * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
+   * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
    */
-  async uploadFileDetailsBatch(recordId, fileDetails, identicalFileDetails, batchIndex, batchTotal) {
-    const batchUrl = this.buildUrl('/metrics/code/file-details');
-    const body = JSON.stringify({
-      recordId: recordId,
-      fileDetails: fileDetails,
-      identicalFileDetails: identicalFileDetails
-    });
-    // 诊断日志：每批体量
-    console.log(
-      `[upload] file-details batch ${batchIndex}/${batchTotal}: ${fileDetails.length} files, ${body.length} bytes`
-    );
-    const result = await this.sendSignedRequest('POST', batchUrl, body);
-    if (!result.success) {
-      return result;
-    }
-    return { success: true };
+  async uploadToOBS(localFilePath, objectKey) {
+    const obsutil = await this.ensureObsutil();
+    const cmd = [
+      `"${obsutil}" cp "${localFilePath}" "obs://${this.obsBucket}/${objectKey}"`,
+      `-f -e="${this.obsEndpoint}" -i="${this.obsAk}" -k="${this.obsSk}"`
+    ].join(' ');
+    execSync(cmd, { stdio: 'inherit', shell: '/bin/bash' });
   }
 
   /**
-   * 分批上报重复块出现位置到 /metrics/code/duplication-blocks。
-   * 单批失败不阻塞后续批次，最终汇总成功/失败计数。
-   *
-   * @param recordId 主表记录ID
-   * @param batches 已按字节拆分好的批次（元素为已编码的 occurrence 对象）
+   * 确保 obsutil 可用：不存在时下载并解压到临时目录（与 upload-sarif-action 一致）。
+   * 下载失败时回退到系统已安装的 obsutil，避免网络抖动导致上传中断。
    */
-  async uploadDuplicationBlocksInBatches(recordId, batches) {
-    const batchUrl = this.buildUrl('/metrics/code/duplication-blocks');
-    let totalFailed = 0;
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i];
-      const body = JSON.stringify({
-        recordId: recordId,
-        blocks: batch
-      });
-      // 诊断日志：每批体量
-      console.log(`[upload] duplication batch ${i + 1}/${batches.length}: ${batch.length} blocks, ${body.length} bytes`);
-      const result = await this.sendSignedRequest('POST', batchUrl, body);
-      if (!result.success) {
-        totalFailed++;
-        console.warn(`Duplication blocks batch ${i + 1}/${batches.length} failed: ${result.error}`);
+  async ensureObsutil() {
+    if (this.obsutilPath && fs.existsSync(this.obsutilPath)) {
+      return this.obsutilPath;
+    }
+    const tmpDir = os.tmpdir();
+    const downloadUrl =
+      'https://obs-community.obs.cn-north-1.myhuaweicloud.com/obsutil/current/obsutil_linux_amd64.tar.gz';
+    const tarball = path.join(tmpDir, 'obsutil_linux_amd64.tar.gz');
+    const extractedDir = path.join(tmpDir, 'obsutil');
+    try {
+      if (!fs.existsSync(extractedDir)) {
+        execSync(`mkdir -p "${extractedDir}"`, { shell: '/bin/bash' });
+      }
+      execSync(
+        `wget -q "${downloadUrl}" -O "${tarball}" 2>/dev/null || curl -sL "${downloadUrl}" -o "${tarball}"`,
+        { shell: '/bin/bash' }
+      );
+      execSync(`tar zxf "${tarball}" -C "${extractedDir}" --strip-components=1`, { shell: '/bin/bash' });
+      execSync(`chmod 755 "${extractedDir}/obsutil"`, { shell: '/bin/bash' });
+      this.obsutilPath = path.join(extractedDir, 'obsutil');
+    } catch (e) {
+      // 下载失败时尝试使用系统已安装的 obsutil
+      try {
+        const existing = execSync('which obsutil', { encoding: 'utf8', shell: '/bin/bash' }).trim();
+        if (existing) {
+          this.obsutilPath = existing;
+        }
+      } catch (e2) {
+        // 无系统 obsutil，抛错
+      }
+      if (!this.obsutilPath) {
+        throw new Error(`obsutil 安装失败: ${e.message}`);
       }
     }
-    if (totalFailed > 0) {
-      return { success: false, error: `${totalFailed}/${batches.length} batches failed` };
+    return this.obsutilPath;
+  }
+
+  /**
+   * 构造 OBS 对象 key（固定格式，供后端/保底任务按 objectKey 下载解析入库）。
+   * 规则：code-metrics-action/{owner}/{repo}/{pipelineRunId}/{ts}-metrics.json
+   * branchName 不进入路径（远端分支可能含 / 造成路径歧义），只放在文件内元数据中。
+   */
+  buildObjectKey(options) {
+    const ownerRepo = this.extractOwnerRepo(options.gitUrl) || 'unknown';
+    const pipelineRunId = options.pipelineRunId || 'manual';
+    const ts = this.formatDateTime(new Date());
+    return `code-metrics-action/${ownerRepo}/${pipelineRunId}/${ts}-metrics.json`;
+  }
+
+  /**
+   * 从 gitUrl 提取 owner/repo（形如 git@host:owner/repo 或 https://host/owner/repo）。
+   */
+  extractOwnerRepo(gitUrl) {
+    if (!gitUrl) {
+      return '';
     }
-    return { success: true };
+    const url = String(gitUrl).replace(/\.git$/, '').replace(/\/+$/, '');
+    const match = url.match(/(?:git@[^:]+:|https?:\/\/[^/]+\/)(.+)$/);
+    return match ? match[1] : '';
+  }
+
+  /**
+   * 格式化时间为 yyyyMMddHHmmss（OBS 对象 key 用，UTC）。
+   */
+  formatDateTime(date) {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}`;
   }
 
   /**
@@ -424,7 +449,7 @@ class CoderepoUploader {
    * 已编码数据跳过（防二次编码）。
    */
   encodeOccurrences(occurrences) {
-    // 单条重复块内容上限（明文 15KB ≈ Base64 20KB），防止超大重复块把主报告 JSON 撑爆
+    // 单条重复块内容上限（明文 15KB ≈ Base64 20KB），防止超大重复块把上报文件 JSON 撑爆
     const MAX_CONTENT_CHARS = 15 * 1024;
     return occurrences.map(occ => {
       const content = this.clipOversizeContent(occ.content, MAX_CONTENT_CHARS);
