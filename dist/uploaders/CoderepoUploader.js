@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 /**
  * 华为云 APIG 签名器（SDK-HMAC-SHA256）
@@ -361,14 +361,36 @@ class CoderepoUploader {
   /**
    * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
    * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
+   *
+   * 安全处理：
+   * 1. 用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
+   *    外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令；
+   * 2. AK/SK 写入临时 .obsutilconfig 并通过 -config 参数传入，不再出现在命令行参数中，
+   *    规避进程列表/CI 日志泄露凭证的风险。临时配置文件权限 0600，用完即删。
    */
   async uploadToOBS(localFilePath, objectKey) {
     const obsutil = await this.ensureObsutil();
-    const cmd = [
-      `"${obsutil}" cp "${localFilePath}" "obs://${this.obsBucket}/${objectKey}"`,
-      `-f -e="${this.obsEndpoint}" -i="${this.obsAk}" -k="${this.obsSk}"`
-    ].join(' ');
-    execSync(cmd, { stdio: 'inherit', shell: '/bin/bash' });
+    // 生成临时配置文件：endpoint + AK/SK（obsutil 支持 -config 指定自定义配置文件）
+    const configPath = path.join(os.tmpdir(), `.obsutilconfig-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(
+      configPath,
+      `endpoint=${this.obsEndpoint}\nak=${this.obsAk}\nsk=${this.obsSk}\n`,
+      { mode: 0o600 }
+    );
+    try {
+      execFileSync(
+        obsutil,
+        ['cp', localFilePath, `obs://${this.obsBucket}/${objectKey}`, '-f', `-config=${configPath}`],
+        { stdio: 'inherit' }
+      );
+    } finally {
+      // 清理临时配置文件，避免在 runner 上残留凭证
+      try {
+        fs.unlinkSync(configPath);
+      } catch (e) {
+        // 忽略清理失败
+      }
+    }
   }
 
   /**
