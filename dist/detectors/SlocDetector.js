@@ -6,7 +6,14 @@ const BaseDetector = require('./BaseDetector');
 
 // scc 二进制文件路径：优先使用项目内置的 bin 目录，其次从 PATH 查找
 function getSccPath() {
-  const binDir = path.join(__dirname, '..', 'bin');
+  // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+  // - ncc bundle：模块级 __dirname 指向打包缓存目录，须用 ncc 注入的
+  //   __nccwpck_require__.ab（bundle 根 = dist/）定位内置 bin，否则回退裸 scc 报 not found
+  // - 源码结构：无 __nccwpck_require__ 全局，__dirname 即 dist/detectors，上溯一层为 dist/
+  const baseDir = (typeof __nccwpck_require__ !== 'undefined')
+    ? __nccwpck_require__.ab
+    : path.join(__dirname, '..');
+  const binDir = path.join(baseDir, 'bin');
   const ext = os.platform() === 'win32' ? '.exe' : '';
   const localScc = path.join(binDir, `scc${ext}`);
   if (fs.existsSync(localScc)) {
