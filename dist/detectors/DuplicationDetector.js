@@ -49,8 +49,16 @@ class DuplicationDetector extends BaseDetector {
     const fileContents = new Map();
     const fileSourceLineMaps = new Map();
     let totalSourceLines = 0;
+    let binarySkipped = 0;
     for (const file of uniqueFiles) {
       try {
+        // 二进制文件嗅探：前 8KB 含 \x00 字节即判定为二进制（与 Git 同款标准），
+        // 跳过重复检测——二进制按 UTF-8 读取会产生 U+FFFD 乱码且大量伪重复块。
+        // 用内容嗅探而非扩展名黑名单：.config/.cfg 等文本配置不能按扩展名误杀。
+        if (DuplicationDetector.isBinaryFile(file)) {
+          binarySkipped++;
+          continue;
+        }
         const content = fs.readFileSync(file, 'utf8');
         fileContents.set(file, content);
         const sourceLineMap = this.buildSourceLineMap(content, file);
@@ -60,12 +68,18 @@ class DuplicationDetector extends BaseDetector {
         console.warn(`[WARN] Failed to read file ${file}: ${error.message}`);
       }
     }
+    if (binarySkipped > 0) {
+      console.log(`[duplication] Skipped ${binarySkipped} binary files (NUL byte sniffing)`);
+    }
 
     // 行级跨文件匹配（与 cmetrics 官方定义对齐："非空非注释行连续 10 行相同"）
     const lineResult = this.detectWithLineLevel(uniqueFiles, fileSourceLineMaps);
+    // 用 scc 对每个文件的重复行重新计数（分子分母同工具同口径，保证与 loc 完全一致）
+    const sccDupByRel = this.countDuplicatedLinesWithScc(
+        lineResult.fileDuplicatedLines, fileContents, pathBase);
     // 使用 let 声明：buildContextSegments 会返回带 snapshotData 的新 fileDetails
     let fileDetails = this.calculateFileDetailsFromLines(
-        lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase, locByRel);
+        lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase, locByRel, sccDupByRel);
     // 从共享滑动窗口构建重复块出现位置（窗口级 union-find 分组，自动去重）
     const duplicationOccurrences = this.buildDuplicationOccurrences(
         lineResult.fileSourceLines, fileContents, pathBase, lineResult.sharedHashWindows);
@@ -186,7 +200,7 @@ class DuplicationDetector extends BaseDetector {
    * - 过滤为源代码行（剔除空行/注释行）
    * - 只含有重复的文件入 fileDetails（无重复文件由 sloc 基础记录覆盖）
    */
-  calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources, locByRel) {
+  calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources, locByRel, sccDupByRel) {
     const fileDetails = [];
     for (const [file, lineSet] of fileDuplicatedLines) {
       // 兼容路径分隔符：detectWithLineLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
@@ -194,19 +208,30 @@ class DuplicationDetector extends BaseDetector {
         || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
       if (!sourceLineMap) continue;
 
-      // 分子：仅统计 scc 视为"有效代码行"的重复行（剔除空行/注释/docstring）
-      let duplicatedSourceLines = 0;
-      for (const lineNum of lineSet) {
-        if (sourceLineMap.lineMap.get(lineNum)) {
-          duplicatedSourceLines++;
-        }
-      }
-      if (duplicatedSourceLines === 0) continue;  // 全是注释/空行：不入 fileDetails
-
       // 分母：优先用 scc 每个文件的 loc（与上报的 loc 完全一致），否则回退到本地分类统计
       const filePath = this.toRelativePath(file, sources);
       const sccLoc = locByRel ? locByRel.get(filePath) : undefined;
       const totalFileSourceLines = (sccLoc !== undefined && sccLoc > 0) ? sccLoc : sourceLineMap.sourceCount;
+
+      // 分子：优先用 scc 对重复行的重数结果（与分母完全同工具同口径，
+      // 保证重复率明细中的有效代码行与代码规模文件级明细一致，杜绝 >100%）；
+      // scc 重数失败（返回 null）时回退到本地 lineMap 口径并做分母封顶保护
+      let duplicatedSourceLines;
+      if (sccDupByRel) {
+        duplicatedSourceLines = sccDupByRel.get(filePath) || 0;
+        // 块注释边界等极端情况下抽取行重数可能略超全集，按分母封顶
+        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
+      } else {
+        duplicatedSourceLines = 0;
+        for (const lineNum of lineSet) {
+          if (sourceLineMap.lineMap.get(lineNum)) {
+            duplicatedSourceLines++;
+          }
+        }
+        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
+      }
+      if (duplicatedSourceLines === 0) continue;  // 全是注释/空行：不入 fileDetails
+
       const duplicationRate = totalFileSourceLines > 0
         ? parseFloat(((duplicatedSourceLines / totalFileSourceLines) * 100).toFixed(2))
         : 0;
@@ -218,6 +243,89 @@ class DuplicationDetector extends BaseDetector {
       });
     }
     return fileDetails;
+  }
+
+  /**
+   * 用 scc 对每个文件的重复行重新计数，保证分子（重复有效行数）与分母（loc）完全同口径。
+   *
+   * <p>实现方式：把每个文件的重复物理行按行号顺序抽取到临时镜像目录（保持原相对路径与扩展名，
+   * 让 scc 用与全量扫描完全相同的语言规则解析），单次 scc 扫描取每文件 Code 即为重复有效行数。
+   * 任何异常返回 null，调用方回退本地 lineMap 口径。
+   *
+   * @param {Map<string, Set<number>>} fileDuplicatedLines 文件 → 重复物理行号集合
+   * @param {Map<string, string>} fileContents 文件 → 内容
+   * @param {string[]} sources 源目录（用于相对路径对齐）
+   * @returns {Map<string, number>|null} 相对路径 → 重复有效行数（scc 口径），失败返回 null
+   */
+  countDuplicatedLinesWithScc(fileDuplicatedLines, fileContents, sources) {
+    if (!fileDuplicatedLines || fileDuplicatedLines.size === 0) {
+      return new Map();
+    }
+    const os = require('os');
+    const { execSync } = require('child_process');
+    const sccPath = DuplicationDetector.getSccBinPath();
+    // 临时镜像目录：mkdtemp 防并发冲突，finally 统一清理
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-scc-'));
+    try {
+      for (const [file, lineSet] of fileDuplicatedLines) {
+        const content = fileContents.get(file);
+        if (!content) continue;
+        const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
+        // 按物理行号升序抽取重复行内容，保持原相对路径与扩展名写入镜像
+        const dupTexts = [...lineSet].sort((a, b) => a - b)
+          .filter(n => lines[n - 1] !== undefined)
+          .map(n => lines[n - 1]);
+        if (dupTexts.length === 0) continue;
+        const relPath = this.toRelativePath(file, sources);
+        const dest = path.join(tmpRoot, ...relPath.split('/'));
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
+      }
+      const cmd = `"${sccPath}" -f json --no-cocomo --no-size --by-file "${tmpRoot}"`;
+      const output = execSync(cmd, {
+        encoding: 'utf8',
+        maxBuffer: 100 * 1024 * 1024,
+        timeout: 300000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      const sccResult = JSON.parse(output.trim());
+      const dupByRel = new Map();
+      for (const lang of sccResult) {
+        for (const f of (lang.Files || [])) {
+          const name = f.Location || f.Name || '';
+          if (!name) continue;
+          const rel = path.relative(tmpRoot, name).replace(/\\/g, '/');
+          dupByRel.set(rel, f.Code || 0);
+        }
+      }
+      console.log(`[duplication] scc recount done for ${dupByRel.size} duplicated files`);
+      return dupByRel;
+    } catch (error) {
+      console.warn(`[WARN] scc recount of duplicated lines failed, fallback to local line-map: ${error.message}`);
+      return null;
+    } finally {
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (e) { /* 忽略清理异常 */ }
+    }
+  }
+
+  /**
+   * 获取 scc 二进制路径，策略与 slocDetector 完全一致：
+   * 优先使用 dist/bin 内置二进制，其次回退 PATH 查找（保证分子分母用同一个 scc）。
+   *
+   * @returns {string} scc 可执行路径
+   */
+  static getSccBinPath() {
+    const os = require('os');
+    const binDir = path.join(__dirname, '..', 'bin');
+    const ext = os.platform() === 'win32' ? '.exe' : '';
+    const localScc = path.join(binDir, `scc${ext}`);
+    if (fs.existsSync(localScc)) {
+      if (os.platform() !== 'win32') {
+        try { fs.chmodSync(localScc, 0o755); } catch (e) { /* 忽略 chmod 异常 */ }
+      }
+      return localScc;
+    }
+    return 'scc';
   }
 
   // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）
@@ -369,6 +477,32 @@ class DuplicationDetector extends BaseDetector {
       }
     }
     return absolutePath.replace(/\\/g, '/');
+  }
+
+  /**
+   * 判断文件是否为二进制文件：读取前 8KB，包含 \x00（NUL）字节即判定为二进制。
+   * 与 Git 的 binary 检测标准一致；UTF-8 文本不可能包含 \x00，因此不会误伤文本文件
+   * （.config/.cfg/.json 等文本配置即使扩展名可疑也能正常参与扫描）。
+   *
+   * @param {string} file 文件绝对路径
+   * @returns {boolean} true 表示二进制文件，应跳过重复检测
+   */
+  static isBinaryFile(file) {
+    const SNIFF_BYTES = 8192;
+    let fd = null;
+    try {
+      fd = fs.openSync(file, 'r');
+      const buf = Buffer.alloc(SNIFF_BYTES);
+      const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
+      return buf.slice(0, bytesRead).includes(0);
+    } catch (error) {
+      // 读取失败按非二进制处理，交给后续 readFileSync 的 catch 统一告警
+      return false;
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch (e) { /* 忽略关闭异常 */ }
+      }
+    }
   }
 
   /**
@@ -539,6 +673,33 @@ class DuplicationDetector extends BaseDetector {
             union(kA, kB);
           }
         }
+      }
+    }
+
+    // 3.5) 同文件内自重复：同一文件中相同内容出现在 ≥2 个不相邻位置时，这些区间互相 union。
+    //      行级检测（detectWithLineLevel）把同文件内重复计入重复行数，而上面两两匹配只覆盖跨文件，
+    //      会导致"文件内自重复"的文件（如大型 JSON 配置）重复率有值却没有 occurrence 明细。
+    //      滑动窗口特性：同一段重复代码产生连续相同的 hash 窗口位置，
+    //      因此先把连续索引合并为段，≥2 段才是真正的"文件内重复出现"。
+    for (const [rep, info] of repInfo) {
+      for (const positions of info.hashToPos.values()) {
+        if (positions.length < 2) continue;
+        const segs = [];
+        let segStart = positions[0];
+        for (let p = 1; p <= positions.length; p++) {
+          const cur = positions[p];
+          if (cur === undefined || cur !== positions[p - 1] + 1) {
+            segs.push([segStart, positions[p - 1]]);
+            segStart = cur;
+          }
+        }
+        if (segs.length < 2) continue;
+        const segNodes = segs.map(([a, b]) => {
+          const k = nodeKey(rep, a, b + W - 1);
+          if (!parent.has(k)) parent.set(k, k);
+          return k;
+        });
+        for (let i = 1; i < segNodes.length; i++) union(segNodes[0], segNodes[i]);
       }
     }
 
