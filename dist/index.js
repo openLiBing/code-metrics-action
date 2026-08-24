@@ -59715,7 +59715,7 @@ async function run() {
 
     // coderepo 服务地址硬编码到插件（部署时确定的固定值）
     // APIG 凭证通过 apig-app-key / apig-app-secret 输入参数获取（工作流 with 传入）
-    const coderepoUrl = 'https://apig.openlibing.com:443';
+    const coderepoUrl = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com';
     const apigAppKey = getInput('apig-app-key') || '';
     const apigAppSecret = getInput('apig-app-secret') || '';
     // OBS 上传凭证（复用 upload-sarif-action 同一套 OBS AK/SK）：
