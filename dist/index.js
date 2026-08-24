@@ -591,7 +591,9 @@ class DuplicationDetector extends BaseDetector {
    */
   static getSccBinPath() {
     const os = require('os');
-    const binDir = path.join(__dirname, '..', 'bin');
+    // ncc bundle 内模块级 __dirname 指向打包缓存目录，必须用 __nccwpck_require__.ab（bundle 根）
+    // 定位 dist/bin 内置 scc，否则 existsSync 失败回退 PATH 上的裸 scc 导致 "scc: not found"
+    const binDir = path.join(__nccwpck_require__.ab, 'bin');
     const ext = os.platform() === 'win32' ? '.exe' : '';
     const localScc = path.join(binDir, `scc${ext}`);
     if (fs.existsSync(localScc)) {
