@@ -956,30 +956,40 @@ class DuplicationDetector extends BaseDetector {
       }
     }
 
-    // 3.5) 同文件内自重复：同一文件中相同内容出现在 ≥2 个不相邻位置时，这些区间互相 union。
+    // 3.5) 同文件内自重复：同一文件中相同内容出现在 ≥2 个非重叠位置时，这些区间互相 union。
     //      行级检测（detectWithLineLevel）把同文件内重复计入重复行数，而上面两两匹配只覆盖跨文件，
     //      会导致"文件内自重复"的文件（如大型 JSON 配置）重复率有值却没有 occurrence 明细。
-    //      滑动窗口特性：同一段重复代码产生连续相同的 hash 窗口位置，
-    //      因此先把连续索引合并为段，≥2 段才是真正的"文件内重复出现"。
+    //      与跨文件两两匹配一致地采用「对角线 run 扩展」：枚举同文件窗口对 (i, j)（j ≥ i+W 非重叠），
+    //      沿对角线 winHashes[i+k] === winHashes[j+k] 扩展成最大 run，run 覆盖的两个源代码区间 union。
+    //      旧实现按单 hash 的出现位置分段独立成组，相邻 hash 的窗口互不拼接，导致长重复被切成
+    //      逐 10 行的小块（如 8-36/72-100 的 29 行重复被切成 ~20 组 10 行块）。
+    //      说明：j-i < W 的重叠窗口对（周期 < W 的周期性内容）物理区间重叠，展示价值低，跳过；
+    //      行级重复率（fileDuplicatedLines）不受影响，仍按行并集计算。
     for (const [rep, info] of repInfo) {
-      for (const positions of info.hashToPos.values()) {
-        if (positions.length < 2) continue;
-        const segs = [];
-        let segStart = positions[0];
-        for (let p = 1; p <= positions.length; p++) {
-          const cur = positions[p];
-          if (cur === undefined || cur !== positions[p - 1] + 1) {
-            segs.push([segStart, positions[p - 1]]);
-            segStart = cur;
+      const winHashes = info.winHashes;
+      const len = winHashes.length;
+      const consumed = new Set(); // "i:j" 已归属某个 run，避免重复枚举
+      for (let i = 0; i < len; i++) {
+        const positions = info.hashToPos.get(winHashes[i]) || [];
+        for (const j of positions) {
+          // 只处理非重叠的后向重复位置：j ≥ i+W 保证两段窗口不重叠
+          if (j < i + W) continue;
+          const ck = i + ':' + j;
+          if (consumed.has(ck)) continue;
+          // 沿对角线扩展最大 run：(i+k, j+k) 窗口内容一致即同属一段重复
+          let k = 0;
+          while (i + k < len && j + k < len
+              && winHashes[i + k] === winHashes[j + k]) {
+            k++;
           }
+          for (let t = 0; t < k; t++) consumed.add((i + t) + ':' + (j + t));
+          // run 覆盖的源代码索引区间（含窗口内所有行）
+          const kA = nodeKey(rep, i, i + W - 1 + (k - 1));
+          const kB = nodeKey(rep, j, j + W - 1 + (k - 1));
+          if (!parent.has(kA)) parent.set(kA, kA);
+          if (!parent.has(kB)) parent.set(kB, kB);
+          union(kA, kB);
         }
-        if (segs.length < 2) continue;
-        const segNodes = segs.map(([a, b]) => {
-          const k = nodeKey(rep, a, b + W - 1);
-          if (!parent.has(k)) parent.set(k, k);
-          return k;
-        });
-        for (let i = 1; i < segNodes.length; i++) union(segNodes[0], segNodes[i]);
       }
     }
 
