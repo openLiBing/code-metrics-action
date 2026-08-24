@@ -122,7 +122,8 @@ class SlocDetector extends BaseDetector {
           fileDetails.push({
             filePath: filePath,
             language: lang.Name || '',
-            loc: file.Code || 0
+            loc: file.Code || 0,
+            commentLines: file.Comment || 0
           });
         }
       }
@@ -151,11 +152,14 @@ class SlocDetector extends BaseDetector {
         try {
           const content = fs.readFileSync(file, 'utf8');
           let sourceCount = 0;
+          let commentCount = 0;
           const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
           for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('/*') && !trimmed.startsWith('*') && !trimmed.startsWith('#')) {
               sourceCount++;
+            } else if (trimmed) {
+              commentCount++;
             }
           }
           const filePath = this.toRelativePath(file, sources);
@@ -170,7 +174,8 @@ class SlocDetector extends BaseDetector {
           fileDetails.push({
             filePath: filePath,
             language: langMap[ext] || ext.replace('.', ''),
-            loc: sourceCount
+            loc: sourceCount,
+            commentLines: commentCount
           });
         } catch (e) {
           console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
@@ -242,21 +247,24 @@ class SlocDetector extends BaseDetector {
         totalAll += lines.length;
 
         let fileSourceLines = 0;
+        let fileCommentLines = 0;
         let inBlock = false;
         for (const line of lines) {
           const trimmed = line.trim();
           if (inBlock) {
             totalComment++;
+            fileCommentLines++;
             if (trimmed.includes('*/')) inBlock = false;
             continue;
           }
           if (trimmed === '') { totalEmpty++; continue; }
           if (trimmed.startsWith('/*')) {
             totalComment++;
+            fileCommentLines++;
             if (!trimmed.includes('*/')) inBlock = true;
             continue;
           }
-          if (trimmed.startsWith('//')) { totalComment++; continue; }
+          if (trimmed.startsWith('//')) { totalComment++; fileCommentLines++; continue; }
           totalSource++;
           fileSourceLines++;
         }
@@ -286,7 +294,8 @@ class SlocDetector extends BaseDetector {
         fileDetails.push({
           filePath: filePath,
           language: langMap[ext] || ext.replace('.', ''),
-          loc: fileSourceLines
+          loc: fileSourceLines,
+          commentLines: fileCommentLines
         });
       } catch (e) {
         console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);

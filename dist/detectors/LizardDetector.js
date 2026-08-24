@@ -58,6 +58,10 @@ class LizardDetector extends BaseDetector {
       averageCyclomaticComplexity: totalFunctions > 0
         ? parseFloat((totalCC / totalFunctions).toFixed(2))
         : 0,
+      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（区别于方法维度的 averageCyclomaticComplexity）
+      cyclomaticComplexityPerFile: fileDetails.length > 0
+        ? parseFloat((totalCC / fileDetails.length).toFixed(2))
+        : 0,
       fileDetails: fileDetails
     };
   }
@@ -193,6 +197,7 @@ class LizardDetector extends BaseDetector {
       averageFunctionLoc: 0,
       totalCyclomaticComplexity: 0,
       averageCyclomaticComplexity: 0,
+      cyclomaticComplexityPerFile: 0,
       fileDetails: []
     };
   }

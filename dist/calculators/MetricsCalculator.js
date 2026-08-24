@@ -39,6 +39,7 @@ class MetricsCalculator {
         filePath: detail.filePath,
         language: detail.language || '',
         loc: detail.loc || 0,
+        commentLines: detail.commentLines || 0,
         functionCount: 0,
         avgFunctionLoc: 0,
         avgCyclomaticComplexity: 0,
@@ -62,6 +63,7 @@ class MetricsCalculator {
           filePath: detail.filePath,
           language: '',
           loc: 0,
+          commentLines: 0,
           functionCount: detail.functionCount || 0,
           avgFunctionLoc: detail.avgFunctionLoc || 0,
           avgCyclomaticComplexity: detail.avgCyclomaticComplexity || 0,
@@ -87,6 +89,7 @@ class MetricsCalculator {
           filePath: detail.filePath,
           language: '',
           loc: 0,
+          commentLines: 0,
           functionCount: 0,
           avgFunctionLoc: 0,
           avgCyclomaticComplexity: 0,
@@ -126,6 +129,21 @@ class MetricsCalculator {
 
     return {
       codeScale: Number(overallMetrics.codeScale) || 0,
+      // 扫描代码总行数：代码 + 注释 + 空行的物理总行数（scc Lines 汇总，即 rawLines），
+      // 区别于 codeScale（有效代码行）；sloc 检测器禁用时 rawLines 缺失，降级为 0
+      codeLineTotal: Number(overallMetrics.rawLines) || 0,
+      // 注释行数：直接取 sloc 检测器的 scc 汇总 commentLines（现成数据）；
+      // 每文件 commentLines 明细仍随 fileDetails 落 file_detail，供文件级下钻
+      commentLines: Number(overallMetrics.commentLines) || 0,
+      // 总圈复杂度：lizard 函数圈复杂度总和（方法维度总量，与 avgCyclomaticComplexity 同源）
+      complexityCount: Number(overallMetrics.totalCyclomaticComplexity) || 0,
+      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（lizard 口径，
+      // 区别于方法维度的 avgCyclomaticComplexity）
+      cyclomaticComplexityPerFile: Number(overallMetrics.cyclomaticComplexityPerFile) || 0,
+      // 重复代码块数量：重复块出现位置总数（与 duplication_block 表行数一致）
+      duplicatedBlocks: Number(overallMetrics.duplicatedBlocks) || 0,
+      // 重复代码行数量：Σ 每文件重复行数（totalCodeDuplicationRate 的分子）
+      duplicatedLines: Number(overallMetrics.duplicatedLines) || 0,
       avgFunctionLoc: Number(overallMetrics.averageFunctionLoc) || 0,
       avgCyclomaticComplexity: Number(overallMetrics.averageCyclomaticComplexity) || 0,
       totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,

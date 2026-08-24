@@ -95,6 +95,8 @@ class DuplicationDetector extends BaseDetector {
     return {
       totalCodeDuplicationRate: duplicationRate,
       totalFileDuplicationRate: fileDuplicationRate,
+      // 重复代码块数量：重复块出现位置总数（与 code_metrics_duplication_block 表行数一致）
+      duplicatedBlocks: duplicationOccurrences.length,
       duplicatedLines: duplicatedLines,
       totalLines: denominator,
       duplicatedFiles: identicalFileCount,
@@ -911,6 +913,7 @@ class DuplicationDetector extends BaseDetector {
     return {
       totalCodeDuplicationRate: 0,
       totalFileDuplicationRate: 0,
+      duplicatedBlocks: 0,
       duplicatedLines: 0,
       totalLines: 0,
       duplicatedFiles: 0,

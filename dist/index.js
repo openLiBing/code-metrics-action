@@ -45,6 +45,7 @@ class MetricsCalculator {
         filePath: detail.filePath,
         language: detail.language || '',
         loc: detail.loc || 0,
+        commentLines: detail.commentLines || 0,
         functionCount: 0,
         avgFunctionLoc: 0,
         avgCyclomaticComplexity: 0,
@@ -68,6 +69,7 @@ class MetricsCalculator {
           filePath: detail.filePath,
           language: '',
           loc: 0,
+          commentLines: 0,
           functionCount: detail.functionCount || 0,
           avgFunctionLoc: detail.avgFunctionLoc || 0,
           avgCyclomaticComplexity: detail.avgCyclomaticComplexity || 0,
@@ -93,6 +95,7 @@ class MetricsCalculator {
           filePath: detail.filePath,
           language: '',
           loc: 0,
+          commentLines: 0,
           functionCount: 0,
           avgFunctionLoc: 0,
           avgCyclomaticComplexity: 0,
@@ -132,6 +135,21 @@ class MetricsCalculator {
 
     return {
       codeScale: Number(overallMetrics.codeScale) || 0,
+      // 扫描代码总行数：代码 + 注释 + 空行的物理总行数（scc Lines 汇总，即 rawLines），
+      // 区别于 codeScale（有效代码行）；sloc 检测器禁用时 rawLines 缺失，降级为 0
+      codeLineTotal: Number(overallMetrics.rawLines) || 0,
+      // 注释行数：直接取 sloc 检测器的 scc 汇总 commentLines（现成数据）；
+      // 每文件 commentLines 明细仍随 fileDetails 落 file_detail，供文件级下钻
+      commentLines: Number(overallMetrics.commentLines) || 0,
+      // 总圈复杂度：lizard 函数圈复杂度总和（方法维度总量，与 avgCyclomaticComplexity 同源）
+      complexityCount: Number(overallMetrics.totalCyclomaticComplexity) || 0,
+      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（lizard 口径，
+      // 区别于方法维度的 avgCyclomaticComplexity）
+      cyclomaticComplexityPerFile: Number(overallMetrics.cyclomaticComplexityPerFile) || 0,
+      // 重复代码块数量：重复块出现位置总数（与 duplication_block 表行数一致）
+      duplicatedBlocks: Number(overallMetrics.duplicatedBlocks) || 0,
+      // 重复代码行数量：Σ 每文件重复行数（totalCodeDuplicationRate 的分子）
+      duplicatedLines: Number(overallMetrics.duplicatedLines) || 0,
       avgFunctionLoc: Number(overallMetrics.averageFunctionLoc) || 0,
       avgCyclomaticComplexity: Number(overallMetrics.averageCyclomaticComplexity) || 0,
       totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,
@@ -370,6 +388,8 @@ class DuplicationDetector extends BaseDetector {
     return {
       totalCodeDuplicationRate: duplicationRate,
       totalFileDuplicationRate: fileDuplicationRate,
+      // 重复代码块数量：重复块出现位置总数（与 code_metrics_duplication_block 表行数一致）
+      duplicatedBlocks: duplicationOccurrences.length,
       duplicatedLines: duplicatedLines,
       totalLines: denominator,
       duplicatedFiles: identicalFileCount,
@@ -1186,6 +1206,7 @@ class DuplicationDetector extends BaseDetector {
     return {
       totalCodeDuplicationRate: 0,
       totalFileDuplicationRate: 0,
+      duplicatedBlocks: 0,
       duplicatedLines: 0,
       totalLines: 0,
       duplicatedFiles: 0,
@@ -1268,6 +1289,10 @@ class LizardDetector extends BaseDetector {
       totalCyclomaticComplexity: totalCC,
       averageCyclomaticComplexity: totalFunctions > 0
         ? parseFloat((totalCC / totalFunctions).toFixed(2))
+        : 0,
+      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（区别于方法维度的 averageCyclomaticComplexity）
+      cyclomaticComplexityPerFile: fileDetails.length > 0
+        ? parseFloat((totalCC / fileDetails.length).toFixed(2))
         : 0,
       fileDetails: fileDetails
     };
@@ -1404,6 +1429,7 @@ class LizardDetector extends BaseDetector {
       averageFunctionLoc: 0,
       totalCyclomaticComplexity: 0,
       averageCyclomaticComplexity: 0,
+      cyclomaticComplexityPerFile: 0,
       fileDetails: []
     };
   }
@@ -1689,7 +1715,8 @@ class SlocDetector extends BaseDetector {
           fileDetails.push({
             filePath: filePath,
             language: lang.Name || '',
-            loc: file.Code || 0
+            loc: file.Code || 0,
+            commentLines: file.Comment || 0
           });
         }
       }
@@ -1718,11 +1745,14 @@ class SlocDetector extends BaseDetector {
         try {
           const content = fs.readFileSync(file, 'utf8');
           let sourceCount = 0;
+          let commentCount = 0;
           const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
           for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('/*') && !trimmed.startsWith('*') && !trimmed.startsWith('#')) {
               sourceCount++;
+            } else if (trimmed) {
+              commentCount++;
             }
           }
           const filePath = this.toRelativePath(file, sources);
@@ -1737,7 +1767,8 @@ class SlocDetector extends BaseDetector {
           fileDetails.push({
             filePath: filePath,
             language: langMap[ext] || ext.replace('.', ''),
-            loc: sourceCount
+            loc: sourceCount,
+            commentLines: commentCount
           });
         } catch (e) {
           console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
@@ -1809,21 +1840,24 @@ class SlocDetector extends BaseDetector {
         totalAll += lines.length;
 
         let fileSourceLines = 0;
+        let fileCommentLines = 0;
         let inBlock = false;
         for (const line of lines) {
           const trimmed = line.trim();
           if (inBlock) {
             totalComment++;
+            fileCommentLines++;
             if (trimmed.includes('*/')) inBlock = false;
             continue;
           }
           if (trimmed === '') { totalEmpty++; continue; }
           if (trimmed.startsWith('/*')) {
             totalComment++;
+            fileCommentLines++;
             if (!trimmed.includes('*/')) inBlock = true;
             continue;
           }
-          if (trimmed.startsWith('//')) { totalComment++; continue; }
+          if (trimmed.startsWith('//')) { totalComment++; fileCommentLines++; continue; }
           totalSource++;
           fileSourceLines++;
         }
@@ -1853,7 +1887,8 @@ class SlocDetector extends BaseDetector {
         fileDetails.push({
           filePath: filePath,
           language: langMap[ext] || ext.replace('.', ''),
-          loc: fileSourceLines
+          loc: fileSourceLines,
+          commentLines: fileCommentLines
         });
       } catch (e) {
         console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
