@@ -46,11 +46,31 @@ class DuplicationDetector extends BaseDetector {
       return this.getEmptyResult();
     }
 
+    // scc 口径有效行 < minLines 的文件不参与重复检测（第二道防线）：
+    // 即使插件注释规则与 scc 口径出现不一致（如历史 bug：CMakeLists.txt 的 #[[ ]]
+    // 注释体被当有效行），纯注释撑起的 10 行窗口也会在文件级被拦截，
+    // 与 cmetrics "≥10 个有效代码行才算重复"的定义对齐。
+    // 仅当 slocResult 中确有该文件的 loc 记录时过滤（路径不匹配/scc 不识别的文件保守放行）。
+    let locFiltered = 0;
+    const effectiveFiles = [];
+    for (const file of uniqueFiles) {
+      const rel = this.toRelativePath(file, pathBase);
+      const loc = locByRel.get(rel);
+      if (loc !== undefined && loc < this.minLines) {
+        locFiltered++;
+        continue;
+      }
+      effectiveFiles.push(file);
+    }
+    if (locFiltered > 0) {
+      console.log(`[duplication] Skipped ${locFiltered} files with scc loc < ${this.minLines}`);
+    }
+
     const fileContents = new Map();
     const fileSourceLineMaps = new Map();
     let totalSourceLines = 0;
     let binarySkipped = 0;
-    for (const file of uniqueFiles) {
+    for (const file of effectiveFiles) {
       try {
         // 二进制文件嗅探：前 8KB 含 \x00 字节即判定为二进制（与 Git 同款标准），
         // 跳过重复检测——二进制按 UTF-8 读取会产生 U+FFFD 乱码且大量伪重复块。
@@ -73,7 +93,7 @@ class DuplicationDetector extends BaseDetector {
     }
 
     // 行级跨文件匹配（与 cmetrics 官方定义对齐："非空非注释行连续 10 行相同"）
-    const lineResult = this.detectWithLineLevel(uniqueFiles, fileSourceLineMaps);
+    const lineResult = this.detectWithLineLevel(effectiveFiles, fileSourceLineMaps);
     // 用 scc 对每个文件的重复行重新计数（分子分母同工具同口径，保证与 loc 完全一致）
     const sccDupByRel = this.countDuplicatedLinesWithScc(
         lineResult.fileDuplicatedLines, fileContents, pathBase);
@@ -342,8 +362,18 @@ class DuplicationDetector extends BaseDetector {
   // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）
   // hashIsCode=true：C/C++ 预处理指令（#include/#define 等）计入代码行（scc 计入）
   // mlStrings：Python 三引号 docstring 按注释处理（scc 不计入代码行）
-  static getLanguageConfig(ext) {
+  // blockComments：多组块注释标记（如 CMake 的 #[[ ]]），进入后直到对应结束标记出现
+  static getLanguageConfig(ext, fileName) {
     const e = (ext || '').toLowerCase();
+    // CMake 按文件名/扩展名识别（与 scc 一致）：CMakeLists.txt / *.cmake。
+    // 支持行注释 # 与方括号块注释 #[[ ]]（#[==[ 变体罕见，暂不支持）。
+    // 此前 CMakeLists.txt 按 .txt 走 default 规则，#[[ ]] 注释体被当成有效代码行，
+    // 导致纯 license 注释撑起 10 行窗口被判重复块（scc 口径 loc=2 的矛盾现象）。
+    const base = (fileName || '').toLowerCase();
+    if (base === 'cmakelists.txt' || e === '.cmake') {
+      return { lineComments: ['#'], blockStart: null, blockEnd: null,
+        blockComments: [['#[[', ']]']], mlStrings: [], hashIsCode: false };
+    }
     switch (e) {
       case '.c': case '.cpp': case '.cc': case '.cxx': case '.h': case '.hpp': case '.cuh':
         return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: true };
@@ -402,11 +432,13 @@ class DuplicationDetector extends BaseDetector {
   // 返回 { lineMap: 行号→是否有效代码行, sourceCount, sourceLines: [{lineNum,text}] }
   buildSourceLineMap(content, filePath) {
     const lines = content.split('\n');
-    const lang = DuplicationDetector.getLanguageConfig(filePath ? path.extname(filePath) : '');
+    const lang = DuplicationDetector.getLanguageConfig(
+        filePath ? path.extname(filePath) : '',
+        filePath ? path.basename(filePath) : '');
     const lineMap = new Map();
     const sourceLines = [];
     let sourceCount = 0;
-    let inBlock = false;      // 是否处于块注释中
+    let inBlock = null;       // 块注释结束标记（null=不在块注释中；支持多组标记，如 CMake #[[ ]]）
     let inDocstring = null;   // 行首三引号 docstring（注释）的结束标记
     let inMlStringCode = null; // 行中三引号多行字符串（代码）的结束标记
 
@@ -414,9 +446,9 @@ class DuplicationDetector extends BaseDetector {
       const trimmed = lines[i].trim();
       let isCode = false;
 
-      if (inBlock) {
-        // 块注释中：查找结束标记
-        if (lang.blockEnd && trimmed.includes(lang.blockEnd)) inBlock = false;
+      if (inBlock !== null) {
+        // 块注释中：查找当前组的结束标记
+        if (trimmed.includes(inBlock)) inBlock = null;
       } else if (inDocstring) {
         // docstring（注释）中：查找结束标记
         if (trimmed.includes(inDocstring)) inDocstring = null;
@@ -430,9 +462,18 @@ class DuplicationDetector extends BaseDetector {
         // 行首三引号 → docstring，视为注释不计入代码行；未闭合则进入状态
         const marker = DuplicationDetector.openMlString(trimmed, lang.mlStrings);
         if (marker !== null) inDocstring = marker;
+      } else if (lang.blockComments
+          && DuplicationDetector.startsWithAny(trimmed, lang.blockComments.map(p => p[0]))) {
+        // 多组块注释开始行（如 CMake #[[ ]]）：进入后直到对应结束标记出现
+        for (const [bs, be] of lang.blockComments) {
+          if (trimmed.startsWith(bs)) {
+            if (!trimmed.slice(bs.length).includes(be)) inBlock = be;
+            break;
+          }
+        }
       } else if (lang.blockStart && trimmed.startsWith(lang.blockStart)) {
         // 块注释开始行
-        if (!trimmed.includes(lang.blockEnd)) inBlock = true;
+        if (!trimmed.includes(lang.blockEnd)) inBlock = lang.blockEnd;
       } else if (DuplicationDetector.startsWithAny(trimmed, lang.lineComments)) {
         // 纯行注释
       } else if (lang.hashIsCode && trimmed.startsWith('#')) {

@@ -26,6 +26,19 @@
 - **多文件相同重复块**：若 3 个文件都包含相同的 10 行重复代码，则总代码重复行数 +30（每个文件的 10 行均计入）。
 - **同文件多段重复取并集**：若 A 文件第 1-10 行与 B 文件重复，第 2-11 行与 C 文件重复，则 A 文件的重复代码行数取两段重复区间的并集，即第 1-11 行共 11 行；此时总代码重复行数为 31（A 的 11 行 + B 的 10 行 + C 的 10 行）。
 
+### 扫描范围（文件过滤规则）
+
+文件按"三段式"规则决定是否参与扫描，优先级从高到低：
+
+1. **文件名特例（始终放行）**：`CMakeLists.txt`、`Makefile`、`GNUMakefile`、`Dockerfile`、`Jenkinsfile`、`Rakefile`、`Gemfile`、`build`、`build.bazel`、`WORKSPACE` 等按文件名识别的构建/入口文件，不受扩展名白名单限制。
+2. **`allowed-extensions` 显式指定（覆盖式）**：用户指定扩展名后，扫描范围 = 指定扩展名 + 文件名特例，**不再叠加缺省白名单**。例如指定 `.h,.cpp`，则只扫描这两类扩展名的文件（外加 CMakeLists.txt 等特例文件）。
+3. **缺省代码扩展名白名单（未配置 `allowed-extensions` 时生效）**：内置 50+ 常见代码扩展名（C/C++、Java、Python、JS/TS、Go、Rust、Shell、JSON/XML/YAML 等数据配置，以及 `.gn`/`.gni`/`.prelds` 等 OHOS 构建体系脚本），避免二进制、文档等非代码文件干扰度量。
+
+与重复检测相关的补充规则：
+
+- **CMake 注释识别**：`CMakeLists.txt` / `*.cmake` 按专有语言规则解析，行注释 `#` 与块注释 `#[[ ]]` 均不计入有效代码行，杜绝纯 license 注释被误判为重复块。
+- **有效行预过滤**：scc 口径有效代码行数 < 10（`min-lines`）的文件不参与重复检测，与 cmetrics "≥10 个有效代码行才算重复"的定义对齐。
+
 ## 使用方式
 
 ```yaml
@@ -52,7 +65,9 @@ jobs:
         with:
           # 可选：排除指定目录/文件，不传 exclude-dirs 默认全路径扫描
           # exclude-dirs: "node_modules,target,dist,.git,.gitcode,.mvn,.trae,vendor"
-          # 可选：扫描指定文件后缀的文件，不传 allowed-extensions 默认扫描全部文件
+          # 可选：指定扫描的文件扩展名（覆盖式：只扫指定扩展名 + 文件名特例，
+          # 如 CMakeLists.txt / Makefile 等构建文件始终放行）；
+          # 不传时按内置"常见代码扩展名白名单 + 文件名特例"扫描
           # allowed-extensions: ".c,.cpp,.h"
           apig-app-key: ${{ secrets.OPENLIBING_APIG_KEY }}
           apig-app-secret: ${{ secrets.OPENLIBING_APIG_SECRET }}
@@ -73,7 +88,7 @@ jobs:
 | 参数               | 必填 | 默认值       | 说明                                                                                                                                           |
 | ------------------ | ---- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | exclude-dirs       | 否   | -            | 排除目录列表，逗号分隔，不填时默认扫描全部路径                                                                                                 |
-| allowed-extensions | 否   | -            | 允许的文件扩展名，逗号分隔，不填时默认扫描所有文件类型                                                                                         |
+| allowed-extensions | 否   | -            | 允许的文件扩展名，逗号分隔。**覆盖式语义**：指定后只扫描这些扩展名的文件 + 文件名特例（CMakeLists.txt / Makefile / Dockerfile 等始终放行）；不填时按内置缺省白名单（50+ 常见代码扩展名）+ 文件名特例扫描 |
 | output             | 否   | metrics.json | 结果输出文件路径                                                                                                                               |
 | apig-app-key       | 是   | -            | APIG 网关 AppKey，用于上报检测结果到 openLiBing 平台（上传功能默认开启，此项必填，经 `with` 传入）                                             |
 | apig-app-secret    | 是   | -            | APIG 网关 AppSecret，用于上报检测结果到 openLiBing 平台（上传功能默认开启，此项必填，经 `with` 传入）                                          |
