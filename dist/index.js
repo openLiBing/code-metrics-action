@@ -2061,8 +2061,15 @@ const path = __nccwpck_require__(6928);
 
 // 将日期格式化为 yyyy-MM-dd HH:mm:ss
 function formatDateTime(date) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  // 固定按东八区输出：CI runner 容器时区多为 UTC，用本地组件取值会使检测时间比实际早 8 小时
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23'
+  });
+  // en-CA 输出形如 "2026-08-24, 11:05:29"，把逗号替换为空格统一为 yyyy-MM-dd HH:mm:ss
+  return fmt.format(date).replace(',', '');
 }
 
 class MetricsScanner {
