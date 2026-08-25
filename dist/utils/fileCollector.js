@@ -50,6 +50,40 @@ class FileCollector {
   }
 
   /**
+   * 判断目录/文件是否被 excludeDirs 命中。两条规则（对齐 .gitignore 心智，大小写敏感）：
+   * 1. 名称（不含 /）：任意层级的同名目录或文件均排除。例：docs、test.ts、jest.config.js
+   * 2. 路径（含 /）：锚定扫描根的相对路径精确匹配，命中即整棵子树剪枝。例：src/opensource/grapesjs；
+   *    前导斜杠为可选显式写法（/src/build ≡ src/build，/test.ts 仅匹配顶层 test.ts），
+   *    尾部斜杠忽略（docs/ 等价名称 docs）。
+   * 目录与文件统一适用同一条规则，不按类型区分。
+   */
+  static isExcluded(name, relPath, excludeDirs) {
+    if (!excludeDirs || excludeDirs.length === 0) {
+      return false;
+    }
+    const rel = (relPath || '').replace(/\\/g, '/');
+    for (const raw of excludeDirs) {
+      let d = String(raw).trim().replace(/\\/g, '/');
+      if (!d) continue;
+      // 是否含斜杠决定规则：含 / 走路径锚定，不含 / 走名称匹配。
+      // 先判再归一化（/i18n 含斜杠应锚定顶层，剥掉斜杠再判会退化成任意层级）
+      const hasSlash = d.indexOf('/') >= 0;
+      d = d.replace(/^\/+|\/+$/g, '');
+      if (!d) continue;
+      if (hasSlash) {
+        // 路径规则：相对扫描根精确匹配
+        if (d === rel) {
+          return true;
+        }
+      } else if (d === name) {
+        // 名称规则：任意层级（目录或文件统一）
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * 收集文件列表
    * @param {string|string[]} source - 源代码目录或文件路径（可以是字符串或数组）
    * @param {string[]} excludeDirs - 排除目录列表
