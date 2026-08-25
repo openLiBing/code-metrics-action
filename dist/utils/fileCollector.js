@@ -50,19 +50,13 @@ class FileCollector {
   }
 
   /**
-   * 归一化排除项：反斜杠→正斜杠、去首尾斜杠与空白。
-   * 前导斜杠形式（/i18n）等价于顶层相对路径（i18n）。
-   */
-  static normalizeExclude(item) {
-    return String(item).trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-  }
-
-  /**
-   * 判断目录/文件是否被 excludeDirs 命中。支持三种形式（大小写敏感）：
+   * 判断目录/文件是否被 excludeDirs 命中。支持四种形式（大小写敏感）：
    * 1. 纯名称（docs / .git / jest.config.js）：任意层级的同名目录或文件均排除
    * 2. 相对路径（src/opensource/grapesjs）：相对扫描根的路径精确匹配，命中即整棵子树剪枝
    * 3. 路径段后缀（codesize/commonplugin）：命中任意位置的同后缀路径
    *    （如 src/plugins/codesize/commonplugin），兜住从子目录视角抄写的相对路径
+   * 4. 前导斜杠锚定（/test.ts）：仅匹配扫描根下的顶层路径，不影响子目录同名条目
+   *    （对齐 .gitignore 的 / 语义；/test.ts 不排除 src/test.ts）
    * 历史行为兼容：旧的纯目录名匹配语义不变；带路径的排除项此前永远无法命中（bug），现按相对路径生效。
    */
   static isExcluded(name, relPath, excludeDirs) {
@@ -71,7 +65,17 @@ class FileCollector {
     }
     const rel = (relPath || '').replace(/\\/g, '/');
     for (const raw of excludeDirs) {
-      const d = FileCollector.normalizeExclude(raw);
+      let d = String(raw).trim().replace(/\\/g, '/');
+      if (!d) continue;
+      // 前导斜杠 = 锚定扫描根：仅顶层相对路径精确匹配，跳过名称/后缀匹配
+      if (d.startsWith('/')) {
+        const anchored = d.replace(/^\/+/, '');
+        if (anchored && anchored === rel) {
+          return true;
+        }
+        continue;
+      }
+      d = d.replace(/\/+$/, ''); // 去尾部斜杠（docs/ 等价 docs）
       if (!d) continue;
       // 纯名称匹配（任意层级）或 相对路径精确匹配（相对扫描根）
       if (d === name || d === rel) {
