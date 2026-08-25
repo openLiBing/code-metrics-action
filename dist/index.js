@@ -2997,11 +2997,15 @@ class FileCollector {
   }
 
   /**
-   * 判断目录/文件是否被 excludeDirs 命中。两条规则（对齐 .gitignore 心智，大小写敏感）：
-   * 1. 名称（不含 /）：任意层级的同名目录或文件均排除。例：docs、test.ts、jest.config.js
-   * 2. 路径（含 /）：锚定扫描根的相对路径精确匹配，命中即整棵子树剪枝。例：src/opensource/grapesjs；
-   *    前导斜杠为可选显式写法（/src/build ≡ src/build，/test.ts 仅匹配顶层 test.ts），
-   *    尾部斜杠忽略（docs/ 等价名称 docs）。
+   * 判断目录/文件是否被 excludeDirs 命中（大小写敏感）。匹配目标为条目相对扫描根的路径（正斜杠）。
+   * 规则：
+   * 1. 裸名称（不含 /）：
+   *    - 无通配符：仅顶层精确匹配。例：test.ts、docs（不命中 src/test.ts；排任意层级同名文件请用 globstar 路径）
+   *    - 含通配符：任意层级匹配条目名。例：*.test.js、*test*
+   * 2. 路径（含 /）：锚定扫描根，匹配相对路径，命中目录即整棵子树剪枝。
+   *    例：src/opensource/grapesjs、src/opensource/*
+   * 前导斜杠为可选显式写法（/test.ts 仅匹配顶层 test.ts），尾部斜杠忽略（docs/ ≡ docs）。
+   * 通配符：*（单段不含 /）、**（跨目录）、?（单字符）、[abc]/[!abc]（字符类）。
    * 目录与文件统一适用同一条规则，不按类型区分。
    */
   static isExcluded(name, relPath, excludeDirs) {
@@ -3012,22 +3016,90 @@ class FileCollector {
     for (const raw of excludeDirs) {
       let d = String(raw).trim().replace(/\\/g, '/');
       if (!d) continue;
-      // 是否含斜杠决定规则：含 / 走路径锚定，不含 / 走名称匹配。
-      // 先判再归一化（/i18n 含斜杠应锚定顶层，剥掉斜杠再判会退化成任意层级）
-      const hasSlash = d.indexOf('/') >= 0;
-      d = d.replace(/^\/+|\/+$/g, '');
+      // 尾部斜杠忽略（docs/ ≡ docs），先剥离再做通配符/斜杠判定
+      d = d.replace(/\/+$/g, '');
       if (!d) continue;
+      // 是否含斜杠决定规则：含 /（内部或前导）走路径锚定，不含 / 走名称匹配。
+      // 先判再剥前导斜杠（/i18n 含 / 应锚定顶层，剥掉后匹配串为 i18n）
+      const hasSlash = d.indexOf('/') >= 0;
+      d = d.replace(/^\/+/, '');
+      if (!d) continue;
+      // 是否含 glob 通配符（* ? [）
+      const hasWildcard = d.indexOf('*') >= 0 || d.indexOf('?') >= 0 || d.indexOf('[') >= 0;
       if (hasSlash) {
-        // 路径规则：相对扫描根精确匹配
-        if (d === rel) {
+        // 路径规则：锚定扫描根，匹配相对路径
+        if (FileCollector.globToRegExp(d).test(rel)) {
           return true;
         }
-      } else if (d === name) {
-        // 名称规则：任意层级（目录或文件统一）
+      } else if (hasWildcard) {
+        // 裸名称 + 通配符：任意层级匹配条目名
+        if (FileCollector.globToRegExp(d).test(name)) {
+          return true;
+        }
+      } else if (d === rel) {
+        // 裸名称（无通配符）：仅顶层精确匹配（等价锚定根）
         return true;
       }
     }
     return false;
+  }
+
+  // 将单个 glob 模式转为锚定整串匹配的正则（大小写敏感）。
+  // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
+  // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
+  static globToRegExp(glob) {
+    let re = '^';
+    for (let i = 0; i < glob.length; i++) {
+      const c = glob[i];
+      if (c === '*') {
+        // 连续 * 合并为 **（跨目录分隔符）
+        if (glob[i + 1] === '*') {
+          while (glob[i + 1] === '*') i++;
+          if (glob[i + 1] === '/') {
+            // **/：匹配 0 层或多层目录，顶层与任意深层均命中
+            re += '(?:.*/)?';
+            i++;
+          } else {
+            re += '.*';
+          }
+        } else {
+          // *：单段内任意字符（不含 /）
+          re += '[^/]*';
+        }
+      } else if (c === '?') {
+        re += '[^/]';
+      } else if (c === '[') {
+        // 字符类：[abc]、[a-z]、[!abc]（或 [^abc]）；未闭合的 [ 当作普通字符
+        let j = i + 1;
+        let negate = false;
+        if (glob[j] === '!' || glob[j] === '^') {
+          negate = true;
+          j++;
+        }
+        let cls = '';
+        let closed = false;
+        let first = true;
+        while (j < glob.length) {
+          if (glob[j] === ']' && !first) {
+            closed = true;
+            break;
+          }
+          first = false;
+          cls += glob[j];
+          j++;
+        }
+        if (closed) {
+          re += '[' + (negate ? '^' : '') + cls + ']';
+          i = j;
+        } else {
+          re += '\\[';
+        }
+      } else {
+        // 正则元字符转义，其余按字面匹配
+        re += '\\^$.|+(){}'.indexOf(c) >= 0 ? '\\' + c : c;
+      }
+    }
+    return new RegExp(re + '$');
   }
 
   /**
