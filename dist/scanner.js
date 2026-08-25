@@ -9,17 +9,6 @@ const FileUtils = require('./utils/fileUtils');
 const FileCollector = require('./utils/fileCollector');
 const path = require('path');
 
-// 环境变量脱敏：命中敏感 key 模式（SECRET/TOKEN/PASSWORD/KEY 等）时仅展示前 4 位，
-// 避免 Action inputs 注入的 INPUT_APIG-APP-SECRET 等凭证明文进入流水线日志
-const SENSITIVE_ENV_KEY_PATTERN = /SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|API[_-]?KEY|[-_]KEY$/i;
-
-function maskEnvValue(key, value) {
-  if (typeof value !== 'string' || value.length === 0 || !SENSITIVE_ENV_KEY_PATTERN.test(key)) {
-    return value;
-  }
-  return value.length <= 4 ? '***' : `${value.substring(0, 4)}***`;
-}
-
 // 将日期格式化为 yyyy-MM-dd HH:mm:ss
 function formatDateTime(date) {
   // 固定按东八区输出：CI runner 容器时区多为 UTC，用本地组件取值会使检测时间比实际早 8 小时
@@ -72,20 +61,10 @@ class MetricsScanner {
     });
   }
 
-  // 打印全部环境变量（按 key 排序）：用于排查 runner 注入的仓库上下文变量（如 commitId 相关）
-  logEnvironmentVariables() {
-    const keys = Object.keys(process.env).sort();
-    this.logger.info(`Environment variables (total ${keys.length}):`);
-    for (const key of keys) {
-      this.logger.info(`  [env] ${key}=${maskEnvValue(key, process.env[key])}`);
-    }
-  }
-
   async scan(options = {}) {
     const startTime = new Date();
     const startTimeFormatted = formatDateTime(startTime);
     this.logger.info('Starting code metrics scan...');
-    this.logEnvironmentVariables();
 
     const sourceInput = options.sourceDir || this.config.sourceDir;
     const sources = Array.isArray(sourceInput) ? sourceInput : [sourceInput];
@@ -252,6 +231,5 @@ module.exports = {
   SlocDetector,
   LizardDetector,
   DuplicationDetector,
-  MetricsCalculator,
-  maskEnvValue
+  MetricsCalculator
 };
