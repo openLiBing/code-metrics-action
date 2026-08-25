@@ -85,10 +85,13 @@ class MetricsCalculator {
         // 上下文片段快照（重复块±5行，整体 Base64 编码），由 buildContextSegments 生成
         existing.snapshotData = detail.snapshotData || null;
       } else {
+        // duplication 独有文件（scc 不识别其扩展名，如 .prelds）：
+        // loc 用 duplication 检测携带的 totalLines 兜底（本地"非空非注释"口径），
+        // 避免 loc=0 但 duplicationLineCount>0 的矛盾展示
         fileMap.set(detail.filePath, {
           filePath: detail.filePath,
           language: '',
-          loc: 0,
+          loc: detail.totalLines || 0,
           commentLines: 0,
           functionCount: 0,
           avgFunctionLoc: 0,

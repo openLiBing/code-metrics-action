@@ -469,12 +469,11 @@ class CoderepoUploader {
   /**
    * 把出现位置列表中的明文 content 编码为 contentB64，移除明文字段。
    * 已编码数据跳过（防二次编码）。
+   * 重复块内容完整编码不做截断：全量上报文件上传 OBS（不受 APIG body 限制），
+   * 入库 code_metrics_duplication_block.content_b64 为 LONGTEXT 可承载。
    */
   encodeOccurrences(occurrences) {
-    // 单条重复块内容上限（明文 15KB ≈ Base64 20KB），防止超大重复块把上报文件 JSON 撑爆
-    const MAX_CONTENT_CHARS = 15 * 1024;
     return occurrences.map(occ => {
-      const content = this.clipOversizeContent(occ.content, MAX_CONTENT_CHARS);
       return {
         groupId: occ.groupId,
         contentHash: occ.contentHash,
@@ -482,15 +481,16 @@ class CoderepoUploader {
         filePath: occ.filePath,
         startLine: occ.startLine,
         endLine: occ.endLine,
-        contentB64: this.encodeB64(content)
+        contentB64: this.encodeB64(occ.content)
       };
     });
   }
 
   /**
    * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
-   * 按行省略：头/尾各保留若干整行，省略标记显示被省略的行数（与 /file-content 的
-   * segments 省略样式一致）。仅针对超长场景（超过 maxChars）触发；未超长时原样返回。
+   * 按行省略：头/尾各保留若干整行，省略标记显示被省略的行数。
+   * 仅用于本地 metrics.json 输出文件的防护性裁剪（防 V8 单字符串上限）；
+   * 上报链路（encodeOccurrences）不截断，完整内容上传 OBS。
    */
   clipOversizeContent(content, maxChars) {
     if (typeof content !== 'string' || content.length <= maxChars) {
