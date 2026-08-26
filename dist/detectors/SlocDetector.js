@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const BaseDetector = require('./BaseDetector');
+const FileCollector = require('../utils/fileCollector');
 
 // scc 二进制文件路径：优先使用项目内置的 bin 目录，其次从 PATH 查找
 function getSccPath() {
@@ -57,10 +58,9 @@ class SlocDetector extends BaseDetector {
   buildSccArgs(sources, excludeDirs) {
     const args = ['-f', 'json', '--no-cocomo', '--no-size', '--by-file'];
 
-    // 排除目录
-    for (const dir of excludeDirs) {
-      args.push('--exclude-dir', dir);
-    }
+    // 不再向 scc 传 --exclude-dir：scc 自身的排除规则不支持 ** 等 glob 通配符，
+    // 无法与 FileCollector 的 exclude-dirs 语义对齐。改为扫描全量后，在 runScc 里
+    // 用 FileCollector.isPathExcluded 对每个文件做后置过滤，保证与其余指标完全一致。
 
     // 限制文件扩展名
     if (this.allowedExtensions.length > 0) {
@@ -93,6 +93,7 @@ class SlocDetector extends BaseDetector {
 
     // scc JSON 输出格式: 按语言分组
     // [{ Name, Code, Comment, Blank, Lines, Complexity, Count, Bytes, Files:[...] }]
+    const excludeDirs = this.config.excludeDirs || [];
     let totalCode = 0;
     let totalComment = 0;
     let totalBlank = 0;
@@ -104,14 +105,8 @@ class SlocDetector extends BaseDetector {
     const fileDetails = [];
 
     for (const lang of sccResult) {
-      totalCode += lang.Code || 0;
-      totalComment += lang.Comment || 0;
-      totalBlank += lang.Blank || 0;
-      totalLines += lang.Lines || 0;
-      totalComplexity += lang.Complexity || 0;
-      totalFiles += lang.Count || 0;
-
-      // 解析 --by-file 输出的每个文件
+      // 注意：不再累加语言级汇总（含被 exclude-dirs 排除的文件），改为逐文件统计并
+      // 过滤后累加，保证 codeScale 等与 FileCollector 收集的文件范围口径一致。
       if (lang.Files && Array.isArray(lang.Files)) {
         for (const file of lang.Files) {
           // scc 不同版本的 --by-file JSON 输出字段名可能不同：
@@ -126,10 +121,24 @@ class SlocDetector extends BaseDetector {
           }
           // 将绝对路径转为相对路径
           let filePath = this.toRelativePath(fileName, sources);
+          // 后置过滤：用 FileCollector 的目录剪枝语义排除命中 exclude-dirs 的文件，
+          // 保证与 FileCollector / lizard / duplication 收集的文件范围完全一致
+          if (excludeDirs.length > 0 && FileCollector.isPathExcluded(filePath, excludeDirs)) {
+            continue;
+          }
+          const code = file.Code || 0;
+          const comment = file.Comment || 0;
+          const blank = file.Blank || 0;
+          totalCode += code;
+          totalComment += comment;
+          totalBlank += blank;
+          totalLines += (file.Lines || (code + comment + blank));
+          totalComplexity += (file.Complexity || 0);
+          totalFiles++;
           fileDetails.push({
             filePath: filePath,
             language: lang.Name || '',
-            loc: file.Code || 0
+            loc: code
           });
         }
       }

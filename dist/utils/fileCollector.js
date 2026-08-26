@@ -97,6 +97,30 @@ class FileCollector {
     return false;
   }
 
+  /**
+   * 判断某条相对路径（文件或目录）是否被 excludeDirs 整棵剪枝命中（大小写敏感）。
+   * 与 _walkDir 的目录剪枝语义一致：逐层考察「文件自身 + 所有祖先目录」，
+   * 任一层级被 isExcluded 命中即判定排除。用于对 scc 等外部扫描器的输出做后置过滤，
+   * 保证与 FileCollector 收集的文件范围完全一致。
+   * 例：excludeDirs=['go/','cpp/**'] 时，
+   *   - go/test-codeql.go：祖先目录 go 命中顶层规则 → 排除
+   *   - cpp/part_dup1.cpp：自身命中 cpp/** → 排除
+   *   - src/go/x.go：go 非顶层，不命中 go/ → 保留
+   */
+  static isPathExcluded(relPath, excludeDirs) {
+    const p = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!p) return false;
+    const parts = p.split('/');
+    let prefix = '';
+    for (let i = 0; i < parts.length; i++) {
+      prefix = prefix ? prefix + '/' + parts[i] : parts[i];
+      if (FileCollector.isExcluded(parts[i], prefix, excludeDirs)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // 将单个 glob 模式转为锚定整串匹配的正则（大小写敏感）。
   // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
   // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
