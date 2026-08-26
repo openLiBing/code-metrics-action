@@ -107,8 +107,19 @@ class SlocDetector extends BaseDetector {
     for (const lang of sccResult) {
       // 注意：不再累加语言级汇总（含被 exclude-dirs 排除的文件），改为逐文件统计并
       // 过滤后累加，保证 codeScale 等与 FileCollector 收集的文件范围口径一致。
-      if (lang.Files && Array.isArray(lang.Files)) {
-        for (const file of lang.Files) {
+      const langFiles = lang.Files;
+      if (!langFiles || !Array.isArray(langFiles) || langFiles.length === 0) {
+        // 兜底：若某语言条目缺少/为空按文件明细（Files 缺失或为空数组），无法做文件级
+        // 排除，则按语言级汇总计入，避免该语言整体被丢弃导致总代码量/总文件数/总复杂度偏小。
+        totalCode += lang.Code || 0;
+        totalComment += lang.Comment || 0;
+        totalBlank += lang.Blank || 0;
+        totalLines += lang.Lines || 0;
+        totalComplexity += lang.Complexity || 0;
+        totalFiles += lang.Count || 0;
+        continue;
+      }
+      for (const file of langFiles) {
           // scc 不同版本的 --by-file JSON 输出字段名可能不同：
           //   - 旧版：Name 是完整路径
           //   - 新版（3.x+）：Name 是文件名，Location 是完整路径
@@ -141,7 +152,6 @@ class SlocDetector extends BaseDetector {
             loc: code
           });
         }
-      }
     }
 
     console.log(`  - Total files: ${totalFiles}`);

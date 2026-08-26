@@ -208,7 +208,11 @@ class FileCollector {
       } else if (stat.isFile()) {
         // 单文件输入：文件级排除 + 扩展名白名单双重过滤
         const name = path.basename(absolutePath);
-        if (FileCollector.isExcluded(name, name, excludeDirs)) {
+        // 相对扫描根的路径取调用方传入路径（正斜杠、剥离前导 ./ 与 /），
+        // 使含斜杠的路径式规则（如 src/opensource/*）在传入相对路径时同样生效；
+        // 两种形态叠加判断，保持与目录扫描的 isExcluded 语义一致。
+        const relInput = String(src).replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
+        if (FileCollector.isPathExcluded(name, excludeDirs) || FileCollector.isPathExcluded(relInput, excludeDirs)) {
           continue;
         }
         if (!FileCollector.isAllowedFile(name, allowedExtensions)) {
