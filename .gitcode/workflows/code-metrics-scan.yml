@@ -17,7 +17,7 @@ jobs:
         uses: checkout
 
       - name: code-metrics-scan
-        uses: openlibing/code-metrics-action@master
+        uses: openlibing/code-metrics-action@5bc7f44adc84a056845da4cc87eb92594bd8d51f
         with:
           apig-app-key: ${{ secrets.OPENLIBING_APIG_KEY }}
           apig-app-secret: ${{ secrets.OPENLIBING_APIG_SECRET }}
