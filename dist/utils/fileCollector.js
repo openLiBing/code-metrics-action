@@ -182,7 +182,7 @@ class FileCollector {
   /**
    * 收集文件列表
    * @param {string|string[]} source - 源代码目录或文件路径（可以是字符串或数组）
-   * @param {string[]} excludeDirs - 排除目录列表
+   * @param {string[]} excludeDirs - 排除列表（目录名 / 相对路径 / 文件名，逗号分隔）
    * @param {string[]} allowedExtensions - 允许的文件扩展名列表（配置后完全覆盖缺省白名单）
    * @returns {string[]} 文件路径列表
    */

@@ -82,17 +82,20 @@ jobs:
 
 ## 输入参数
 
-| 参数               | 必填 | 默认值                              | 说明                                                                                                                                           |
-| ------------------ | ---- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| exclude-dirs       | 否   | -                                   | 排除目录/文件列表，逗号分隔，支持通配符，不填时默认扫描全部路径                                                                                |
-| allowed-extensions | 否   | 50+ 常见代码扩展名，<br/>详情见下文 | 允许的文件扩展名，逗号分隔。                                                                                                                   |
-| output             | 否   | metrics.json                        | 结果输出文件路径                                                                                                                               |
-| apig-app-key       | 是   | -                                   | APIG 网关 AppKey，用于上报检测结果到 openLiBing 平台（上传功能默认开启，此项必填，经 `with` 传入）                                             |
-| apig-app-secret    | 是   | -                                   | APIG 网关 AppSecret，用于上报检测结果到 openLiBing 平台（上传功能默认开启，此项必填，经 `with` 传入）                                          |
-| obs-ak             | 是   | -                                   | OBS 访问密钥 AK，全量上报文件上传到 openLiBing 统一桶（openlibing-gitcode-action/code-metrics-action/），与 upload-sarif-action 复用同一套凭证 |
-| obs-sk             | 是   | -                                   | OBS 访问密钥 SK，与 obs-ak 配套                                                                                                                |
+| 参数               | 必填 | 默认值                              | 说明                                                            |
+| ------------------ | ---- | ----------------------------------- | --------------------------------------------------------------- |
+| exclude-dirs       | 否   | -                                   | 排除目录/文件列表，逗号分隔，支持通配符，不填时默认扫描全部路径 |
+| allowed-extensions | 否   | 50+ 常见代码扩展名，<br/>详情见下文 | 允许的文件扩展名，逗号分隔。                                    |
+| output             | 否   | metrics.json                        | 结果输出文件路径                                                |
 
-上传功能默认开启：全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences）先上传到 OBS，再通过 APIG 接口上报元数据与 OBS 下载链接。凭据通过 `apig-app-key` / `apig-app-secret`（APIG）与 `obs-ak` / `obs-sk`（OBS）传入，请在 workflow 的 `with` 中传入。
+上传功能默认开启，使用 OIDC 免密联邦认证（`@openlibing/huaweicloud-oidc-client` SDK：流水线 OIDC ID Token → 华为云 STS 临时凭证 → APIG V11 签名 + OBS 临时凭证上传），无需配置 AK/SK。要求所在 workflow 声明 `permissions: id-token: write`，否则无法申请 OIDC ID Token。
+
+```yaml
+permissions:
+  id-token: write
+```
+
+全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences）先上传到 OBS（临时凭证），再通过 APIG 接口上报元数据与 OBS 下载链接。
 
 ### 扫描范围（文件过滤规则）
 

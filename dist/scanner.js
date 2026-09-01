@@ -52,12 +52,7 @@ class MetricsScanner {
 
     this.uploader = new CoderepoUploader({
       coderepoUrl: config.uploader?.coderepoUrl,
-      timeout: (config.uploader?.timeout || 30) * 1000,
-      apigAppKey: config.uploader?.apigAppKey,
-      apigAppSecret: config.uploader?.apigAppSecret,
-      // OBS 上传凭证（复用 upload-sarif-action 同一套 OBS AK/SK）
-      obsAk: config.uploader?.obsAk,
-      obsSk: config.uploader?.obsSk
+      timeout: (config.uploader?.timeout || 30) * 1000
     });
   }
 

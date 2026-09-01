@@ -1,6 +1,6 @@
 name: "openlibing-code-metrics-action"
 author: "openLiBing"
-version: 1.0.6
+version: 1.0.7
 description: "代码度量扫描插件 - 检测代码规模、平均函数代码行数、平均圈复杂度、代码重复率和文件重复率"
 inputs:
   exclude-dirs:
@@ -34,50 +34,6 @@ inputs:
     layout:
       type: "input"
       label: "结果输出文件路径"
-      extend_prop:
-        visible_conditions: []
-        disabled_conditions: []
-      validation:
-        required_message: ""
-  apig-app-key:
-    description: "APIG 网关 AppKey（AK），用于上传检测结果到 openLiBing 平台。上传功能默认开启，此项必填"
-    required: true
-    layout:
-      type: "input"
-      label: "APIG AppKey"
-      extend_prop:
-        visible_conditions: []
-        disabled_conditions: []
-      validation:
-        required_message: ""
-  apig-app-secret:
-    description: "APIG 网关 AppSecret（SK），用于上传检测结果到 openLiBing 平台。上传功能默认开启，此项必填"
-    required: true
-    layout:
-      type: "input"
-      label: "APIG AppSecret"
-      extend_prop:
-        visible_conditions: []
-        disabled_conditions: []
-      validation:
-        required_message: ""
-  obs-ak:
-    description: "OBS 访问密钥（AK），用于把全量上报文件上传到 openLiBing 平台统一桶（openlibing-gitcode-action / code-metrics-action/）。与 upload-sarif-action 复用同一套 OBS 凭证，此项必填"
-    required: true
-    layout:
-      type: "input"
-      label: "OBS AK"
-      extend_prop:
-        visible_conditions: []
-        disabled_conditions: []
-      validation:
-        required_message: ""
-  obs-sk:
-    description: "OBS 访问密钥（SK），与 obs-ak 配套。此项必填"
-    required: true
-    layout:
-      type: "input"
-      label: "OBS SK"
       extend_prop:
         visible_conditions: []
         disabled_conditions: []
