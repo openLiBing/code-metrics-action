@@ -215,7 +215,7 @@ class ConfigLoader {
       try {
         const fileContent = fs.readFileSync(configPath, 'utf8');
         const ext = path.extname(configPath).toLowerCase();
-
+        
         let userConfig;
         if (ext === '.yaml' || ext === '.yml') {
           userConfig = yaml.load(fileContent);
@@ -236,12 +236,12 @@ class ConfigLoader {
 
   static mergeConfig(defaultConfig, userConfig) {
     const merged = { ...defaultConfig };
-
+    
     for (const key of Object.keys(userConfig)) {
       if (userConfig[key] === undefined || userConfig[key] === null) {
         continue;
       }
-
+      
       if (Array.isArray(userConfig[key])) {
         // 如果用户配置了数组，完全替换默认值
         merged[key] = [...userConfig[key]];
@@ -255,7 +255,7 @@ class ConfigLoader {
         merged[key] = userConfig[key];
       }
     }
-
+    
     return merged;
   }
 
@@ -586,6 +586,11 @@ class DuplicationDetector extends BaseDetector {
     const os = __nccwpck_require__(857);
     const { execSync } = __nccwpck_require__(5317);
     const sccPath = DuplicationDetector.getSccBinPath();
+    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
+    // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
+    if (!sccPath) {
+      return null;
+    }
     // 临时镜像目录：mkdtemp 防并发冲突，finally 统一清理
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-scc-'));
     try {
@@ -638,23 +643,43 @@ class DuplicationDetector extends BaseDetector {
    */
   static getSccBinPath() {
     const os = __nccwpck_require__(857);
-    // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
-    // - ncc bundle：模块级 __dirname 指向打包缓存目录，须用 ncc 注入的
-    //   __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin，否则回退裸 scc 报 not found
-    // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 dist/detectors，上溯一层为 dist/
-    const baseDir = (typeof __nccwpck_require2_ !== 'undefined')
-      ? __nccwpck_require2_.ab
-      : path.join(__dirname, '..');
-    const binDir = path.join(baseDir, 'bin');
     const ext = os.platform() === 'win32' ? '.exe' : '';
-    const localScc = path.join(binDir, `scc${ext}`);
-    if (fs.existsSync(localScc)) {
-      if (os.platform() !== 'win32') {
-        try { fs.chmodSync(localScc, 0o755); } catch (e) { /* 忽略 chmod 异常 */ }
-      }
-      return localScc;
+    // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+    // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
+    // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 dist/detectors
+    const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
+      ? __nccwpck_require2_.ab
+      : null;
+    // 候选顺序：bundle 根 + bin/ → bundle 根平铺（asset 平铺分发形态）→ 源码结构上溯
+    const candidates = [];
+    if (bundleRoot) {
+      candidates.push(path.join(bundleRoot, 'bin', `scc${ext}`));
+      candidates.push(path.join(bundleRoot, `scc${ext}`));
     }
-    return 'scc';
+    candidates.push(path.join(__dirname, 'bin', `scc${ext}`));
+    candidates.push(path.join(__dirname, '..', 'bin', `scc${ext}`));
+    candidates.push(path.join(__dirname, `scc${ext}`));
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        // 非 Windows：解压后可能丢失可执行权限位，运行时强制赋予 0o755
+        if (os.platform() !== 'win32') {
+          try { fs.chmodSync(candidate, 0o755); } catch (e) { /* 忽略 chmod 异常 */ }
+        }
+        console.log(`[DEBUG] scc 使用内置二进制: ${candidate}`);
+        return candidate;
+      }
+    }
+    // PATH 探测：确认环境本身安装了 scc 才使用裸命令名，
+    // 避免执行注定失败的命令产生误导性报错
+    try {
+      const probe = os.platform() === 'win32' ? 'where scc' : 'command -v scc';
+      (__nccwpck_require__(5317).execSync)(probe, { stdio: 'ignore' });
+      console.log('[DEBUG] scc 使用 PATH 中的命令');
+      return 'scc';
+    } catch (e) {
+      console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），重复行统计回退到本地 line-map');
+      return null;
+    }
   }
 
   // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）
@@ -1800,31 +1825,53 @@ const os = __nccwpck_require__(857);
 const BaseDetector = __nccwpck_require__(554);
 const FileCollector = __nccwpck_require__(4334);
 
-// scc 二进制文件路径：优先使用项目内置的 bin 目录，其次从 PATH 查找
+// scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
 function getSccPath() {
-  // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
-  // - ncc bundle：模块级 __dirname 指向打包缓存目录，须用 ncc 注入的
-  //   __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin，否则回退裸 scc 报 not found
-  // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 dist/detectors，上溯一层为 dist/
-  const baseDir = (typeof __nccwpck_require2_ !== 'undefined')
-    ? __nccwpck_require2_.ab
-    : path.join(__dirname, '..');
-  const binDir = path.join(baseDir, 'bin');
   const ext = os.platform() === 'win32' ? '.exe' : '';
-  const localScc = path.join(binDir, `scc${ext}`);
-  if (fs.existsSync(localScc)) {
-    // 非 Windows 环境：zip 打包 / git clone 在 Linux 解压后可能丢失可执行权限位，
-    // 导致 "Permission denied"。此处运行时强制赋予 0o755，保证可执行。
-    if (os.platform() !== 'win32') {
-      try {
-        fs.chmodSync(localScc, 0o755);
-      } catch (e) {
-        console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
-      }
-    }
-    return localScc;
+  // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+  // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
+  // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 dist/detectors
+  const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
+    ? __nccwpck_require2_.ab
+    : null;
+  // 候选顺序：
+  // 1. bundle 根 + bin/（标准 ncc 打包形态，asset 随目录分发）
+  // 2. bundle 根根目录平铺（部分平台分发时把 asset 平铺到 dist/ 根）
+  // 3. 源码结构：__dirname=dist/detectors，上溯一层为 dist/
+  const candidates = [];
+  if (bundleRoot) {
+    candidates.push(path.join(bundleRoot, 'bin', `scc${ext}`));
+    candidates.push(path.join(bundleRoot, `scc${ext}`));
   }
-  return 'scc';
+  candidates.push(path.join(__dirname, 'bin', `scc${ext}`));
+  candidates.push(path.join(__dirname, '..', 'bin', `scc${ext}`));
+  candidates.push(path.join(__dirname, `scc${ext}`));
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      // 非 Windows 环境：zip 打包 / git clone 解压后可能丢失可执行权限位，
+      // 运行时强制赋予 0o755，保证可执行
+      if (os.platform() !== 'win32') {
+        try {
+          fs.chmodSync(candidate, 0o755);
+        } catch (e) {
+          console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
+        }
+      }
+      console.log(`[DEBUG] scc 使用内置二进制: ${candidate}`);
+      return candidate;
+    }
+  }
+  // PATH 探测：确认 runner 环境本身安装了 scc 才使用裸命令名，
+  // 避免执行注定失败的命令产生误导性报错
+  try {
+    const probe = os.platform() === 'win32' ? 'where scc' : 'command -v scc';
+    execSync(probe, { stdio: 'ignore' });
+    console.log('[DEBUG] scc 使用 PATH 中的命令');
+    return 'scc';
+  } catch (e) {
+    console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
+    return null;
+  }
 }
 
 class SlocDetector extends BaseDetector {
@@ -1839,6 +1886,12 @@ class SlocDetector extends BaseDetector {
     const excludeDirs = this.config.excludeDirs || [];
 
     const sccArgs = this.buildSccArgs(sources, excludeDirs);
+
+    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接回退本地逐文件统计，
+    // 跳过注定失败的命令执行
+    if (!this.sccPath) {
+      return this.fallbackDetect(sources, excludeDirs);
+    }
 
     try {
       const result = this.runScc(sccArgs, sources);
@@ -2335,8 +2388,9 @@ class MetricsScanner {
         });
 
         if (uploadResult.success) {
-          this.logger.info(`Successfully uploaded metrics, recordId: ${uploadResult.recordId}`);
-          result.uploadInfo = { success: true, recordId: uploadResult.recordId };
+          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
+          this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
+          result.uploadInfo = { success: true, obsUrl: uploadResult.obsUrl };
         } else {
           this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
           result.uploadInfo = { success: false, error: uploadResult.error };
@@ -3347,7 +3401,7 @@ class FileUtils {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-
+    
     const content = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
     fs.writeFileSync(filePath, content, 'utf8');
   }
@@ -4006,8 +4060,8 @@ class OidcClient {
             const res = yield httpclient
                 .getJson(id_token_url)
                 .catch(error => {
-                throw new Error(`Failed to get ID Token. \n
-        Error Code : ${error.statusCode}\n
+                throw new Error(`Failed to get ID Token. \n 
+        Error Code : ${error.statusCode}\n 
         Error Message: ${error.message}`);
             });
             const id_token = (_a = res.result) === null || _a === void 0 ? void 0 : _a.value;
@@ -6968,7 +7022,7 @@ var diagnostics = create(function dev(namespace, options) {
   if (!dev.enabled(namespace) && !(options.force || dev.force)) {
     return dev.nope(options);
   }
-
+  
   return dev.yep(options);
 });
 
@@ -62225,7 +62279,7 @@ module.exports = {"version":"3.19.0"};
 /************************************************************************/
 /******/ 	// The module cache
 /******/ 	var __webpack_module_cache__ = {};
-/******/
+/******/ 	
 /******/ 	// The require function
 /******/ 	function __nccwpck_require__(moduleId) {
 /******/ 		// Check if module is in cache
@@ -62239,7 +62293,7 @@ module.exports = {"version":"3.19.0"};
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
 /******/ 		};
-/******/
+/******/ 	
 /******/ 		// Execute the module function
 /******/ 		var threw = true;
 /******/ 		try {
@@ -62248,16 +62302,16 @@ module.exports = {"version":"3.19.0"};
 /******/ 		} finally {
 /******/ 			if(threw) delete __webpack_module_cache__[moduleId];
 /******/ 		}
-/******/
+/******/ 	
 /******/ 		// Return the exports of the module
 /******/ 		return module.exports;
 /******/ 	}
-/******/
+/******/ 	
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat */
-/******/
+/******/ 	
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
-/******/
+/******/ 	
 /************************************************************************/
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
@@ -62296,7 +62350,7 @@ async function run() {
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
     // coderepo 服务地址硬编码到插件（部署时确定的固定值）
-    const coderepoUrl = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com';
+    const coderepoUrl = 'https://apig.openlibing.com:443';
     // 认证模式判定（OIDC 联邦认证标识）：workflow 声明 permissions: id-token: write 时，
     // runner 注入 ACTIONS_ID_TOKEN_REQUEST_URL，走新接口（/action-api/...）+ OIDC 免密认证；
     // 未声明时走旧接口（/openlibing-coderepo/...）+ AK/SK 签名，兼容尚未适配的存量脚本

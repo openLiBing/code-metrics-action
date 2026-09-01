@@ -290,6 +290,11 @@ class DuplicationDetector extends BaseDetector {
     const os = require('os');
     const { execSync } = require('child_process');
     const sccPath = DuplicationDetector.getSccBinPath();
+    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
+    // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
+    if (!sccPath) {
+      return null;
+    }
     // 临时镜像目录：mkdtemp 防并发冲突，finally 统一清理
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-scc-'));
     try {
@@ -342,23 +347,43 @@ class DuplicationDetector extends BaseDetector {
    */
   static getSccBinPath() {
     const os = require('os');
-    // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
-    // - ncc bundle：模块级 __dirname 指向打包缓存目录，须用 ncc 注入的
-    //   __nccwpck_require__.ab（bundle 根 = dist/）定位内置 bin，否则回退裸 scc 报 not found
-    // - 源码结构：无 __nccwpck_require__ 全局，__dirname 即 dist/detectors，上溯一层为 dist/
-    const baseDir = (typeof __nccwpck_require__ !== 'undefined')
-      ? __nccwpck_require__.ab
-      : path.join(__dirname, '..');
-    const binDir = path.join(baseDir, 'bin');
     const ext = os.platform() === 'win32' ? '.exe' : '';
-    const localScc = path.join(binDir, `scc${ext}`);
-    if (fs.existsSync(localScc)) {
-      if (os.platform() !== 'win32') {
-        try { fs.chmodSync(localScc, 0o755); } catch (e) { /* 忽略 chmod 异常 */ }
-      }
-      return localScc;
+    // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+    // - ncc bundle：用 ncc 注入的 __nccwpck_require__.ab（bundle 根 = dist/）定位内置 bin
+    // - 源码结构：无 __nccwpck_require__ 全局，__dirname 即 dist/detectors
+    const bundleRoot = (typeof __nccwpck_require__ !== 'undefined')
+      ? __nccwpck_require__.ab
+      : null;
+    // 候选顺序：bundle 根 + bin/ → bundle 根平铺（asset 平铺分发形态）→ 源码结构上溯
+    const candidates = [];
+    if (bundleRoot) {
+      candidates.push(path.join(bundleRoot, 'bin', `scc${ext}`));
+      candidates.push(path.join(bundleRoot, `scc${ext}`));
     }
-    return 'scc';
+    candidates.push(path.join(__dirname, 'bin', `scc${ext}`));
+    candidates.push(path.join(__dirname, '..', 'bin', `scc${ext}`));
+    candidates.push(path.join(__dirname, `scc${ext}`));
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        // 非 Windows：解压后可能丢失可执行权限位，运行时强制赋予 0o755
+        if (os.platform() !== 'win32') {
+          try { fs.chmodSync(candidate, 0o755); } catch (e) { /* 忽略 chmod 异常 */ }
+        }
+        console.log(`[DEBUG] scc 使用内置二进制: ${candidate}`);
+        return candidate;
+      }
+    }
+    // PATH 探测：确认环境本身安装了 scc 才使用裸命令名，
+    // 避免执行注定失败的命令产生误导性报错
+    try {
+      const probe = os.platform() === 'win32' ? 'where scc' : 'command -v scc';
+      require('child_process').execSync(probe, { stdio: 'ignore' });
+      console.log('[DEBUG] scc 使用 PATH 中的命令');
+      return 'scc';
+    } catch (e) {
+      console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），重复行统计回退到本地 line-map');
+      return null;
+    }
   }
 
   // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）

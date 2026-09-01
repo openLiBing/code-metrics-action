@@ -183,8 +183,9 @@ class MetricsScanner {
         });
 
         if (uploadResult.success) {
-          this.logger.info(`Successfully uploaded metrics, recordId: ${uploadResult.recordId}`);
-          result.uploadInfo = { success: true, recordId: uploadResult.recordId };
+          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
+          this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
+          result.uploadInfo = { success: true, obsUrl: uploadResult.obsUrl };
         } else {
           this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
           result.uploadInfo = { success: false, error: uploadResult.error };
