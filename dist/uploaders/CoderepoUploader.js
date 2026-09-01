@@ -1,13 +1,264 @@
+const axios = require('axios');
+const crypto = require('crypto');
 const { callApig, getCredentials } = require('@openlibing/huaweicloud-oidc-client');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execSync, execFileSync } = require('child_process');
 
+// 上报接口路径前缀：新旧网关接口与认证方式一一对应
+// - OIDC 联邦认证（新）：workflow 声明 permissions: id-token: write 时启用
+// - AK/SK 签名（旧）：存量脚本兼容，接口与认证方式保持不变
+const OIDC_API_PREFIX = '/action-api';
+const AKSK_API_PREFIX = '/openlibing-coderepo';
+
+/**
+ * 华为云 APIG 签名器（SDK-HMAC-SHA256，AK/SK 模式使用）
+ * 基于官方 SDK APIGW-javascript-sdk-2.0.6 的 signer.js 完全对齐
+ * 签名流程：CanonicalRequest → StringToSign → HMAC-SHA256 → Authorization
+ */
+class ApigSigner {
+  constructor(ak, sk) {
+    this.ak = ak;
+    this.sk = sk;
+  }
+
+  /**
+   * 对请求进行签名，返回包含签名头的完整 headers
+   * 与官方 SDK 的 Signer.prototype.Sign() 方法对齐
+   */
+  sign({ method, url, headers = {}, body = '' }) {
+    // 解析 URL，提取 host、pathname、查询参数
+    const parsed = new URL(url);
+    const host = parsed.host;
+
+    // 解析 URI 和查询参数（与官方 SDK 的 HttpRequest 构造函数对齐）
+    const uri = decodeURIComponent(parsed.pathname);
+    const query = {};
+    if (parsed.search) {
+      const searchStr = parsed.search.substring(1);
+      for (const pair of searchStr.split('&')) {
+        const idx = pair.indexOf('=');
+        const key = idx >= 0 ? pair.substring(0, idx) : pair;
+        const value = idx >= 0 ? pair.substring(idx + 1) : '';
+        if (key) {
+          const decodedKey = decodeURIComponent(key);
+          const decodedValue = decodeURIComponent(value);
+          if (query[decodedKey] === undefined) {
+            query[decodedKey] = [decodedValue];
+          } else {
+            query[decodedKey].push(decodedValue);
+          }
+        }
+      }
+    }
+
+    // 设置时间戳（检查是否已有 X-Sdk-Date 头）
+    let datetime = null;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'x-sdk-date') {
+        datetime = headers[k];
+        break;
+      }
+    }
+    if (!datetime) {
+      datetime = this._getDateTime();
+      headers['X-Sdk-Date'] = datetime;
+    }
+
+    // 非 PUT/PATCH/POST 时 body 不参与签名（官方 SDK 规范）
+    if (method !== 'PUT' && method !== 'PATCH' && method !== 'POST') {
+      body = '';
+    }
+
+    // 确保 host 头存在
+    let hasHost = false;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'host') { hasHost = true; break; }
+    }
+    if (!hasHost) {
+      headers['Host'] = host;
+    }
+
+    // 获取参与签名的 header 列表（所有 header 名称小写排序）
+    const signedHeaderNames = Object.keys(headers).map(k => k.toLowerCase()).sort();
+
+    // 构造规范化 URI：每段 URL 编码后用 / 拼接，末尾强制补 /
+    const canonicalUri = this._canonicalUri(uri);
+
+    // 构造规范化查询字符串
+    const canonicalQs = this._canonicalQueryString(query);
+
+    // 构造规范化 Headers
+    const lowerHeaders = {};
+    for (const [k, v] of Object.entries(headers)) {
+      lowerHeaders[k.toLowerCase()] = v;
+    }
+    const canonicalHeaders = signedHeaderNames
+      .map(name => `${name}:${lowerHeaders[name].trim()}`)
+      .join('\n') + '\n';
+
+    const signedHeadersStr = signedHeaderNames.join(';');
+
+    // 计算 body 哈希（如果请求头中有 x-sdk-content-sha256，直接使用其值）
+    let hashedPayload;
+    let hasContentSha256 = false;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'x-sdk-content-sha256') {
+        hashedPayload = headers[k];
+        hasContentSha256 = true;
+        break;
+      }
+    }
+    if (!hasContentSha256) {
+      hashedPayload = this._sha256Hex(body);
+    }
+
+    // 构造规范化请求
+    const canonicalRequest = [
+      method.toUpperCase(),
+      canonicalUri,
+      canonicalQs,
+      canonicalHeaders,
+      signedHeadersStr,
+      hashedPayload
+    ].join('\n');
+
+    // 构造待签名字符串
+    const stringToSign = [
+      'SDK-HMAC-SHA256',
+      datetime,
+      this._sha256Hex(canonicalRequest)
+    ].join('\n');
+
+    // 计算签名
+    const signature = this._hmacSha256Hex(this.sk, stringToSign);
+
+    // 构造 Authorization 头
+    headers['Authorization'] = `SDK-HMAC-SHA256 Access=${this.ak}, SignedHeaders=${signedHeadersStr}, Signature=${signature}`;
+
+    return headers;
+  }
+
+  /**
+   * 构造规范化 URI：每段用 SDK 的 urlEncode 编码，末尾强制补 /
+   * 与官方 SDK 的 CanonicalURI() 函数完全对齐
+   */
+  _canonicalUri(uri) {
+    if (!uri || uri === '') return '/';
+    const parts = uri.split('/');
+    const encoded = parts.map(s => this._urlEncode(s));
+    let urlpath = encoded.join('/');
+    // 末尾强制补 /（官方 SDK 规范，APIG 网关签名校验要求）
+    if (urlpath[urlpath.length - 1] !== '/') {
+      urlpath = urlpath + '/';
+    }
+    return urlpath;
+  }
+
+  /**
+   * 构造规范化查询字符串
+   * 与官方 SDK 的 CanonicalQueryString() 函数对齐
+   */
+  _canonicalQueryString(query) {
+    const keys = Object.keys(query).sort();
+    if (keys.length === 0) return '';
+    const parts = [];
+    for (const key of keys) {
+      const k = this._urlEncode(key);
+      const values = Array.isArray(query[key]) ? [...query[key]].sort() : [query[key]];
+      for (const v of values) {
+        parts.push(`${k}=${this._urlEncode(v)}`);
+      }
+    }
+    return parts.join('&');
+  }
+
+  /**
+   * URL 编码：基于 Node.js querystring 模块改写，与官方 SDK 的 urlEncode() 完全对齐
+   * 不编码字符：A-Z a-z 0-9 - . _ ~
+   * 与 encodeURIComponent 的区别：! * ' ( ) 会被编码（encodeURIComponent 不编码这些）
+   */
+  _urlEncode(str) {
+    if (typeof str !== 'string') {
+      if (typeof str === 'object') str = String(str);
+      else str += '';
+    }
+    const hexTable = [];
+    for (let i = 0; i < 256; ++i) {
+      hexTable[i] = '%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase();
+    }
+    const noEscape = [
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
+      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1,
+      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0
+    ];
+    let out = '';
+    let lastPos = 0;
+    for (let i = 0; i < str.length; ++i) {
+      const c = str.charCodeAt(i);
+      if (c < 0x80) {
+        if (noEscape[c] === 1) continue;
+        if (lastPos < i) out += str.slice(lastPos, i);
+        lastPos = i + 1;
+        out += hexTable[c];
+        continue;
+      }
+      if (lastPos < i) out += str.slice(lastPos, i);
+      if (c < 0x800) {
+        lastPos = i + 1;
+        out += hexTable[0xC0 | (c >> 6)] + hexTable[0x80 | (c & 0x3F)];
+        continue;
+      }
+      if (c < 0xD800 || c >= 0xE000) {
+        lastPos = i + 1;
+        out += hexTable[0xE0 | (c >> 12)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
+        continue;
+      }
+      ++i;
+      if (i >= str.length) throw new URIError('ERR_INVALID_URI');
+      const c2 = str.charCodeAt(i) & 0x3FF;
+      lastPos = i + 1;
+      c = 0x10000 + (((c & 0x3FF) << 10) | c2);
+      out += hexTable[0xF0 | (c >> 18)] + hexTable[0x80 | ((c >> 12) & 0x3F)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
+    }
+    if (lastPos === 0) return str;
+    if (lastPos < str.length) return out + str.slice(lastPos);
+    return out;
+  }
+
+  _getDateTime() {
+    const now = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}T${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}Z`;
+  }
+
+  _sha256Hex(data) {
+    return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
+  }
+
+  _hmacSha256Hex(key, data) {
+    return crypto.createHmac('sha256', key).update(data, 'utf8').digest('hex');
+  }
+}
+
 class CoderepoUploader {
   constructor(config = {}) {
     this.baseUrl = config.coderepoUrl || 'http://localhost:8080';
     this.timeout = config.timeout || 30000;
+    // 认证模式：useOidc=true 走新接口（/action-api/...）+ OIDC 免密联邦认证；
+    // 否则走旧接口（/openlibing-coderepo/...）+ AK/SK（SDK-HMAC-SHA256）签名，兼容存量脚本
+    this.useOidc = !!config.useOidc;
+    this.apigAppKey = config.apigAppKey || '';
+    this.apigAppSecret = config.apigAppSecret || '';
+    // OBS 上传凭证（AK/SK 模式使用）：复用 openlibing 平台 gitcode-action 统一桶（私有对象，供后端按 objectKey 下载）
+    this.obsAk = config.obsAk || '';
+    this.obsSk = config.obsSk || '';
     // 平台所有 gitcode-action 插件上报结果的统一桶，code-metrics-action 目录存放代码度量上报
     this.obsBucket = config.obsBucket || 'openlibing-gitcode-action';
     // OBS 写/读 endpoint（华为云西南-贵阳一）
@@ -18,9 +269,9 @@ class CoderepoUploader {
   /**
    * 上报代码度量指标。
    *
-   * 使用 OIDC 免密联邦认证（@openlibing/huaweicloud-oidc-client）：
-   * - APIG 上报：callApig 自动完成 OIDC ID Token 申请 -> STS 换证 -> V11 签名 + X-Security-Token
-   * - OBS 上传：getCredentials 获取 STS 临时凭证，obsutil 经 -i/-k/-t 参数传递临时凭证
+   * 认证模式（由 workflow 是否声明 permissions: id-token: write 决定）：
+   * - OIDC 联邦认证（新）：APIG 上报走 callApig 自动换证签名；OBS 上传走 STS 临时凭证
+   * - AK/SK 签名（旧）：APIG 上报走 ApigSigner 签名；OBS 上传走 obs-ak/obs-sk 静态凭证
    *
    * 流程（OBS 中转 + 单接口，彻底规避 APIG 12MB 请求体上限）：
    * 1. 组装全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences），写本地临时 json
@@ -96,15 +347,21 @@ class CoderepoUploader {
 
   /**
    * 组装全量上报文件并上传到 OBS，返回固定格式下载链接与 objectKey。
-   * OBS 凭证使用 OIDC 联邦认证换取的 STS 临时凭证（短时效，仅本次流水线运行有效）。
+   * OBS 凭证按认证模式选择：
+   * - OIDC 模式：getCredentials 获取 STS 临时凭证（短时效，仅本次流水线运行有效）
+   * - AK/SK 模式：workflow 传入的 obs-ak / obs-sk 静态凭证
    */
   async uploadFullPayloadToOBS(fullPayload, options) {
     let cred;
-    try {
-      // 获取 STS 临时凭证（SDK 内部缓存，同一次流水线运行内只换证一次）
-      cred = await getCredentials();
-    } catch (e) {
-      return { success: false, error: `获取 OIDC 临时凭证失败: ${e.message}` };
+    if (this.useOidc) {
+      try {
+        // 获取 STS 临时凭证（SDK 内部缓存，同一次流水线运行内只换证一次）
+        cred = await getCredentials();
+      } catch (e) {
+        return { success: false, error: `获取 OIDC 临时凭证失败: ${e.message}` };
+      }
+    } else if (!this.obsAk || !this.obsSk) {
+      return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
     }
     // 写本地临时文件（runner 上临时目录，用完即删）
     const tmpFile = path.join(os.tmpdir(), `code-metrics-${Date.now()}.json`);
@@ -132,8 +389,10 @@ class CoderepoUploader {
    * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
    * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
    *
-   * 凭证传递：使用 OIDC 联邦认证换取的 STS 临时凭证，经 -e/-i/-k/-t 命令行参数传
-   * endpoint/临时AK/临时SK/SecurityToken。CI 平台对临时令牌自动掩码，不会明文落日志。
+   * 凭证传递（按认证模式）：
+   * - OIDC 模式：STS 临时凭证，经 -e/-i/-k/-t 命令行参数传 endpoint/临时AK/临时SK/SecurityToken
+   * - AK/SK 模式：静态 obs-ak/obs-sk，经 -e/-i/-k 命令行参数传递
+   * CI 平台对 secrets/临时令牌自动掩码，不会明文落日志。
    *
    * 安全处理：用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
    * 外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令。
@@ -152,11 +411,15 @@ class CoderepoUploader {
       localFilePath,
       `obs://${this.obsBucket}/${objectKey}`,
       '-f',
-      `-e=${this.obsEndpoint}`,
-      `-i=${cred.accessKeyId}`,
-      `-k=${cred.secretAccessKey}`,
-      `-t=${cred.securityToken}`
+      `-e=${this.obsEndpoint}`
     ];
+    if (this.useOidc) {
+      // OIDC 模式：STS 临时凭证 + SecurityToken
+      args.push(`-i=${cred.accessKeyId}`, `-k=${cred.secretAccessKey}`, `-t=${cred.securityToken}`);
+    } else {
+      // AK/SK 模式：静态凭证
+      args.push(`-i=${this.obsAk}`, `-k=${this.obsSk}`);
+    }
     // 打印执行命令（-k/-t 参数脱敏），便于定位上传失败原因
     const maskedArgs = args.map(a => (a.startsWith('-k=') || a.startsWith('-t=') ? `${a.split('=')[0]}=***` : a));
     console.log(`[upload] exec obsutil ${maskedArgs.join(' ')}`);
@@ -327,28 +590,49 @@ class CoderepoUploader {
   }
 
   /**
-   * 拼接完整请求 URL：baseUrl 已包含 /openlibing-coderepo 前缀
+   * 拼接完整请求 URL：按认证模式选择新旧接口前缀
+   * - OIDC 模式：/action-api/metrics/code/report
+   * - AK/SK 模式：/openlibing-coderepo/metrics/code/report
    */
   buildUrl(path) {
-    return this.baseUrl.replace(/\/+$/, '') + '/openlibing-coderepo' + path;
+    const prefix = this.useOidc ? OIDC_API_PREFIX : AKSK_API_PREFIX;
+    return this.baseUrl.replace(/\/+$/, '') + prefix + path;
   }
 
   /**
-   * 调用 APIG 上报接口并解析 DataResult 响应。
-   * 使用 SDK callApig：OIDC 免密联邦认证（OIDC ID Token -> STS 临时凭证 ->
-   * V11-HMAC-SHA256 签名 + X-Security-Token），替代原 AK/SK（SDK-HMAC-SHA256）签名方式。
+   * 调用 APIG 上报接口并解析 DataResult 响应（按认证模式选择签名方式）。
+   * - OIDC 模式：SDK callApig 免密联邦认证（OIDC ID Token -> STS 临时凭证 ->
+   *   V11-HMAC-SHA256 签名 + X-Security-Token）
+   * - AK/SK 模式：ApigSigner SDK-HMAC-SHA256 签名（原有方式）
    * 返回 { success, recordId?, error? }
    */
   async report(url, body) {
     try {
-      const res = await callApig('POST', url, { 'Content-Type': 'application/json' }, body);
-      const resData = res.data;
+      let resData;
+      if (this.useOidc) {
+        const res = await callApig('POST', url, { 'Content-Type': 'application/json' }, body);
+        resData = res.data;
 
-      // 非 2xx：HTTP 层失败（网关拒绝、鉴权失败等）
-      if (res.status < 200 || res.status >= 300) {
-        const httpMsg = (resData && (resData.msg || resData.message || resData.error_msg)) || `HTTP ${res.status}`;
-        console.error(`Upload failed: HTTP ${res.status}, URL: ${url}`);
-        return { success: false, error: httpMsg };
+        // 非 2xx：HTTP 层失败（网关拒绝、鉴权失败等）
+        if (res.status < 200 || res.status >= 300) {
+          const httpMsg = (resData && (resData.msg || resData.message || resData.error_msg)) || `HTTP ${res.status}`;
+          console.error(`Upload failed: HTTP ${res.status}, URL: ${url}`);
+          return { success: false, error: httpMsg };
+        }
+      } else {
+        // AK/SK 模式：凭证缺失时直接失败并给出明确提示
+        if (!this.apigAppKey || !this.apigAppSecret) {
+          return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 AK/SK 凭证（apig-app-key / apig-app-secret），无法上报' };
+        }
+        const signer = new ApigSigner(this.apigAppKey, this.apigAppSecret);
+        const headers = signer.sign({
+          method: 'POST',
+          url: url,
+          headers: { 'Content-Type': 'application/json' },
+          body: body
+        });
+        const response = await axios.post(url, body, { headers, timeout: this.timeout });
+        resData = response.data;
       }
 
       // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功

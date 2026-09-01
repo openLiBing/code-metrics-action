@@ -52,7 +52,12 @@ class MetricsScanner {
 
     this.uploader = new CoderepoUploader({
       coderepoUrl: config.uploader?.coderepoUrl,
-      timeout: (config.uploader?.timeout || 30) * 1000
+      timeout: (config.uploader?.timeout || 30) * 1000,
+      useOidc: config.uploader?.useOidc,
+      apigAppKey: config.uploader?.apigAppKey,
+      apigAppSecret: config.uploader?.apigAppSecret,
+      obsAk: config.uploader?.obsAk,
+      obsSk: config.uploader?.obsSk
     });
   }
 
