@@ -7,7 +7,7 @@ class FileUtils {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    
+
     const content = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
     fs.writeFileSync(filePath, content, 'utf8');
   }

@@ -215,7 +215,7 @@ class ConfigLoader {
       try {
         const fileContent = fs.readFileSync(configPath, 'utf8');
         const ext = path.extname(configPath).toLowerCase();
-        
+
         let userConfig;
         if (ext === '.yaml' || ext === '.yml') {
           userConfig = yaml.load(fileContent);
@@ -236,12 +236,12 @@ class ConfigLoader {
 
   static mergeConfig(defaultConfig, userConfig) {
     const merged = { ...defaultConfig };
-    
+
     for (const key of Object.keys(userConfig)) {
       if (userConfig[key] === undefined || userConfig[key] === null) {
         continue;
       }
-      
+
       if (Array.isArray(userConfig[key])) {
         // 如果用户配置了数组，完全替换默认值
         merged[key] = [...userConfig[key]];
@@ -255,7 +255,7 @@ class ConfigLoader {
         merged[key] = userConfig[key];
       }
     }
-    
+
     return merged;
   }
 
@@ -3401,7 +3401,7 @@ class FileUtils {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    
+
     const content = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
     fs.writeFileSync(filePath, content, 'utf8');
   }
@@ -4060,8 +4060,8 @@ class OidcClient {
             const res = yield httpclient
                 .getJson(id_token_url)
                 .catch(error => {
-                throw new Error(`Failed to get ID Token. \n 
-        Error Code : ${error.statusCode}\n 
+                throw new Error(`Failed to get ID Token. \n
+        Error Code : ${error.statusCode}\n
         Error Message: ${error.message}`);
             });
             const id_token = (_a = res.result) === null || _a === void 0 ? void 0 : _a.value;
@@ -7022,7 +7022,7 @@ var diagnostics = create(function dev(namespace, options) {
   if (!dev.enabled(namespace) && !(options.force || dev.force)) {
     return dev.nope(options);
   }
-  
+
   return dev.yep(options);
 });
 
@@ -62279,7 +62279,7 @@ module.exports = {"version":"3.19.0"};
 /************************************************************************/
 /******/ 	// The module cache
 /******/ 	var __webpack_module_cache__ = {};
-/******/ 	
+/******/
 /******/ 	// The require function
 /******/ 	function __nccwpck_require__(moduleId) {
 /******/ 		// Check if module is in cache
@@ -62293,7 +62293,7 @@ module.exports = {"version":"3.19.0"};
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
 /******/ 		};
-/******/ 	
+/******/
 /******/ 		// Execute the module function
 /******/ 		var threw = true;
 /******/ 		try {
@@ -62302,16 +62302,16 @@ module.exports = {"version":"3.19.0"};
 /******/ 		} finally {
 /******/ 			if(threw) delete __webpack_module_cache__[moduleId];
 /******/ 		}
-/******/ 	
+/******/
 /******/ 		// Return the exports of the module
 /******/ 		return module.exports;
 /******/ 	}
-/******/ 	
+/******/
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat */
-/******/ 	
+/******/
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
-/******/ 	
+/******/
 /************************************************************************/
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
@@ -62350,7 +62350,7 @@ async function run() {
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
     // coderepo 服务地址硬编码到插件（部署时确定的固定值）
-    const coderepoUrl = 'https://apig.openlibing.com:443';
+    const coderepoUrl = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com';
     // 认证模式判定（OIDC 联邦认证标识）：workflow 声明 permissions: id-token: write 时，
     // runner 注入 ACTIONS_ID_TOKEN_REQUEST_URL，走新接口（/action-api/...）+ OIDC 免密认证；
     // 未声明时走旧接口（/openlibing-coderepo/...）+ AK/SK 签名，兼容尚未适配的存量脚本
