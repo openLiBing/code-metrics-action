@@ -22,6 +22,8 @@ Kotlin  Scala  Swift  Objective-C  Lua  Perl  R  PL/SQL  Vue.js  Erlang
 Fortran  GDScript  Solidity  Structured Text  TTCN-3  Zig
 ```
 
+> 上述 26 种语言是缺省扩展名白名单（50+，见「扫描范围」）中能完整产出 5 项指标的子集；白名单中的其他语言（Shell、JSON/XML/YAML 等）仅统计代码规模与重复率。
+
 ## 指标说明
 
 - **有效代码行**：非空非注释代码行。C/C++ 预处理指令（`#include`/`#define` 等）计入代码行。
@@ -81,11 +83,11 @@ jobs:
 
 ## 输入参数
 
-| 参数               | 必填 | 默认值       | 说明                                                                                      |
-| ------------------ | ---- | ------------ | ----------------------------------------------------------------------------------------- |
-| exclude-dirs       | 否   | -            | 排除目录/文件列表，逗号分隔，支持通配符，不填时默认扫描全部路径                           |
-| allowed-extensions | 否   | -            | 允许的文件扩展名，逗号分隔，不填时默认扫描所有文件类型                                    |
-| output             | 否   | metrics.json | 结果输出文件路径                                                                          |
+| 参数               | 必填 | 默认值                              | 说明                                                            |
+| ------------------ | ---- | ----------------------------------- | --------------------------------------------------------------- |
+| exclude-dirs       | 否   | -                                   | 排除目录/文件列表，逗号分隔，支持通配符，不填时默认扫描全部路径 |
+| allowed-extensions | 否   | 50+ 常见代码扩展名，<br/>详情见「扫描范围」 | 允许的文件扩展名，逗号分隔。                                    |
+| output             | 否   | metrics.json                        | 结果输出文件路径                                                |
 | apig-app-key       | 否   | -            | APIG 网关 AppKey（AK），仅 AK/SK 模式使用（见下方「上传认证」）                           |
 | apig-app-secret    | 否   | -            | APIG 网关 AppSecret（SK），与 apig-app-key 配套，仅 AK/SK 模式使用                        |
 | obs-ak             | 否   | -            | OBS 访问密钥 AK，仅 AK/SK 模式使用（全量上报文件上传到 openlibing-gitcode-action 统一桶） |
@@ -101,6 +103,17 @@ jobs:
 permissions:
   id-token: write
 ```
+
+### 扫描范围（文件过滤规则）
+
+文件按"三段式"规则决定是否参与扫描，优先级从高到低：
+
+1. **文件名特例（始终放行）**：`CMakeLists.txt`、`Makefile`、`GNUMakefile`、`Dockerfile`、`Jenkinsfile`、`Rakefile`、`Gemfile`、`build`、`build.bazel`、`WORKSPACE` 等按文件名识别的构建/入口文件，不受扩展名白名单限制。
+2. **`allowed-extensions` 显式指定（覆盖式）**：用户指定扩展名后，扫描范围 = 指定扩展名 + 文件名特例，**不再叠加缺省白名单**。例如指定 `.h,.cpp`，则只扫描这两类扩展名的文件（外加 CMakeLists.txt 等特例文件）。
+3. **缺省代码扩展名白名单（未配置 `allowed-extensions` 时生效）**：内置 50+ 常见代码扩展名（C/C++、Java、Python、JS/TS、Go、Rust、Shell、JSON/XML/YAML 等数据配置，以及 `.gn`/`.gni`/`.prelds` 等 OHOS 构建体系脚本），避免二进制、文档等非代码文件干扰度量。
+
+    > **与上表「26 种语言」的关系**：扩展名白名单决定「扫哪些文件」，语言支持决定「能出几项指标」，两者维度不同、不冲突。50+ 扩展名中仅 26 种为 lizard 语言，可完整产出全部 5 项指标；其余（Shell、JSON/XML/YAML 等数据配置）仍参与**代码规模与两项重复率**统计，但不产出函数级指标（平均函数代码行数 / 平均圈复杂度）。
+
 
 ### 排除规则（exclude-dirs）
 
