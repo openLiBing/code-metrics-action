@@ -5,31 +5,53 @@ const os = require('os');
 const BaseDetector = require('./BaseDetector');
 const FileCollector = require('../utils/fileCollector');
 
-// scc 二进制文件路径：优先使用项目内置的 bin 目录，其次从 PATH 查找
+// scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
 function getSccPath() {
-  // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
-  // - ncc bundle：模块级 __dirname 指向打包缓存目录，须用 ncc 注入的
-  //   __nccwpck_require__.ab（bundle 根 = dist/）定位内置 bin，否则回退裸 scc 报 not found
-  // - 源码结构：无 __nccwpck_require__ 全局，__dirname 即 dist/detectors，上溯一层为 dist/
-  const baseDir = (typeof __nccwpck_require__ !== 'undefined')
-    ? __nccwpck_require__.ab
-    : path.join(__dirname, '..');
-  const binDir = path.join(baseDir, 'bin');
   const ext = os.platform() === 'win32' ? '.exe' : '';
-  const localScc = path.join(binDir, `scc${ext}`);
-  if (fs.existsSync(localScc)) {
-    // 非 Windows 环境：zip 打包 / git clone 在 Linux 解压后可能丢失可执行权限位，
-    // 导致 "Permission denied"。此处运行时强制赋予 0o755，保证可执行。
-    if (os.platform() !== 'win32') {
-      try {
-        fs.chmodSync(localScc, 0o755);
-      } catch (e) {
-        console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
-      }
-    }
-    return localScc;
+  // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+  // - ncc bundle：用 ncc 注入的 __nccwpck_require__.ab（bundle 根 = dist/）定位内置 bin
+  // - 源码结构：无 __nccwpck_require__ 全局，__dirname 即 dist/detectors
+  const bundleRoot = (typeof __nccwpck_require__ !== 'undefined')
+    ? __nccwpck_require__.ab
+    : null;
+  // 候选顺序：
+  // 1. bundle 根 + bin/（标准 ncc 打包形态，asset 随目录分发）
+  // 2. bundle 根根目录平铺（部分平台分发时把 asset 平铺到 dist/ 根）
+  // 3. 源码结构：__dirname=dist/detectors，上溯一层为 dist/
+  const candidates = [];
+  if (bundleRoot) {
+    candidates.push(path.join(bundleRoot, 'bin', `scc${ext}`));
+    candidates.push(path.join(bundleRoot, `scc${ext}`));
   }
-  return 'scc';
+  candidates.push(path.join(__dirname, 'bin', `scc${ext}`));
+  candidates.push(path.join(__dirname, '..', 'bin', `scc${ext}`));
+  candidates.push(path.join(__dirname, `scc${ext}`));
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      // 非 Windows 环境：zip 打包 / git clone 解压后可能丢失可执行权限位，
+      // 运行时强制赋予 0o755，保证可执行
+      if (os.platform() !== 'win32') {
+        try {
+          fs.chmodSync(candidate, 0o755);
+        } catch (e) {
+          console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
+        }
+      }
+      console.log(`[DEBUG] scc 使用内置二进制: ${candidate}`);
+      return candidate;
+    }
+  }
+  // PATH 探测：确认 runner 环境本身安装了 scc 才使用裸命令名，
+  // 避免执行注定失败的命令产生误导性报错
+  try {
+    const probe = os.platform() === 'win32' ? 'where scc' : 'command -v scc';
+    execSync(probe, { stdio: 'ignore' });
+    console.log('[DEBUG] scc 使用 PATH 中的命令');
+    return 'scc';
+  } catch (e) {
+    console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
+    return null;
+  }
 }
 
 class SlocDetector extends BaseDetector {
@@ -44,6 +66,12 @@ class SlocDetector extends BaseDetector {
     const excludeDirs = this.config.excludeDirs || [];
 
     const sccArgs = this.buildSccArgs(sources, excludeDirs);
+
+    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接回退本地逐文件统计，
+    // 跳过注定失败的命令执行
+    if (!this.sccPath) {
+      return this.fallbackDetect(sources, excludeDirs);
+    }
 
     try {
       const result = this.runScc(sccArgs, sources);

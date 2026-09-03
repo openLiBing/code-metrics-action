@@ -22,6 +22,8 @@ Kotlin  Scala  Swift  Objective-C  Lua  Perl  R  PL/SQL  Vue.js  Erlang
 Fortran  GDScript  Solidity  Structured Text  TTCN-3  Zig
 ```
 
+> 上述 26 种语言是缺省扩展名白名单（50+，见「扫描范围」）中能完整产出 5 项指标的子集；白名单中的其他语言（Shell、JSON/XML/YAML 等）仅统计代码规模与重复率。
+
 ## 指标说明
 
 - **有效代码行**：非空非注释代码行。C/C++ 预处理指令（`#include`/`#define` 等）计入代码行。
@@ -49,6 +51,9 @@ on:
   schedule:
     - cron: "0 0 0 * * ?"
 
+permissions:
+  id-token: write
+
 jobs:
   code-metrics-scan:
     name: 代码度量指标扫描
@@ -58,7 +63,7 @@ jobs:
         uses: checkout
 
       - name: code-metrics-scan
-        uses: openlibing/code-metrics-action@5bc7f44adc84a056845da4cc87eb92594bd8d51f
+        uses: openlibing/code-metrics-action@master
         with:
           # 可选：排除指定目录/文件，不传 exclude-dirs 默认全路径扫描
           # exclude-dirs: "node_modules,target,dist,.git,.gitcode,.mvn,.trae,vendor"
@@ -66,10 +71,6 @@ jobs:
           # 如 CMakeLists.txt / Makefile 等构建文件始终放行）；
           # 不传时按内置"常见代码扩展名白名单 + 文件名特例"扫描
           # allowed-extensions: ".c,.cpp,.h"
-          apig-app-key: ${{ secrets.OPENLIBING_APIG_KEY }}
-          apig-app-secret: ${{ secrets.OPENLIBING_APIG_SECRET }}
-          obs-ak: ${{ secrets.OPENLIBING_OBS_AK }}
-          obs-sk: ${{ secrets.OPENLIBING_OBS_SK }}
 ```
 
 ## 触发方式
@@ -82,17 +83,26 @@ jobs:
 
 ## 输入参数
 
-| 参数               | 必填 | 默认值                              | 说明                                                                                                                                           |
-| ------------------ | ---- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| exclude-dirs       | 否   | -                                   | 排除目录/文件列表，逗号分隔，支持通配符，不填时默认扫描全部路径                                                                                |
-| allowed-extensions | 否   | 50+ 常见代码扩展名，<br/>详情见下文 | 允许的文件扩展名，逗号分隔。                                                                                                                   |
-| output             | 否   | metrics.json                        | 结果输出文件路径                                                                                                                               |
-| apig-app-key       | 是   | -                                   | APIG 网关 AppKey，用于上报检测结果到 openLiBing 平台（上传功能默认开启，此项必填，经 `with` 传入）                                             |
-| apig-app-secret    | 是   | -                                   | APIG 网关 AppSecret，用于上报检测结果到 openLiBing 平台（上传功能默认开启，此项必填，经 `with` 传入）                                          |
-| obs-ak             | 是   | -                                   | OBS 访问密钥 AK，全量上报文件上传到 openLiBing 统一桶（openlibing-gitcode-action/code-metrics-action/），与 upload-sarif-action 复用同一套凭证 |
-| obs-sk             | 是   | -                                   | OBS 访问密钥 SK，与 obs-ak 配套                                                                                                                |
+| 参数               | 必填 | 默认值                                      | 说明                                                                                      |
+| ------------------ | ---- | ------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| exclude-dirs       | 否   | -                                           | 排除目录/文件列表，逗号分隔，支持通配符，不填时默认扫描全部路径                           |
+| allowed-extensions | 否   | 50+ 常见代码扩展名，<br/>详情见「扫描范围」 | 允许的文件扩展名，逗号分隔。                                                              |
+| output             | 否   | metrics.json                                | 结果输出文件路径                                                                          |
+| apig-app-key       | 否   | -                                           | APIG 网关 AppKey（AK），仅 AK/SK 模式使用（见下方「上传认证」）                           |
+| apig-app-secret    | 否   | -                                           | APIG 网关 AppSecret（SK），与 apig-app-key 配套，仅 AK/SK 模式使用                        |
+| obs-ak             | 否   | -                                           | OBS 访问密钥 AK，仅 AK/SK 模式使用（全量上报文件上传到 openlibing-gitcode-action 统一桶） |
+| obs-sk             | 否   | -                                           | OBS 访问密钥 SK，与 obs-ak 配套，仅 AK/SK 模式使用                                        |
 
-上传功能默认开启：全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences）先上传到 OBS，再通过 APIG 接口上报元数据与 OBS 下载链接。凭据通过 `apig-app-key` / `apig-app-secret`（APIG）与 `obs-ak` / `obs-sk`（OBS）传入，请在 workflow 的 `with` 中传入。
+上传功能默认开启：全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences）先上传到 OBS，再通过 APIG 接口上报元数据与 OBS 下载链接。
+
+### 上传认证
+
+上传功能默认开启，插件使用OIDC 联邦认证，无需任何凭证。已适配 OIDC 的 workflow 示例：
+
+```yaml
+permissions:
+  id-token: write
+```
 
 ### 扫描范围（文件过滤规则）
 
