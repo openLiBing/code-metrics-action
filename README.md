@@ -4,13 +4,23 @@
 
 ## 功能
 
-| 指标             | 说明                               |
-| ---------------- | ---------------------------------- |
-| 代码规模         | 有效代码行数                       |
-| 平均函数代码行数 | 函数体有效代码行的算术平均值       |
-| 平均圈复杂度     | 函数级圈复杂度的算术平均值         |
-| 代码重复率       | 重复代码行占有效代码行的百分比     |
-| 文件重复率       | 内容完全一致文件占总文件数的百分比 |
+| 指标             | 说明                               | 支持语言             |
+| ---------------- | ---------------------------------- | -------------------- |
+| 代码规模         | 有效代码行数                       | 200+ 种（scc 驱动）  |
+| 平均函数代码行数 | 函数体有效代码行的算术平均值       | 26 种（lizard 驱动） |
+| 平均圈复杂度     | 函数级圈复杂度的算术平均值         | 同上（lizard 驱动）  |
+| 代码重复率       | 重复代码行占有效代码行的百分比     | 语言无关             |
+| 文件重复率       | 内容完全一致文件占总文件数的百分比 | 语言无关             |
+
+> 💡 **语言支持交集说明**：插件的 5 项指标由不同能力驱动——代码规模走 `scc`（200+ 语言），平均函数代码行数 / 平均圈复杂度走 `lizard`，两项重复率走内置文本比对（语言无关）。因此**能完整产出全部 5 项指标的语言**即 `scc 与 lizard` 的支持交集。`lizard` 未覆盖的语言仍可统计代码规模与两项重复率，但无法产出函数级指标。
+
+`lizard` 支持（可完整扫描 5 项指标）的 26 种语言：
+
+```text
+C/C++  C#  Java  JavaScript/JSX  TypeScript/TSX  Python  Ruby  PHP  Go  Rust
+Kotlin  Scala  Swift  Objective-C  Lua  Perl  R  PL/SQL  Vue.js  Erlang
+Fortran  GDScript  Solidity  Structured Text  TTCN-3  Zig
+```
 
 ## 指标说明
 
@@ -39,6 +49,9 @@ on:
   schedule:
     - cron: "0 0 0 * * ?"
 
+permissions:
+  id-token: write
+
 jobs:
   code-metrics-scan:
     name: 代码度量指标扫描
@@ -48,11 +61,13 @@ jobs:
         uses: checkout
 
       - name: code-metrics-scan
-        uses: openlibing-code-metrics-action
+        uses: openlibing/code-metrics-action@master
         with:
           # 可选：排除指定目录/文件，不传 exclude-dirs 默认全路径扫描
           # exclude-dirs: "node_modules,target,dist,.git,.gitcode,.mvn,.trae,vendor"
-          # 可选：扫描指定文件后缀的文件，不传 allowed-extensions 默认扫描全部文件
+          # 可选：指定扫描的文件扩展名（覆盖式：只扫指定扩展名 + 文件名特例，
+          # 如 CMakeLists.txt / Makefile 等构建文件始终放行）；
+          # 不传时按内置"常见代码扩展名白名单 + 文件名特例"扫描
           # allowed-extensions: ".c,.cpp,.h"
 ```
 
@@ -78,23 +93,14 @@ jobs:
 
 上传功能默认开启：全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences）先上传到 OBS，再通过 APIG 接口上报元数据与 OBS 下载链接。
 
-### 上传认证（双模式自动切换）
+### 上传认证
 
-插件按 workflow 配置自动选择认证方式与上报接口（二者一一对应，不混用）：
-
-| 模式                | 触发条件                                     | 上报接口                                   | 认证方式                                                                                                                                    |
-| ------------------- | -------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| OIDC 联邦认证（新） | workflow 声明 `permissions: id-token: write` | `/action-api/metrics/code/report`          | APIG 上报走 OIDC ID Token → STS 临时凭证 → V11 签名（`@openlibing/huaweicloud-oidc-client` SDK）；OBS 上传走 STS 临时凭证，无需任何凭证输入 |
-| AK/SK 签名（旧）    | 未声明 `permissions: id-token: write`        | `/openlibing-coderepo/metrics/code/report` | APIG 上报走 `apig-app-key`/`apig-app-secret` SDK-HMAC-SHA256 签名；OBS 上传走 `obs-ak`/`obs-sk`（存量脚本无需任何修改）                     |
-
-已适配 OIDC 的 workflow 示例：
+上传功能默认开启，插件使用OIDC 联邦认证，无需任何凭证。已适配 OIDC 的 workflow 示例：
 
 ```yaml
 permissions:
   id-token: write
 ```
-
-未适配的存量脚本保持原样即可：继续在 `with` 中传入 `apig-app-key` / `apig-app-secret`（APIG）与 `obs-ak` / `obs-sk`（OBS），插件走旧接口和 AK/SK 认证，行为与升级前完全一致。
 
 ### 排除规则（exclude-dirs）
 
