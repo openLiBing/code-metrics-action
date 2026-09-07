@@ -62504,6 +62504,24 @@ async function run() {
     core.setOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
     core.setOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
 
+    // 输出概览结果（顶部汇总指标，不含明细），写入 ATOMGIT_OUTPUT 便于工作流直接展示
+    const overview = JSON.stringify({
+      codeScale: result.codeScale,
+      avgFunctionLoc: result.avgFunctionLoc,
+      avgCyclomaticComplexity: result.avgCyclomaticComplexity,
+      totalCodeDuplicationRate: result.totalCodeDuplicationRate,
+      totalFileDuplicationRate: result.totalFileDuplicationRate
+    });
+    try {
+      const overviewOutputFile = process.env['ATOMGIT_OUTPUT'];
+      if (overviewOutputFile) {
+        // 单行 JSON，避免 ATOMGIT_OUTPUT 多行转义问题；名称与 core.setOutput 区分开
+        fs.appendFileSync(overviewOutputFile, `overview=${overview}\n`, 'utf8');
+      }
+    } catch (e) {
+      core.warning(`写入 ATOMGIT_OUTPUT 概览结果失败: ${e.message}`);
+    }
+
     core.info('Code metrics scan completed successfully');
     core.info(`Code scale: ${result.codeScale}`);
     core.info(`Avg function LOC: ${result.avgFunctionLoc}`);
