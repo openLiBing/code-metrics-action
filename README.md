@@ -138,15 +138,15 @@ permissions:
 
 ### 概览输出（ATOMGIT_OUTPUT）
 
-扫描完成后，插件会将每项指标通过 `ATOMGIT_OUTPUT` 输出为独立的键值对，便于工作流页面直接查看概览（不含明细）。每项指标的键如下表，值为对应数值；重复率指标为带 `%` 的百分数。使用方式：`${{ steps.<scan-id>.outputs.<指标> }}`。
+扫描完成后，插件会将每项指标通过 `ATOMGIT_OUTPUT` 输出为独立的键值对，便于工作流页面直接查看概览（不含明细）。每项指标的标识为 中文名（英文名），按顺序排列为：代码规模（codeScale）、平均代码行数（avgFunctionLoc）、平均圈复杂度（avgCyclomaticComplexity）、总代码重复率（totalCodeDuplicationRate）、总文件重复率（totalFileDuplicationRate）。重复率指标为带 `%` 的百分数。使用方式：`${{ steps.<scan-id>.outputs['代码规模（codeScale）'] }}`。
 
-| 输出标识                   | 值     |
-| -------------------------- | ------ |
-| `codeScale`                | `2025` |
-| `avgFunctionLoc`           | `12.5` |
-| `avgCyclomaticComplexity`  | `3.2`  |
-| `totalCodeDuplicationRate` | `0.5%` |
-| `totalFileDuplicationRate` | `1.2%` |
+| 输出标识                                   | 值     |
+| ------------------------------------------ | ------ |
+| `代码规模（codeScale）`                    | `2025` |
+| `平均代码行数（avgFunctionLoc）`           | `12.5` |
+| `平均圈复杂度（avgCyclomaticComplexity）`  | `3.2`  |
+| `总代码重复率（totalCodeDuplicationRate）` | `0.5%` |
+| `总文件重复率（totalFileDuplicationRate）` | `1.2%` |
 
 ## 依赖
 
