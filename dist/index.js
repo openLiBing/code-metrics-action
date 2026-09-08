@@ -62504,6 +62504,25 @@ async function run() {
     core.setOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
     core.setOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
 
+    // 输出概览结果（按固定顺序输出每项指标，标识为 中文名（英文名），重复率带 %），写入 ATOMGIT_OUTPUT 便于工作流直接展示
+    const overviewDisplay = [
+      ['codeScale', '代码规模（codeScale）', String(result.codeScale)],
+      ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', String(result.avgFunctionLoc)],
+      ['avgCyclomaticComplexity', '平均圈复杂度（avgCyclomaticComplexity）', String(result.avgCyclomaticComplexity)],
+      ['totalCodeDuplicationRate', '总代码重复率（totalCodeDuplicationRate）', `${result.totalCodeDuplicationRate}%`],
+      ['totalFileDuplicationRate', '总文件重复率（totalFileDuplicationRate）', `${result.totalFileDuplicationRate}%`]
+    ];
+    try {
+      const overviewOutputFile = process.env['ATOMGIT_OUTPUT'];
+      if (overviewOutputFile) {
+        // 每行一个 标识=值 键值对，避免单行 JSON 多行转义问题
+        const lines = overviewDisplay.map(item => `${item[1]}=${item[2]}`);
+        fs.appendFileSync(overviewOutputFile, lines.join('\n') + '\n', 'utf8');
+      }
+    } catch (e) {
+      core.warning(`写入 ATOMGIT_OUTPUT 概览结果失败: ${e.message}`);
+    }
+
     core.info('Code metrics scan completed successfully');
     core.info(`Code scale: ${result.codeScale}`);
     core.info(`Avg function LOC: ${result.avgFunctionLoc}`);
