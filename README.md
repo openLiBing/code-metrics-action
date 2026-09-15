@@ -52,6 +52,7 @@ on:
     - cron: "0 0 0 * * ?"
 
 permissions:
+  repository: read
   id-token: write
 
 jobs:

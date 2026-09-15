@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: "0 0 0 * * ?"
 
+permissions:
+  repository: read
+  id-token: write
+
 jobs:
   code-metrics-scan:
     name: 代码度量指标扫描
