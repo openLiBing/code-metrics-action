@@ -64,7 +64,7 @@ jobs:
         uses: checkout
 
       - name: code-metrics-scan
-        uses: openlibing/code-metrics-action@6723b5fca2a631a680386c860cb3dbc67e502849
+        uses: openlibing/code-metrics-action@117c0606ad741ef5e6b564dca9307e25e1d9e2e8
         with:
           # 可选：排除指定目录/文件，不传 exclude-dirs 默认全路径扫描
           # exclude-dirs: "node_modules,target,dist,.git,.gitcode,.mvn,.trae,vendor"
