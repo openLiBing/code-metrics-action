@@ -671,7 +671,6 @@ class DuplicationDetector extends BaseDetector {
         } catch (e) {
           console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
         }
-        console.log(`[DEBUG] scc 使用内置二进制: ${candidate}`);
         return candidate;
       }
     }
@@ -679,7 +678,6 @@ class DuplicationDetector extends BaseDetector {
     // 避免执行注定失败的命令产生误导性报错
     try {
       (__nccwpck_require2_(5317).execSync)('command -v scc', { stdio: 'ignore' });
-      console.log('[DEBUG] scc 使用 PATH 中的命令');
       return 'scc';
     } catch (e) {
       console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），重复行统计回退到本地 line-map');
@@ -1857,7 +1855,6 @@ function getSccPath() {
       } catch (e) {
         console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
       }
-      console.log(`[DEBUG] scc 使用内置二进制: ${candidate}`);
       return candidate;
     }
   }
@@ -1865,7 +1862,6 @@ function getSccPath() {
   // 避免执行注定失败的命令产生误导性报错
   try {
     execSync('command -v scc', { stdio: 'ignore' });
-    console.log('[DEBUG] scc 使用 PATH 中的命令');
     return 'scc';
   } catch (e) {
     console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
