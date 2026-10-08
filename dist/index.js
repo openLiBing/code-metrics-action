@@ -62478,7 +62478,7 @@ async function run() {
       supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
     } catch (e) {
       // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
-      core.debug(`pip install --help probe failed: ${e.message}`);
+      core.warning(`pip install --help probe failed: ${e.message}`);
     }
     const pipInstallArgs = [
       '-m', 'pip', 'install',
