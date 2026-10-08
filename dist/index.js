@@ -62334,6 +62334,53 @@ function getInput(name) {
   return process.env[hyphenKey] || process.env[underscoreKey] || core.getInput(name) || '';
 }
 
+// ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
+// 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个写入 pip 配置，
+// 避免执行机到某个源出网被重置（Connection reset by peer）时安装必然失败
+const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
+const PIP_ORIGINAL = 'https://pypi.org/simple';
+const PIP_SPEED_TEST_TIMEOUT = 5;
+
+// 探测索引源响应耗时（毫秒），超时或不可达返回 -1
+function testUrlSpeed(url) {
+  try {
+    const out = execSync(
+      `curl -s -o /dev/null -w "%{time_total}" --max-time ${PIP_SPEED_TEST_TIMEOUT} "${url}"`,
+      {
+        encoding: 'utf8',
+        timeout: (PIP_SPEED_TEST_TIMEOUT + 2) * 1000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      }
+    ).trim();
+    const seconds = parseFloat(out);
+    return isNaN(seconds) || seconds <= 0 ? -1 : Math.round(seconds * 1000);
+  } catch (e) {
+    // 探测异常（curl 缺失/超时）按不可达处理
+    return -1;
+  }
+}
+
+// 在 PyPI 源站与华为镜像之间测速，返回可用且更快的索引地址
+function detectPipIndexUrl() {
+  core.info('Probing pip index reachability...');
+  const originalMs = testUrlSpeed(PIP_ORIGINAL);
+  const mirrorMs = testUrlSpeed(PIP_MIRROR_DEFAULT);
+  core.info(`pypi.org: ${originalMs >= 0 ? originalMs + 'ms' : 'unreachable'}`);
+  core.info(`huaweicloud mirror: ${mirrorMs >= 0 ? mirrorMs + 'ms' : 'unreachable'}`);
+  // 两侧都不可达时回退源站（与 pre-commit-action 行为一致）
+  if (originalMs < 0 && mirrorMs < 0) {
+    core.warning('Both pypi.org and huaweicloud mirror are unreachable, fallback to pypi.org');
+    return PIP_ORIGINAL;
+  }
+  if (originalMs < 0) {
+    return PIP_MIRROR_DEFAULT;
+  }
+  if (mirrorMs < 0) {
+    return PIP_ORIGINAL;
+  }
+  return originalMs <= mirrorMs ? PIP_ORIGINAL : PIP_MIRROR_DEFAULT;
+}
+
 async function run() {
   try {
     // 源代码目录固定为当前目录（线上环境由 checkout 步骤决定扫描内容）
@@ -62464,17 +62511,47 @@ async function run() {
 
     // 自动安装 Python 依赖（用户无需在 workflow 中手动配置 install_dependency 步骤）
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    // 固定 lizard 版本，避免不同执行机装到不同版本导致指标基线不可比
+    const LIZARD_VERSION = '1.24.0';
+    // 先测速选定 pip 索引源，再写入 pip 配置（而非命令行 -i），
+    // 避免硬编码单个镜像后该镜像不可达导致安装必然失败
+    const pipIndexUrl = detectPipIndexUrl();
+    try {
+      execSync(`${pythonCmd} -m pip config set global.index-url ${pipIndexUrl}`, {
+        stdio: 'inherit',
+        timeout: 30000
+      });
+      core.info(`pip index-url set to ${pipIndexUrl}`);
+    } catch (e) {
+      // 写配置失败不阻断安装，仍按执行机默认索引尝试
+      core.warning(`Failed to set pip index-url: ${e.message}`);
+    }
+    // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
+    // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
+    let supportsBreakSystemPackages = false;
+    try {
+      const pipInstallHelp = execSync(`${pythonCmd} -m pip install --help`, {
+        encoding: 'utf8',
+        timeout: 30000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
+    } catch (e) {
+      // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
+      core.debug(`pip install --help probe failed: ${e.message}`);
+    }
     const pipInstallArgs = [
-      '-m', 'pip', 'install', '--break-system-packages', 'lizard',
-      '-i', 'https://mirrors.aliyun.com/pypi/simple/',
-      '--trusted-host', 'mirrors.aliyun.com'
+      '-m', 'pip', 'install',
+      ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
+      `lizard==${LIZARD_VERSION}`
     ];
     try {
-      core.info('Installing Python dependencies (lizard)...');
+      core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION})...`);
       execSync([pythonCmd, ...pipInstallArgs].join(' '), { stdio: 'inherit', timeout: 120000 });
       core.info('Python dependencies installed successfully');
     } catch (e) {
-      core.warning(`Python dependency installation failed: ${e.message}. The scan may fail if dependencies are missing.`);
+      // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
+      core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
     }
 
     core.info('Starting code metrics scan...');
