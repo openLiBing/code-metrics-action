@@ -1,13 +1,11 @@
 const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const BaseDetector = require('./BaseDetector');
 const FileCollector = require('../utils/fileCollector');
 
 // scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
 function getSccPath() {
-  const ext = os.platform() === 'win32' ? '.exe' : '';
   // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
   // - ncc bundle：用 ncc 注入的 __nccwpck_require__.ab（bundle 根 = dist/）定位内置 bin
   // - 源码结构：无 __nccwpck_require__ 全局，__dirname 即 dist/detectors
@@ -20,33 +18,27 @@ function getSccPath() {
   // 3. 源码结构：__dirname=dist/detectors，上溯一层为 dist/
   const candidates = [];
   if (bundleRoot) {
-    candidates.push(path.join(bundleRoot, 'bin', `scc${ext}`));
-    candidates.push(path.join(bundleRoot, `scc${ext}`));
+    candidates.push(path.join(bundleRoot, 'bin', 'scc'));
+    candidates.push(path.join(bundleRoot, 'scc'));
   }
-  candidates.push(path.join(__dirname, 'bin', `scc${ext}`));
-  candidates.push(path.join(__dirname, '..', 'bin', `scc${ext}`));
-  candidates.push(path.join(__dirname, `scc${ext}`));
+  candidates.push(path.join(__dirname, 'bin', 'scc'));
+  candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
+  candidates.push(path.join(__dirname, 'scc'));
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
-      // 非 Windows 环境：zip 打包 / git clone 解压后可能丢失可执行权限位，
-      // 运行时强制赋予 0o755，保证可执行
-      if (os.platform() !== 'win32') {
-        try {
-          fs.chmodSync(candidate, 0o755);
-        } catch (e) {
-          console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
-        }
+      // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755，保证可执行
+      try {
+        fs.chmodSync(candidate, 0o755);
+      } catch (e) {
+        console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
       }
-      console.log(`[DEBUG] scc 使用内置二进制: ${candidate}`);
       return candidate;
     }
   }
   // PATH 探测：确认 runner 环境本身安装了 scc 才使用裸命令名，
   // 避免执行注定失败的命令产生误导性报错
   try {
-    const probe = os.platform() === 'win32' ? 'where scc' : 'command -v scc';
-    execSync(probe, { stdio: 'ignore' });
-    console.log('[DEBUG] scc 使用 PATH 中的命令');
+    execSync('command -v scc', { stdio: 'ignore' });
     return 'scc';
   } catch (e) {
     console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');

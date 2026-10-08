@@ -648,8 +648,6 @@ class DuplicationDetector extends BaseDetector {
    * @returns {string} scc 可执行路径
    */
   static getSccBinPath() {
-    const os = __nccwpck_require2_(857);
-    const ext = os.platform() === 'win32' ? '.exe' : '';
     // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
     // - ncc bundle：用 ncc 注入的 __nccwpck_require3_.ab（bundle 根 = dist/）定位内置 bin
     // - 源码结构：无 __nccwpck_require3_ 全局，__dirname 即 dist/detectors
@@ -659,28 +657,27 @@ class DuplicationDetector extends BaseDetector {
     // 候选顺序：bundle 根 + bin/ → bundle 根平铺（asset 平铺分发形态）→ 源码结构上溯
     const candidates = [];
     if (bundleRoot) {
-      candidates.push(path.join(bundleRoot, 'bin', `scc${ext}`));
-      candidates.push(path.join(bundleRoot, `scc${ext}`));
+      candidates.push(path.join(bundleRoot, 'bin', 'scc'));
+      candidates.push(path.join(bundleRoot, 'scc'));
     }
-    candidates.push(path.join(__dirname, 'bin', `scc${ext}`));
-    candidates.push(path.join(__dirname, '..', 'bin', `scc${ext}`));
-    candidates.push(path.join(__dirname, `scc${ext}`));
+    candidates.push(path.join(__dirname, 'bin', 'scc'));
+    candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
+    candidates.push(path.join(__dirname, 'scc'));
     for (const candidate of candidates) {
       if (fs.existsSync(candidate)) {
-        // 非 Windows：解压后可能丢失可执行权限位，运行时强制赋予 0o755
-        if (os.platform() !== 'win32') {
-          try { fs.chmodSync(candidate, 0o755); } catch (e) { /* 忽略 chmod 异常 */ }
+        // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755
+        try {
+          fs.chmodSync(candidate, 0o755);
+        } catch (e) {
+          console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
         }
-        console.log(`[DEBUG] scc 使用内置二进制: ${candidate}`);
         return candidate;
       }
     }
     // PATH 探测：确认环境本身安装了 scc 才使用裸命令名，
     // 避免执行注定失败的命令产生误导性报错
     try {
-      const probe = os.platform() === 'win32' ? 'where scc' : 'command -v scc';
-      (__nccwpck_require2_(5317).execSync)(probe, { stdio: 'ignore' });
-      console.log('[DEBUG] scc 使用 PATH 中的命令');
+      (__nccwpck_require2_(5317).execSync)('command -v scc', { stdio: 'ignore' });
       return 'scc';
     } catch (e) {
       console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），重复行统计回退到本地 line-map');
@@ -1827,13 +1824,11 @@ module.exports = LizardDetector;
 const { execSync } = __nccwpck_require2_(5317);
 const path = __nccwpck_require2_(6928);
 const fs = __nccwpck_require2_(9896);
-const os = __nccwpck_require2_(857);
 const BaseDetector = __nccwpck_require2_(554);
 const FileCollector = __nccwpck_require2_(4334);
 
 // scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
 function getSccPath() {
-  const ext = os.platform() === 'win32' ? '.exe' : '';
   // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
   // - ncc bundle：用 ncc 注入的 __nccwpck_require3_.ab（bundle 根 = dist/）定位内置 bin
   // - 源码结构：无 __nccwpck_require3_ 全局，__dirname 即 dist/detectors
@@ -1846,33 +1841,27 @@ function getSccPath() {
   // 3. 源码结构：__dirname=dist/detectors，上溯一层为 dist/
   const candidates = [];
   if (bundleRoot) {
-    candidates.push(path.join(bundleRoot, 'bin', `scc${ext}`));
-    candidates.push(path.join(bundleRoot, `scc${ext}`));
+    candidates.push(path.join(bundleRoot, 'bin', 'scc'));
+    candidates.push(path.join(bundleRoot, 'scc'));
   }
-  candidates.push(path.join(__dirname, 'bin', `scc${ext}`));
-  candidates.push(path.join(__dirname, '..', 'bin', `scc${ext}`));
-  candidates.push(path.join(__dirname, `scc${ext}`));
+  candidates.push(path.join(__dirname, 'bin', 'scc'));
+  candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
+  candidates.push(path.join(__dirname, 'scc'));
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
-      // 非 Windows 环境：zip 打包 / git clone 解压后可能丢失可执行权限位，
-      // 运行时强制赋予 0o755，保证可执行
-      if (os.platform() !== 'win32') {
-        try {
-          fs.chmodSync(candidate, 0o755);
-        } catch (e) {
-          console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
-        }
+      // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755，保证可执行
+      try {
+        fs.chmodSync(candidate, 0o755);
+      } catch (e) {
+        console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
       }
-      console.log(`[DEBUG] scc 使用内置二进制: ${candidate}`);
       return candidate;
     }
   }
   // PATH 探测：确认 runner 环境本身安装了 scc 才使用裸命令名，
   // 避免执行注定失败的命令产生误导性报错
   try {
-    const probe = os.platform() === 'win32' ? 'where scc' : 'command -v scc';
-    execSync(probe, { stdio: 'ignore' });
-    console.log('[DEBUG] scc 使用 PATH 中的命令');
+    execSync('command -v scc', { stdio: 'ignore' });
     return 'scc';
   } catch (e) {
     console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
@@ -62324,7 +62313,7 @@ const core = __nccwpck_require2_(7484);
 const { MetricsScanner, ConfigLoader } = __nccwpck_require2_(6863);
 const path = __nccwpck_require2_(6928);
 const fs = __nccwpck_require2_(9896);
-const { execSync } = __nccwpck_require2_(5317);
+const { execSync, execFile } = __nccwpck_require2_(5317);
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -62335,36 +62324,44 @@ function getInput(name) {
 }
 
 // ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
-// 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个写入 pip 配置，
+// 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个作为本次安装的 PIP_INDEX_URL，
 // 避免执行机到某个源出网被重置（Connection reset by peer）时安装必然失败
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const PIP_ORIGINAL = 'https://pypi.org/simple';
 const PIP_SPEED_TEST_TIMEOUT = 5;
 
-// 探测索引源响应耗时（毫秒），超时或不可达返回 -1
-function testUrlSpeed(url) {
-  try {
-    const out = execSync(
-      `curl -s -o /dev/null -w "%{time_total}" --max-time ${PIP_SPEED_TEST_TIMEOUT} "${url}"`,
-      {
-        encoding: 'utf8',
-        timeout: (PIP_SPEED_TEST_TIMEOUT + 2) * 1000,
-        stdio: ['pipe', 'pipe', 'pipe']
+// 探测索引源首字节耗时（毫秒），超时或不可达返回 -1。
+// 只请求该索引下 lizard 单包页面的首个字节（-r 0-0 + time_starttransfer）：
+// 整个 simple 索引页面体积很大，5 秒内拉不完会被误判为不可达，导致测速失去区分度
+function testUrlSpeed(indexUrl) {
+  const probeUrl = `${indexUrl.replace(/\/$/, '')}/lizard/`;
+  return new Promise((resolve) => {
+    execFile(
+      'curl',
+      [
+        '-s', '-o', '/dev/null', '-w', '%{time_starttransfer}',
+        '--max-time', String(PIP_SPEED_TEST_TIMEOUT),
+        '-r', '0-0', probeUrl
+      ],
+      { encoding: 'utf8', timeout: (PIP_SPEED_TEST_TIMEOUT + 2) * 1000 },
+      (err, stdout) => {
+        // 镜像忽略 Range 返回全量时会被 --max-time 截断（err 非空），
+        // 但首字节耗时已由 -w 写出，仍可据此比较，故 err 非空也尝试解析
+        const seconds = parseFloat((stdout || '').trim());
+        resolve(isNaN(seconds) || seconds <= 0 ? -1 : Math.round(seconds * 1000));
       }
-    ).trim();
-    const seconds = parseFloat(out);
-    return isNaN(seconds) || seconds <= 0 ? -1 : Math.round(seconds * 1000);
-  } catch (e) {
-    // 探测异常（curl 缺失/超时）按不可达处理
-    return -1;
-  }
+    );
+  });
 }
 
-// 在 PyPI 源站与华为镜像之间测速，返回可用且更快的索引地址
-function detectPipIndexUrl() {
+// 并行测速 PyPI 源站与华为镜像（串行探测在双超时场景下要白等两倍时间），
+// 返回可用且更快的索引地址
+async function detectPipIndexUrl() {
   core.info('Probing pip index reachability...');
-  const originalMs = testUrlSpeed(PIP_ORIGINAL);
-  const mirrorMs = testUrlSpeed(PIP_MIRROR_DEFAULT);
+  const [originalMs, mirrorMs] = await Promise.all([
+    testUrlSpeed(PIP_ORIGINAL),
+    testUrlSpeed(PIP_MIRROR_DEFAULT)
+  ]);
   core.info(`pypi.org: ${originalMs >= 0 ? originalMs + 'ms' : 'unreachable'}`);
   core.info(`huaweicloud mirror: ${mirrorMs >= 0 ? mirrorMs + 'ms' : 'unreachable'}`);
   // 两侧都不可达时回退源站（与 pre-commit-action 行为一致）
@@ -62510,27 +62507,16 @@ async function run() {
     core.info(`Upload auth mode: ${useOidc ? 'oidc (new endpoint /action-api)' : 'aksk (legacy endpoint /openlibing-coderepo)'}`);
 
     // 自动安装 Python 依赖（用户无需在 workflow 中手动配置 install_dependency 步骤）
-    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
     // 固定 lizard 版本，避免不同执行机装到不同版本导致指标基线不可比
     const LIZARD_VERSION = '1.24.0';
-    // 先测速选定 pip 索引源，再写入 pip 配置（而非命令行 -i），
-    // 避免硬编码单个镜像后该镜像不可达导致安装必然失败
-    const pipIndexUrl = detectPipIndexUrl();
-    try {
-      execSync(`${pythonCmd} -m pip config set global.index-url ${pipIndexUrl}`, {
-        stdio: 'inherit',
-        timeout: 30000
-      });
-      core.info(`pip index-url set to ${pipIndexUrl}`);
-    } catch (e) {
-      // 写配置失败不阻断安装，仍按执行机默认索引尝试
-      core.warning(`Failed to set pip index-url: ${e.message}`);
-    }
+    // 先测速选定 pip 索引源；仅在本次安装子进程中通过 PIP_INDEX_URL 注入，
+    // 不改写执行机的 pip 配置文件（self-hosted 常驻机上写全局配置会跨任务持久生效）
+    const pipIndexUrl = await detectPipIndexUrl();
     // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
     // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
     let supportsBreakSystemPackages = false;
     try {
-      const pipInstallHelp = execSync(`${pythonCmd} -m pip install --help`, {
+      const pipInstallHelp = execSync('python3 -m pip install --help', {
         encoding: 'utf8',
         timeout: 30000,
         stdio: ['pipe', 'pipe', 'pipe']
@@ -62546,8 +62532,12 @@ async function run() {
       `lizard==${LIZARD_VERSION}`
     ];
     try {
-      core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION})...`);
-      execSync([pythonCmd, ...pipInstallArgs].join(' '), { stdio: 'inherit', timeout: 120000 });
+      core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
+      execSync(['python3', ...pipInstallArgs].join(' '), {
+        stdio: 'inherit',
+        timeout: 120000,
+        env: { ...process.env, PIP_INDEX_URL: pipIndexUrl }
+      });
       core.info('Python dependencies installed successfully');
     } catch (e) {
       // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
