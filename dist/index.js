@@ -62464,17 +62464,36 @@ async function run() {
 
     // 自动安装 Python 依赖（用户无需在 workflow 中手动配置 install_dependency 步骤）
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    // 固定 lizard 版本，避免不同执行机装到不同版本导致指标基线不可比
+    const LIZARD_VERSION = '1.24.0';
+    // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
+    // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
+    let supportsBreakSystemPackages = false;
+    try {
+      const pipInstallHelp = execSync(`${pythonCmd} -m pip install --help`, {
+        encoding: 'utf8',
+        timeout: 30000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
+    } catch (e) {
+      // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
+      core.debug(`pip install --help probe failed: ${e.message}`);
+    }
     const pipInstallArgs = [
-      '-m', 'pip', 'install', '--break-system-packages', 'lizard',
+      '-m', 'pip', 'install',
+      ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
+      `lizard==${LIZARD_VERSION}`,
       '-i', 'https://mirrors.aliyun.com/pypi/simple/',
       '--trusted-host', 'mirrors.aliyun.com'
     ];
     try {
-      core.info('Installing Python dependencies (lizard)...');
+      core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION})...`);
       execSync([pythonCmd, ...pipInstallArgs].join(' '), { stdio: 'inherit', timeout: 120000 });
       core.info('Python dependencies installed successfully');
     } catch (e) {
-      core.warning(`Python dependency installation failed: ${e.message}. The scan may fail if dependencies are missing.`);
+      // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
+      core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
     }
 
     core.info('Starting code metrics scan...');
