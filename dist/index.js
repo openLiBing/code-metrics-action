@@ -62313,7 +62313,7 @@ const core = __nccwpck_require2_(7484);
 const { MetricsScanner, ConfigLoader } = __nccwpck_require2_(6863);
 const path = __nccwpck_require2_(6928);
 const fs = __nccwpck_require2_(9896);
-const { execSync } = __nccwpck_require2_(5317);
+const { execSync, execFile } = __nccwpck_require2_(5317);
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -62324,36 +62324,44 @@ function getInput(name) {
 }
 
 // ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
-// 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个写入 pip 配置，
+// 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个作为本次安装的 PIP_INDEX_URL，
 // 避免执行机到某个源出网被重置（Connection reset by peer）时安装必然失败
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const PIP_ORIGINAL = 'https://pypi.org/simple';
 const PIP_SPEED_TEST_TIMEOUT = 5;
 
-// 探测索引源响应耗时（毫秒），超时或不可达返回 -1
-function testUrlSpeed(url) {
-  try {
-    const out = execSync(
-      `curl -s -o /dev/null -w "%{time_total}" --max-time ${PIP_SPEED_TEST_TIMEOUT} "${url}"`,
-      {
-        encoding: 'utf8',
-        timeout: (PIP_SPEED_TEST_TIMEOUT + 2) * 1000,
-        stdio: ['pipe', 'pipe', 'pipe']
+// 探测索引源首字节耗时（毫秒），超时或不可达返回 -1。
+// 只请求该索引下 lizard 单包页面的首个字节（-r 0-0 + time_starttransfer）：
+// 整个 simple 索引页面体积很大，5 秒内拉不完会被误判为不可达，导致测速失去区分度
+function testUrlSpeed(indexUrl) {
+  const probeUrl = `${indexUrl.replace(/\/$/, '')}/lizard/`;
+  return new Promise((resolve) => {
+    execFile(
+      'curl',
+      [
+        '-s', '-o', '/dev/null', '-w', '%{time_starttransfer}',
+        '--max-time', String(PIP_SPEED_TEST_TIMEOUT),
+        '-r', '0-0', probeUrl
+      ],
+      { encoding: 'utf8', timeout: (PIP_SPEED_TEST_TIMEOUT + 2) * 1000 },
+      (err, stdout) => {
+        // 镜像忽略 Range 返回全量时会被 --max-time 截断（err 非空），
+        // 但首字节耗时已由 -w 写出，仍可据此比较，故 err 非空也尝试解析
+        const seconds = parseFloat((stdout || '').trim());
+        resolve(isNaN(seconds) || seconds <= 0 ? -1 : Math.round(seconds * 1000));
       }
-    ).trim();
-    const seconds = parseFloat(out);
-    return isNaN(seconds) || seconds <= 0 ? -1 : Math.round(seconds * 1000);
-  } catch (e) {
-    // 探测异常（curl 缺失/超时）按不可达处理
-    return -1;
-  }
+    );
+  });
 }
 
-// 在 PyPI 源站与华为镜像之间测速，返回可用且更快的索引地址
-function detectPipIndexUrl() {
+// 并行测速 PyPI 源站与华为镜像（串行探测在双超时场景下要白等两倍时间），
+// 返回可用且更快的索引地址
+async function detectPipIndexUrl() {
   core.info('Probing pip index reachability...');
-  const originalMs = testUrlSpeed(PIP_ORIGINAL);
-  const mirrorMs = testUrlSpeed(PIP_MIRROR_DEFAULT);
+  const [originalMs, mirrorMs] = await Promise.all([
+    testUrlSpeed(PIP_ORIGINAL),
+    testUrlSpeed(PIP_MIRROR_DEFAULT)
+  ]);
   core.info(`pypi.org: ${originalMs >= 0 ? originalMs + 'ms' : 'unreachable'}`);
   core.info(`huaweicloud mirror: ${mirrorMs >= 0 ? mirrorMs + 'ms' : 'unreachable'}`);
   // 两侧都不可达时回退源站（与 pre-commit-action 行为一致）
@@ -62503,7 +62511,7 @@ async function run() {
     const LIZARD_VERSION = '1.24.0';
     // 先测速选定 pip 索引源；仅在本次安装子进程中通过 PIP_INDEX_URL 注入，
     // 不改写执行机的 pip 配置文件（self-hosted 常驻机上写全局配置会跨任务持久生效）
-    const pipIndexUrl = detectPipIndexUrl();
+    const pipIndexUrl = await detectPipIndexUrl();
     // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
     // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
     let supportsBreakSystemPackages = false;
