@@ -44,12 +44,16 @@ Fortran  GDScript  Solidity  Structured Text  TTCN-3  Zig
 name: code-metrics-scan
 
 on:
+  # 三种触发方式可按需选择（可组合启用），示例默认只保留手动触发：
+  # 1) workflow_dispatch：手动触发，在流水线页面按需执行
   workflow_dispatch:
-  push:
-    branches:
-      - master
-  schedule:
-    - cron: "0 0 0 * * ?"
+  # 2) push：代码推送触发，推送到指定分支时自动执行（按需启用，示例已注释）
+  # push:
+  #   branches:
+  #     - master
+  # 3) schedule：定时触发，按 cron 表达式定期执行（按需启用，示例已注释）
+  # schedule:
+  #   - cron: "0 0 0 * * ?"
 
 permissions:
   repository: read
