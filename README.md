@@ -44,12 +44,16 @@ Fortran  GDScript  Solidity  Structured Text  TTCN-3  Zig
 name: code-metrics-scan
 
 on:
+  # 三种触发方式可按需选择（可组合启用），示例默认只保留手动触发：
+  # 1) workflow_dispatch：手动触发，在流水线页面按需执行
   workflow_dispatch:
-  push:
-    branches:
-      - master
-  schedule:
-    - cron: "0 0 0 * * ?"
+  # 2) push：代码推送触发，推送到指定分支时自动执行（按需启用，示例已注释）
+  # push:
+  #   branches:
+  #     - master
+  # 3) schedule：定时触发，按 cron 表达式定期执行（按需启用，示例已注释）
+  # schedule:
+  #   - cron: "0 0 0 * * ?"
 
 permissions:
   repository: read
@@ -58,13 +62,14 @@ permissions:
 jobs:
   code-metrics-scan:
     name: 代码度量指标扫描
+    # 这里使用的是官方默认执行机，请按需切换为自定义执行机（如 ["self-hosted", "region=cn"]）
     runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "slim"]
     steps:
       - name: Checkout
         uses: checkout
 
       - name: code-metrics-scan
-        uses: openlibing/code-metrics-action@6723b5fca2a631a680386c860cb3dbc67e502849
+        uses: openlibing/code-metrics-action@117c0606ad741ef5e6b564dca9307e25e1d9e2e8
         with:
           # 可选：排除指定目录/文件，不传 exclude-dirs 默认全路径扫描
           # exclude-dirs: "node_modules,target,dist,.git,.gitcode,.mvn,.trae,vendor"
