@@ -62,6 +62,7 @@ permissions:
 jobs:
   code-metrics-scan:
     name: 代码度量指标扫描
+    # 这里使用的是官方默认执行机，请按需切换为自定义执行机（如 ["self-hosted", "region=cn"]）
     runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "slim"]
     steps:
       - name: Checkout
