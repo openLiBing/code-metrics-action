@@ -50,3 +50,5 @@ repos:
           - --output-file
           - ./tmp_pre-commit-reports/eslint.sarif
           - --no-error-on-unmatched-pattern
+          # 全量检查（--all-files）会显式传入被忽略的 dist/index.js，消除对应告警
+          - --no-warn-ignored
