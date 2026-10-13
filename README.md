@@ -159,6 +159,38 @@ permissions:
 > - 概览输出通过 `ATOMGIT_OUTPUT` 写入。本插件为 Node 自定义 action，写入 `ATOMGIT_OUTPUT` 的输出**无需在 action.yml 中声明** `outputs:` 即可被 `${{ steps.<scan-id>.outputs.<...> }}` 引用（中文键使用中括号字符串，如 `${{ steps.scan.outputs['代码规模（codeScale）'] }}`）。
 > - 概览值为供工作流页面展示的**可读字符串**，重复率指标带 `%`；而「输出」节中 `core.setOutput` 输出为**纯数值**（如 `total-code-duplication-rate=0.5`），同名指标单位同为 `%`。两者不混用：编程取用建议用 `core.setOutput` 的纯数值键，概览值仅作展示。
 
+### 平台详情链接输出（ATOMGIT_STEP_SUMMARY + ATOMGIT_OUTPUT）
+
+上报成功后，插件输出 1 条该扫描仓在 openLiBing 平台分支管理页的跳转链接（固定 1 行），双通道同步输出；运行日志（`core.info`）同时打印实际链接便于查看。
+
+仓与分支均已录入平台时，`ATOMGIT_STEP_SUMMARY` 以 Markdown 超链接渲染（显示文本≠实际链接，点击落地分支管理页并精确定位到对应分支），如：
+
+```text
+- [代码仓-代码度量详情](https://www.openlibing.com/apps/repos?projectId=3&platforms=gitcode&repoUrlLike=test%2Frepo&branchNameLike=master&codeHostingPlatformFlag=gitcode)
+```
+
+`ATOMGIT_OUTPUT` 同步输出 key=value 行（供 `${{ steps.<scan-id>.outputs['代码仓-代码度量详情'] }}` 取值）：
+
+```text
+代码仓-代码度量详情=https://www.openlibing.com/apps/repos?projectId=3&platforms=gitcode&repoUrlLike=test%2Frepo&branchNameLike=master&codeHostingPlatformFlag=gitcode
+```
+
+仓未录入 openLiBing 平台或分支未登记时，不输出链接，改为输出提示行（文案由服务端返回，插件不硬编码）：
+
+```text
+- 当前仓未录入openLiBing平台，无法生成跳转链接，请先联系SRE完成代码仓录入。
+```
+
+```text
+- 当前分支未录入openLiBing平台，请前往openLiBing平台同步最新分支
+```
+
+> **说明**
+>
+> - 链接由服务端拼接（`projectId` + 分支管理页筛选参数 `platforms` / `repoUrlLike` / `branchNameLike` + 平台授权参数 `codeHostingPlatformFlag`），未登录 openLiBing 平台时自动无感授权后回跳；同一代码仓关联多个项目时，固定输出查询第一个项目对应的 1 条链接（不输出多链接）。
+> - 链接落地页展示的指标数据恒为该分支**最新一次成功检测结果**，非历史流水线运行数据。
+> - 上报失败或链接构建异常时既不输出链接也不输出提示；两通道各自独立判定环境变量，任一无 `ATOMGIT_STEP_SUMMARY` / `ATOMGIT_OUTPUT` 时跳过对应通道（互不影响）。
+
 ## 依赖
 
 - **scc** — 代码行数统计（内置二进制包）
