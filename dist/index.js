@@ -62611,7 +62611,7 @@ async function run() {
     // 平台详情链接双通道输出：固定 1 行（链接行或提示行，服务端保证二者互斥）
     // ATOMGIT_STEP_SUMMARY：主展示通道（Markdown 超链接，显示文本≠实际链接）；ATOMGIT_OUTPUT：机器消费通道
     // 两通道各自判环境变量、各自兜底：任一通道失败不影响另一通道与上报结果；无链接且无提示（上报失败/链接构建异常）不输出
-    const DETAIL_LINK_LABEL = '代码仓-代码度量详情';
+    const DETAIL_LINK_LABEL = '代码度量指标扫描结果';
     const detailLink = result.uploadInfo?.detailLink || '';
     const detailTip = result.uploadInfo?.tip || '';
     if (detailLink) {
@@ -62635,7 +62635,9 @@ async function run() {
     try {
       const detailOutputFile = process.env['ATOMGIT_OUTPUT'];
       if (detailOutputFile && (detailLink || detailTip)) {
-        fs.appendFileSync(detailOutputFile, `${DETAIL_LINK_LABEL}=${detailLink || detailTip}\n`, 'utf8');
+        // 链接行 key 以 url 结尾：平台按 key 末尾小写 url 判定 type=link 渲染为可点击链接；提示行 key 不带 url 后缀，避免提示文本被渲染成无效链接
+        const detailOutputLine = detailLink ? `扫描结果url=${detailLink}` : `扫描结果=${detailTip}`;
+        fs.appendFileSync(detailOutputFile, detailOutputLine + '\n', 'utf8');
       }
     } catch (e) {
       core.warning(`写入 ATOMGIT_OUTPUT 链接结果失败: ${e.message}`);

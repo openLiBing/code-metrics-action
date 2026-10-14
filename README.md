@@ -166,13 +166,13 @@ permissions:
 仓与分支均已录入平台时，`ATOMGIT_STEP_SUMMARY` 以 Markdown 超链接渲染（显示文本≠实际链接，点击落地分支管理页并精确定位到对应分支），如：
 
 ```text
-- [代码仓-代码度量详情](https://www.openlibing.com/apps/repos?projectId=3&platforms=gitcode&repoUrlLike=test%2Frepo&branchNameLike=master&codeHostingPlatformFlag=gitcode)
+- [代码度量指标扫描结果](https://www.openlibing.com/apps/repos?projectId=3&platforms=gitcode&repoUrlLike=test%2Frepo&branchNameLike=master)
 ```
 
-`ATOMGIT_OUTPUT` 同步输出 key=value 行（供 `${{ steps.<scan-id>.outputs['代码仓-代码度量详情'] }}` 取值）：
+`ATOMGIT_OUTPUT` 同步输出 key=value 行（供 `${{ steps.<scan-id>.outputs['扫描结果url'] }}` 取值）：
 
 ```text
-代码仓-代码度量详情=https://www.openlibing.com/apps/repos?projectId=3&platforms=gitcode&repoUrlLike=test%2Frepo&branchNameLike=master&codeHostingPlatformFlag=gitcode
+扫描结果url=https://www.openlibing.com/apps/repos?projectId=3&platforms=gitcode&repoUrlLike=test%2Frepo&branchNameLike=master
 ```
 
 仓未录入 openLiBing 平台或分支未登记时，不输出链接，改为输出提示行（文案由服务端返回，插件不硬编码）：
@@ -187,9 +187,10 @@ permissions:
 
 > **说明**
 >
-> - 链接由服务端拼接（`projectId` + 分支管理页筛选参数 `platforms` / `repoUrlLike` / `branchNameLike` + 平台授权参数 `codeHostingPlatformFlag`），未登录 openLiBing 平台时自动无感授权后回跳；同一代码仓关联多个项目时，固定输出查询第一个项目对应的 1 条链接（不输出多链接）。
+> - 链接由服务端拼接（`projectId` + 分支管理页筛选参数 `platforms` / `repoUrlLike` / `branchNameLike`）；同一代码仓关联多个项目时，固定输出查询第一个项目对应的 1 条链接（不输出多链接）。
 > - 链接落地页展示的指标数据恒为该分支**最新一次成功检测结果**，非历史流水线运行数据。
 > - 上报失败或链接构建异常时既不输出链接也不输出提示；两通道各自独立判定环境变量，任一无 `ATOMGIT_STEP_SUMMARY` / `ATOMGIT_OUTPUT` 时跳过对应通道（互不影响）。
+> - `ATOMGIT_OUTPUT` 链接行 key 统一以 `url` 结尾（`扫描结果url`）：平台按 key 末尾小写 `url` 判定输出类型为可点击链接（大小写敏感）；提示行 key 为 `扫描结果`，不带该后缀，避免提示文本被渲染为无效链接。
 
 ## 依赖
 
