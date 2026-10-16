@@ -201,7 +201,8 @@ class ApigSigner {
     let out = '';
     let lastPos = 0;
     for (let i = 0; i < str.length; ++i) {
-      const c = str.charCodeAt(i);
+      // 代理对（surrogate pair）场景需要在下文重新赋值 c，故声明为 let
+      let c = str.charCodeAt(i);
       if (c < 0x80) {
         if (noEscape[c] === 1) continue;
         if (lastPos < i) out += str.slice(lastPos, i);
