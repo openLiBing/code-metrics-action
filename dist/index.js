@@ -2377,6 +2377,7 @@ class MetricsScanner {
           pipelineRunId: options.pipelineRunId,
           commitId: options.commitId,
           runNumber: options.runNumber,
+          pipelineName: options.pipelineName,
           startTime: startTimeFormatted,
           endTime: endTimeFormatted,
           status: status
@@ -2411,6 +2412,7 @@ class MetricsScanner {
             pipelineRunId: options.pipelineRunId,
             commitId: options.commitId,
             runNumber: options.runNumber,
+            pipelineName: options.pipelineName,
             startTime: startTimeFormatted,
             endTime: endTimeFormatted,
             status: 1,
@@ -2737,6 +2739,8 @@ class CoderepoUploader {
       pipelineRunId: options.pipelineRunId,
       commitId: options.commitId,
       runNumber: options.runNumber,
+      // pipelineName：流水线名称（GitCode runner 注入的 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
+      pipelineName: options.pipelineName,
       metricsData: overallMetrics,
       detectionStartedAt: options.startTime,
       detectionCompletedAt: options.endTime,
@@ -62466,6 +62470,9 @@ async function run() {
     const runNumber = process.env['ATOMGIT_RUN_NUMBER'] || process.env['PIPELINE_RUN_NUMBER'] || '';
     // commitId：触发本次工作流的提交 SHA（ATOMGIT_SHA），口径与 CodeQL 上报（openlibing-upload-sarif）一致
     const commitId = process.env['ATOMGIT_SHA'] || '';
+    // pipelineName：流水线名称（GitCode runner 自动注入的 ATOMGIT_WORKFLOW），
+    // 口径与安全编译选项插件（security-compilation-options-action）一致，供度量数据下钻页展示来源流水线
+    const pipelineName = process.env['ATOMGIT_WORKFLOW'] || '';
 
     // 加载配置
     let config;
@@ -62551,6 +62558,7 @@ async function run() {
     core.info(`branchName: ${branchName || '(empty)'}`);
     core.info(`pipelineRunId: ${pipelineRunId || '(empty)'}`);
     core.info(`commitId: ${commitId || '(empty)'}`);
+    core.info(`pipelineName: ${pipelineName || '(empty)'}`);
 
     const scanner = new MetricsScanner(config);
     const result = await scanner.scan({
@@ -62561,7 +62569,8 @@ async function run() {
       branchName: branchName,
       pipelineRunId: pipelineRunId,
       runNumber: runNumber,
-      commitId: commitId
+      commitId: commitId,
+      pipelineName: pipelineName
     });
 
     // 设置输出

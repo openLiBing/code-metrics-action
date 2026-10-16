@@ -177,6 +177,7 @@ class MetricsScanner {
           pipelineRunId: options.pipelineRunId,
           commitId: options.commitId,
           runNumber: options.runNumber,
+          pipelineName: options.pipelineName,
           startTime: startTimeFormatted,
           endTime: endTimeFormatted,
           status: status
@@ -211,6 +212,7 @@ class MetricsScanner {
             pipelineRunId: options.pipelineRunId,
             commitId: options.commitId,
             runNumber: options.runNumber,
+            pipelineName: options.pipelineName,
             startTime: startTimeFormatted,
             endTime: endTimeFormatted,
             status: 1,
