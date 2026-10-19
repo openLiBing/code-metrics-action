@@ -146,7 +146,7 @@ permissions:
 
 ### 概览输出（ATOMGIT_OUTPUT）
 
-扫描完成后，插件会将每项指标通过 `ATOMGIT_OUTPUT` 输出为独立的键值对，便于工作流页面直接查看概览（不含明细）。每项指标的标识为 中文名（英文名），按顺序排列为：代码规模（codeScale）、平均代码行数（avgFunctionLoc）、平均圈复杂度（avgCyclomaticComplexity）、总代码重复率（totalCodeDuplicationRate）、总文件重复率（totalFileDuplicationRate）。重复率指标为带 `%` 的百分数。使用方式：`${{ steps.<scan-id>.outputs['代码规模（codeScale）'] }}`。
+扫描完成后，插件会将每项指标通过 `ATOMGIT_OUTPUT` 输出为独立的键值对，便于工作流页面直接查看概览（不含明细）。每项指标的标识为 中文名（英文名），按顺序排列为：代码规模（codeScale）、平均代码行数（avgFunctionLoc）、平均圈复杂度（avgCyclomaticComplexity）、总代码重复率（totalCodeDuplicationRate）、总文件重复率（totalFileDuplicationRate）。重复率指标为带 `%` 的百分数。
 
 | 输出标识                                   | 值     |
 | ------------------------------------------ | ------ |
@@ -156,10 +156,31 @@ permissions:
 | `总代码重复率（totalCodeDuplicationRate）` | `0.5%` |
 | `总文件重复率（totalFileDuplicationRate）` | `1.2%` |
 
+#### 平台详情链接输出
+
+上报成功后，插件输出 1 条该扫描仓在 openLiBing 平台分支管理页的跳转链接（固定 1 行）；运行日志（`core.info`）同时打印实际链接便于查看。
+
+输出标识为`扫描结果url`，示例：
+
+```text
+扫描结果url=https://www.openlibing.com/apps/repos?projectId=3&platforms=gitcode&repoUrlLike=test%2Frepo&branchNameLike=master
+```
+
+仓未录入 openLiBing 平台或分支未登记时，不输出链接，改为输出提示行（文案由服务端返回，插件不硬编码）：
+
+```text
+扫描结果=当前仓未录入openLiBing平台，无法生成跳转链接，请先联系SRE完成代码仓录入。
+```
+
+```text
+扫描结果=当前分支未录入openLiBing平台，请前往openLiBing平台同步最新分支
+```
+
 > **说明**
 >
-> - 概览输出通过 `ATOMGIT_OUTPUT` 写入。本插件为 Node 自定义 action，写入 `ATOMGIT_OUTPUT` 的输出**无需在 action.yml 中声明** `outputs:` 即可被 `${{ steps.<scan-id>.outputs.<...> }}` 引用（中文键使用中括号字符串，如 `${{ steps.scan.outputs['代码规模（codeScale）'] }}`）。
-> - 概览值为供工作流页面展示的**可读字符串**，重复率指标带 `%`；而「输出」节中 `core.setOutput` 输出为**纯数值**（如 `total-code-duplication-rate=0.5`），同名指标单位同为 `%`。两者不混用：编程取用建议用 `core.setOutput` 的纯数值键，概览值仅作展示。
+> - 链接由服务端拼接，同一代码仓关联多个项目时，固定输出查询第一个项目对应的 1 条链接（不输出多链接）。
+> - 链接落地页展示的指标数据恒为该分支**最新一次成功检测结果**，非历史流水线运行数据。
+> - 上报失败或链接构建异常时既不输出链接也不输出提示；写入失败时跳过输出，不影响上报结果。
 
 ## 依赖
 

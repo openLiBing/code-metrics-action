@@ -2385,7 +2385,13 @@ class MetricsScanner {
         if (uploadResult.success) {
           // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
           this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
-          result.uploadInfo = { success: true, obsUrl: uploadResult.obsUrl };
+          // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
+          result.uploadInfo = {
+            success: true,
+            obsUrl: uploadResult.obsUrl,
+            detailLink: uploadResult.detailLink || '',
+            tip: uploadResult.tip || ''
+          };
         } else {
           this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
           result.uploadInfo = { success: false, error: uploadResult.error };
@@ -2644,7 +2650,8 @@ class ApigSigner {
     let out = '';
     let lastPos = 0;
     for (let i = 0; i < str.length; ++i) {
-      const c = str.charCodeAt(i);
+      // 代理对场景下需在下方重新赋值（c = 0x10000 + ...），此处必须用 let
+      let c = str.charCodeAt(i);
       if (c < 0x80) {
         if (noEscape[c] === 1) continue;
         if (lastPos < i) out += str.slice(lastPos, i);
@@ -2785,7 +2792,14 @@ class CoderepoUploader {
       return { ...mainResult, obsUrl: obsResult.obsUrl };
     }
 
-    return { success: true, recordId: mainResult.recordId, obsUrl: obsResult.obsUrl };
+    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口输出
+    return {
+      success: true,
+      recordId: mainResult.recordId,
+      obsUrl: obsResult.obsUrl,
+      detailLink: mainResult.detailLink,
+      tip: mainResult.tip
+    };
   }
 
   /**
@@ -3047,7 +3061,7 @@ class CoderepoUploader {
    * - OIDC 模式：SDK callApig 免密联邦认证（OIDC ID Token -> STS 临时凭证 ->
    *   V11-HMAC-SHA256 签名 + X-Security-Token）
    * - AK/SK 模式：ApigSigner SDK-HMAC-SHA256 签名（原有方式）
-   * 返回 { success, recordId?, error? }
+   * 返回 { success, recordId?, detailLink?, tip?, error? }
    */
   async report(url, body) {
     try {
@@ -3087,14 +3101,18 @@ class CoderepoUploader {
         return { success: false, error: resData?.msg || 'Unknown error' };
       }
 
-      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象
+      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象；当前服务端返回 CodeMetricsReportVO
       const recordId = resData?.data?.recordId
         || resData?.data?.id
         || (typeof resData?.data === 'number' || typeof resData?.data === 'string' ? resData.data : null)
         || resData?.recordId
         || resData?.id;
 
-      return { success: true, recordId: recordId };
+      // data.detailLink：平台分支页固定单条跳转链接；data.tip：仓未录入/分支未登记提示（两者互斥，可均为空）
+      const detailLink = typeof resData?.data?.detailLink === 'string' ? resData.data.detailLink : '';
+      const tip = typeof resData?.data?.tip === 'string' ? resData.data.tip : '';
+
+      return { success: true, recordId: recordId, detailLink: detailLink, tip: tip };
     } catch (error) {
       // 输出详细错误信息以便排查网络问题
       console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
@@ -62603,6 +62621,29 @@ async function run() {
       }
     } catch (e) {
       core.warning(`写入 ATOMGIT_OUTPUT 概览结果失败: ${e.message}`);
+    }
+
+    // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥），仅写 ATOMGIT_OUTPUT
+    // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出
+    const DETAIL_LINK_LABEL = '代码度量指标扫描结果';
+    const detailLink = result.uploadInfo?.detailLink || '';
+    const detailTip = result.uploadInfo?.tip || '';
+    if (detailLink) {
+      core.info(`${DETAIL_LINK_LABEL}: ${detailLink}`);
+    } else if (detailTip) {
+      core.info(`${DETAIL_LINK_LABEL}: ${detailTip}`);
+    } else {
+      core.info(`${DETAIL_LINK_LABEL}: 无链接（上报失败或链接构建异常，不输出）`);
+    }
+    try {
+      const detailOutputFile = process.env['ATOMGIT_OUTPUT'];
+      if (detailOutputFile && (detailLink || detailTip)) {
+        // 链接行 key 以 url 结尾：平台按 key 末尾小写 url 判定 type=link 渲染为可点击链接；提示行 key 不带 url 后缀，避免提示文本被渲染成无效链接
+        const detailOutputLine = detailLink ? `扫描结果url=${detailLink}` : `扫描结果=${detailTip}`;
+        fs.appendFileSync(detailOutputFile, detailOutputLine + '\n', 'utf8');
+      }
+    } catch (e) {
+      core.warning(`写入 ATOMGIT_OUTPUT 链接结果失败: ${e.message}`);
     }
 
     core.info('Code metrics scan completed successfully');
