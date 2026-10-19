@@ -158,7 +158,7 @@ permissions:
 
 上报成功后，插件输出 1 条该扫描仓在 openLiBing 平台分支管理页的跳转链接（固定 1 行）；运行日志（`core.info`）同时打印实际链接便于查看。
 
-输出标识为'扫描结果url'，示例：
+输出标识为`扫描结果url`，示例：
 
 ```text
 扫描结果url=https://www.openlibing.com/apps/repos?projectId=3&platforms=gitcode&repoUrlLike=test%2Frepo&branchNameLike=master
