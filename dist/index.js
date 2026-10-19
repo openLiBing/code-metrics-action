@@ -2385,7 +2385,7 @@ class MetricsScanner {
         if (uploadResult.success) {
           // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
           this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
-          // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口双通道输出
+          // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
           result.uploadInfo = {
             success: true,
             obsUrl: uploadResult.obsUrl,
@@ -2792,7 +2792,7 @@ class CoderepoUploader {
       return { ...mainResult, obsUrl: obsResult.obsUrl };
     }
 
-    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口双通道输出
+    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口输出
     return {
       success: true,
       recordId: mainResult.recordId,
@@ -62608,9 +62608,8 @@ async function run() {
       core.warning(`写入 ATOMGIT_OUTPUT 概览结果失败: ${e.message}`);
     }
 
-    // 平台详情链接双通道输出：固定 1 行（链接行或提示行，服务端保证二者互斥）
-    // ATOMGIT_STEP_SUMMARY：主展示通道（Markdown 超链接，显示文本≠实际链接）；ATOMGIT_OUTPUT：机器消费通道
-    // 两通道各自判环境变量、各自兜底：任一通道失败不影响另一通道与上报结果；无链接且无提示（上报失败/链接构建异常）不输出
+    // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥），仅写 ATOMGIT_OUTPUT
+    // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出
     const DETAIL_LINK_LABEL = '代码度量指标扫描结果';
     const detailLink = result.uploadInfo?.detailLink || '';
     const detailTip = result.uploadInfo?.tip || '';
@@ -62620,17 +62619,6 @@ async function run() {
       core.info(`${DETAIL_LINK_LABEL}: ${detailTip}`);
     } else {
       core.info(`${DETAIL_LINK_LABEL}: 无链接（上报失败或链接构建异常，不输出）`);
-    }
-    const stepSummaryLine = detailLink
-      ? `- [${DETAIL_LINK_LABEL}](${detailLink})`
-      : (detailTip ? `- ${detailTip}` : '');
-    try {
-      const stepSummaryFile = process.env['ATOMGIT_STEP_SUMMARY'];
-      if (stepSummaryFile && stepSummaryLine) {
-        fs.appendFileSync(stepSummaryFile, stepSummaryLine + '\n', 'utf8');
-      }
-    } catch (e) {
-      core.warning(`写入 ATOMGIT_STEP_SUMMARY 链接结果失败: ${e.message}`);
     }
     try {
       const detailOutputFile = process.env['ATOMGIT_OUTPUT'];
