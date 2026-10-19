@@ -201,7 +201,7 @@ class ApigSigner {
     let out = '';
     let lastPos = 0;
     for (let i = 0; i < str.length; ++i) {
-      // 代理对（surrogate pair）场景需要在下文重新赋值 c，故声明为 let
+      // 代理对场景下需在下方重新赋值（c = 0x10000 + ...），此处必须用 let
       let c = str.charCodeAt(i);
       if (c < 0x80) {
         if (noEscape[c] === 1) continue;
@@ -345,7 +345,14 @@ class CoderepoUploader {
       return { ...mainResult, obsUrl: obsResult.obsUrl };
     }
 
-    return { success: true, recordId: mainResult.recordId, obsUrl: obsResult.obsUrl };
+    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口双通道输出
+    return {
+      success: true,
+      recordId: mainResult.recordId,
+      obsUrl: obsResult.obsUrl,
+      detailLink: mainResult.detailLink,
+      tip: mainResult.tip
+    };
   }
 
   /**
@@ -607,7 +614,7 @@ class CoderepoUploader {
    * - OIDC 模式：SDK callApig 免密联邦认证（OIDC ID Token -> STS 临时凭证 ->
    *   V11-HMAC-SHA256 签名 + X-Security-Token）
    * - AK/SK 模式：ApigSigner SDK-HMAC-SHA256 签名（原有方式）
-   * 返回 { success, recordId?, error? }
+   * 返回 { success, recordId?, detailLink?, tip?, error? }
    */
   async report(url, body) {
     try {
@@ -647,14 +654,18 @@ class CoderepoUploader {
         return { success: false, error: resData?.msg || 'Unknown error' };
       }
 
-      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象
+      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象；当前服务端返回 CodeMetricsReportVO
       const recordId = resData?.data?.recordId
         || resData?.data?.id
         || (typeof resData?.data === 'number' || typeof resData?.data === 'string' ? resData.data : null)
         || resData?.recordId
         || resData?.id;
 
-      return { success: true, recordId: recordId };
+      // data.detailLink：平台分支页固定单条跳转链接；data.tip：仓未录入/分支未登记提示（两者互斥，可均为空）
+      const detailLink = typeof resData?.data?.detailLink === 'string' ? resData.data.detailLink : '';
+      const tip = typeof resData?.data?.tip === 'string' ? resData.data.tip : '';
+
+      return { success: true, recordId: recordId, detailLink: detailLink, tip: tip };
     } catch (error) {
       // 输出详细错误信息以便排查网络问题
       console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
