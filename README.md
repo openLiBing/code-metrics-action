@@ -144,7 +144,7 @@ permissions:
 
 ### 概览输出（ATOMGIT_OUTPUT）
 
-扫描完成后，插件会将每项指标通过 `ATOMGIT_OUTPUT` 输出为独立的键值对，便于工作流页面直接查看概览（不含明细）。每项指标的标识为 中文名（英文名），按顺序排列为：代码规模（codeScale）、平均代码行数（avgFunctionLoc）、平均圈复杂度（avgCyclomaticComplexity）、总代码重复率（totalCodeDuplicationRate）、总文件重复率（totalFileDuplicationRate）。重复率指标为带 `%` 的百分数。使用方式：`${{ steps.<scan-id>.outputs['代码规模（codeScale）'] }}`。
+扫描完成后，插件会将每项指标通过 `ATOMGIT_OUTPUT` 输出为独立的键值对，便于工作流页面直接查看概览（不含明细）。每项指标的标识为 中文名（英文名），按顺序排列为：代码规模（codeScale）、平均代码行数（avgFunctionLoc）、平均圈复杂度（avgCyclomaticComplexity）、总代码重复率（totalCodeDuplicationRate）、总文件重复率（totalFileDuplicationRate）。重复率指标为带 `%` 的百分数。
 
 | 输出标识                                   | 值     |
 | ------------------------------------------ | ------ |
@@ -153,11 +153,6 @@ permissions:
 | `平均圈复杂度（avgCyclomaticComplexity）`  | `3.2`  |
 | `总代码重复率（totalCodeDuplicationRate）` | `0.5%` |
 | `总文件重复率（totalFileDuplicationRate）` | `1.2%` |
-
-> **说明**
->
-> - 概览输出通过 `ATOMGIT_OUTPUT` 写入。本插件为 Node 自定义 action，写入 `ATOMGIT_OUTPUT` 的输出**无需在 action.yml 中声明** `outputs:` 即可被 `${{ steps.<scan-id>.outputs.<...> }}` 引用（中文键使用中括号字符串，如 `${{ steps.scan.outputs['代码规模（codeScale）'] }}`）。
-> - 概览值为供工作流页面展示的**可读字符串**，重复率指标带 `%`；而「输出」节中 `core.setOutput` 输出为**纯数值**（如 `total-code-duplication-rate=0.5`），同名指标单位同为 `%`。两者不混用：编程取用建议用 `core.setOutput` 的纯数值键，概览值仅作展示。
 
 #### 平台详情链接输出
 
@@ -181,10 +176,9 @@ permissions:
 
 > **说明**
 >
-> - 链接由服务端拼接（`projectId` + 分支管理页筛选参数 `platforms` / `repoUrlLike` / `branchNameLike`）；同一代码仓关联多个项目时，固定输出查询第一个项目对应的 1 条链接（不输出多链接）。
+> - 链接由服务端拼接，同一代码仓关联多个项目时，固定输出查询第一个项目对应的 1 条链接（不输出多链接）。
 > - 链接落地页展示的指标数据恒为该分支**最新一次成功检测结果**，非历史流水线运行数据。
-> - 上报失败或链接构建异常时既不输出链接也不输出提示；未设置 `ATOMGIT_OUTPUT` 环境变量或写入失败时跳过输出并告警降级，不影响上报结果。
-> - `ATOMGIT_OUTPUT` 链接行 key 统一以 `url` 结尾（`扫描结果url`）：平台按 key 末尾小写 `url` 判定输出类型为可点击链接（大小写敏感）；提示行 key 为 `扫描结果`，不带该后缀，避免提示文本被渲染为无效链接。
+> - 上报失败或链接构建异常时既不输出链接也不输出提示；写入失败时跳过输出，不影响上报结果。
 
 ## 依赖
 
