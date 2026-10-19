@@ -295,6 +295,8 @@ class CoderepoUploader {
       pipelineRunId: options.pipelineRunId,
       commitId: options.commitId,
       runNumber: options.runNumber,
+      // pipelineName：流水线名称（GitCode runner 注入的 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
+      pipelineName: options.pipelineName,
       metricsData: overallMetrics,
       detectionStartedAt: options.startTime,
       detectionCompletedAt: options.endTime,
