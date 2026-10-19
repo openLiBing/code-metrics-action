@@ -159,11 +159,11 @@ permissions:
 > - 概览输出通过 `ATOMGIT_OUTPUT` 写入。本插件为 Node 自定义 action，写入 `ATOMGIT_OUTPUT` 的输出**无需在 action.yml 中声明** `outputs:` 即可被 `${{ steps.<scan-id>.outputs.<...> }}` 引用（中文键使用中括号字符串，如 `${{ steps.scan.outputs['代码规模（codeScale）'] }}`）。
 > - 概览值为供工作流页面展示的**可读字符串**，重复率指标带 `%`；而「输出」节中 `core.setOutput` 输出为**纯数值**（如 `total-code-duplication-rate=0.5`），同名指标单位同为 `%`。两者不混用：编程取用建议用 `core.setOutput` 的纯数值键，概览值仅作展示。
 
-### 平台详情链接输出（ATOMGIT_OUTPUT）
+#### 平台详情链接输出
 
-上报成功后，插件输出 1 条该扫描仓在 openLiBing 平台分支管理页的跳转链接（固定 1 行），仅通过 `ATOMGIT_OUTPUT` 输出；运行日志（`core.info`）同时打印实际链接便于查看。
+上报成功后，插件输出 1 条该扫描仓在 openLiBing 平台分支管理页的跳转链接（固定 1 行）；运行日志（`core.info`）同时打印实际链接便于查看。
 
-`ATOMGIT_OUTPUT` 输出 key=value 行（供 `${{ steps.<scan-id>.outputs['扫描结果url'] }}` 取值）：
+输出标识为'扫描结果url'，示例：
 
 ```text
 扫描结果url=https://www.openlibing.com/apps/repos?projectId=3&platforms=gitcode&repoUrlLike=test%2Frepo&branchNameLike=master
