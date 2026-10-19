@@ -32,6 +32,21 @@ class FileCollector {
     'rakefile', 'gemfile', 'build', 'build.bazel', 'workspace'
   ];
 
+  // 默认跳过的隐藏目录（定向黑名单）：只排版本控制与 IDE 的私有目录，
+  // 不再按「. 开头」一刀切——否则 .gitcode 这类承载流水线配置的正式源码目录会被连带剪枝，
+  // 使本地收集范围（重复率分子）小于 scc 全量扫描范围（分母），重复率被系统性低估。
+  static DEFAULT_EXCLUDED_DIRS = ['.git', '.svn', '.hg', '.idea', '.vscode'];
+
+  /**
+   * 判断目录是否属于默认跳过的隐藏目录（版本控制/IDE 私有目录）
+   *
+   * @param {string} dirName 目录名（不含路径）
+   * @return {boolean} 命中默认跳过名单返回 true，否则返回 false
+   */
+  static isDefaultExcludedDir(dirName) {
+    return FileCollector.DEFAULT_EXCLUDED_DIRS.includes(String(dirName || '').toLowerCase());
+  }
+
   /**
    * 判断文件是否放行：文件名特例 > 显式 allowed-extensions > 缺省白名单。
    * 扩展名统一小写比较；显式配置为覆盖式语义——用户指定扩展名后，
@@ -242,9 +257,9 @@ class FileCollector {
       const relPath = relPrefix ? relPrefix + '/' + entry.name : entry.name;
 
       if (entry.isDirectory()) {
-        // 跳过以 . 开头的目录（如 .git, .idea）和 excludeDirs 命中的目录
+        // 跳过默认隐藏目录（版本控制/IDE 私有目录）和 excludeDirs 命中的目录
         // （纯目录名任意层级生效；相对路径如 src/opensource/grapesjs 命中即整棵子树剪枝）
-        if (entry.name.startsWith('.')
+        if (FileCollector.isDefaultExcludedDir(entry.name)
             || FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
           continue;
         }

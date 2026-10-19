@@ -71,7 +71,7 @@ jobs:
       - name: code-metrics-scan
         uses: openlibing/code-metrics-action@117c0606ad741ef5e6b564dca9307e25e1d9e2e8
         with:
-          # 可选：排除指定目录/文件，不传 exclude-dirs 默认全路径扫描
+          # 可选：排除指定目录/文件，不传 exclude-dirs 时除内置排除目录外默认全量扫描
           # exclude-dirs: "node_modules,target,dist,.git,.gitcode,.mvn,.trae,vendor"
           # 可选：指定扫描的文件扩展名（覆盖式：只扫指定扩展名 + 文件名特例，
           # 如 CMakeLists.txt / Makefile 等构建文件始终放行）；
@@ -91,7 +91,7 @@ jobs:
 
 | 参数               | 必填 | 默认值                                      | 说明                                                                                                |
 | ------------------ | ---- | ------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| exclude-dirs       | 否   | -                                           | 排除目录/文件列表，逗号分隔，支持通配符，不填时默认扫描全部路径                                     |
+| exclude-dirs       | 否   | -                                           | 排除目录/文件列表，逗号分隔，支持通配符，不填时除内置排除目录外默认全量扫描                         |
 | allowed-extensions | 否   | 50+ 常见代码扩展名，<br/>详情见「扫描范围」 | 允许的文件扩展名，逗号分隔。                                                                        |
 | output             | 否   | metrics.json                                | 结果输出文件路径                                                                                    |
 | apig-app-key       | 否   | -                                           | **已废弃**：APIG 网关 AppKey（AK）。请使用新的 OIDC 认证方式（见下方「上传认证」），无需任何凭证    |
@@ -117,6 +117,8 @@ permissions:
 1. **文件名特例（始终放行）**：`CMakeLists.txt`、`Makefile`、`GNUMakefile`、`Dockerfile`、`Jenkinsfile`、`Rakefile`、`Gemfile`、`build`、`build.bazel`、`WORKSPACE` 等按文件名识别的构建/入口文件，不受扩展名白名单限制。
 2. **`allowed-extensions` 显式指定（覆盖式）**：用户指定扩展名后，扫描范围 = 指定扩展名 + 文件名特例，**不再叠加缺省白名单**。例如指定 `.h,.cpp`，则只扫描这两类扩展名的文件（外加 CMakeLists.txt 等特例文件）。
 3. **缺省代码扩展名白名单（未配置 `allowed-extensions` 时生效）**：内置 50+ 常见代码扩展名（C/C++、Java、Python、JS/TS、Go、Rust、Shell、JSON/XML/YAML 等数据配置，以及 `.gn`/`.gni`/`.prelds` 等 OHOS 构建体系脚本），避免二进制、文档等非代码文件干扰度量。
+
+**目录剪枝**：上述规则只针对文件；目录层面默认自动排除版本控制与 IDE 私有目录（`.git`、`.svn`、`.hg`、`.idea`、`.vscode`），其下文件不参与任何指标计算；其余隐藏目录（如平台流水线的 `.gitcode`、`.github`）正常参与扫描。需要排除更多目录请使用 `exclude-dirs`。
 
 ### 排除规则（exclude-dirs）
 
