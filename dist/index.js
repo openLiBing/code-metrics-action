@@ -50871,7 +50871,7 @@ class DuplicationDetector extends BaseDetector {
   static getSccBinPath() {
     // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
     // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
-    // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 dist/detectors
+    // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 src/detectors（上溯一层为 src/bin）
     const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
       ? __nccwpck_require2_.ab
       : null;
@@ -52052,14 +52052,14 @@ const FileCollector = __nccwpck_require__(6790);
 function getSccPath() {
   // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
   // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
-  // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 dist/detectors
+  // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 src/detectors
   const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
     ? __nccwpck_require2_.ab
     : null;
   // 候选顺序：
   // 1. bundle 根 + bin/（标准 ncc 打包形态，asset 随目录分发）
   // 2. bundle 根根目录平铺（部分平台分发时把 asset 平铺到 dist/ 根）
-  // 3. 源码结构：__dirname=dist/detectors，上溯一层为 dist/
+  // 3. 源码结构：__dirname=src/detectors，上溯一层为 src/（即 src/bin/scc）
   const candidates = [];
   if (bundleRoot) {
     candidates.push(path.join(bundleRoot, 'bin', 'scc'));
