@@ -186,7 +186,7 @@ class MetricsScanner {
         if (uploadResult.success) {
           // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
           this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
-          // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口双通道输出
+          // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
           result.uploadInfo = {
             success: true,
             obsUrl: uploadResult.obsUrl,

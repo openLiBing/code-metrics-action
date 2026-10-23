@@ -5,13 +5,13 @@ import tseslint from "typescript-eslint";
 
 export default [
   {
-    // 仅忽略 ncc 打包产物 dist/index.js 本身；dist/ 下其余 .js 均为手写源码模块，必须纳入检查
+    // 仅忽略 ncc 打包产物 dist/index.js；手写源码统一在 src/，其余 .js 递归纳入检查
     ignores: ["node_modules/**", "reports/**", "dist/index.js"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    // 递归覆盖 dist/ 下各层源码模块（原 ["*.js"] 只匹配根目录一层，导致 dist 源码 0 覆盖）
+    // 递归覆盖 src/ 下各层源码模块（原 ["*.js"] 只匹配根目录一层，导致源码 0 覆盖）
     files: ["**/*.js"],
     languageOptions: {
       ecmaVersion: 2022,

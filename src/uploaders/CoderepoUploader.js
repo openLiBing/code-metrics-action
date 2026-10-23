@@ -345,7 +345,7 @@ class CoderepoUploader {
       return { ...mainResult, obsUrl: obsResult.obsUrl };
     }
 
-    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口双通道输出
+    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口输出
     return {
       success: true,
       recordId: mainResult.recordId,

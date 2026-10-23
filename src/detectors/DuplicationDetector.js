@@ -348,7 +348,7 @@ class DuplicationDetector extends BaseDetector {
   static getSccBinPath() {
     // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
     // - ncc bundle：用 ncc 注入的 __nccwpck_require__.ab（bundle 根 = dist/）定位内置 bin
-    // - 源码结构：无 __nccwpck_require__ 全局，__dirname 即 dist/detectors
+    // - 源码结构：无 __nccwpck_require__ 全局，__dirname 即 src/detectors（上溯一层为 src/bin）
     const bundleRoot = (typeof __nccwpck_require__ !== 'undefined')
       ? __nccwpck_require__.ab
       : null;
