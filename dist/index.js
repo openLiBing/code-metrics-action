@@ -1,3528 +1,8 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 137:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-/******/ (() => { // webpackBootstrap
-/******/ 	var __webpack_modules__ = ({
-
-/***/ 7386:
-/***/ ((module) => {
-
-class MetricsCalculator {
-  static mergeResults(slocResult, lizardResult, duplicationResult) {
-    // 合并总体指标（排除 fileDetails / identicalFileDetails / duplicationOccurrences，单独处理）
-    const { fileDetails: slocFileDetails, ...slocMetrics } = slocResult;
-    const { fileDetails: lizardFileDetails, ...lizardMetrics } = lizardResult;
-    // 显式提取 duplicationOccurrences，避免被 ...duplicationMetrics 散开混入总体指标
-    const {
-      fileDetails: duplicationFileDetails,
-      identicalFileDetails,
-      duplicationOccurrences,
-      ...duplicationMetrics
-    } = duplicationResult;
-
-    // 合并文件级指标：以 sloc 的 fileDetails 为基础
-    const fileDetails = MetricsCalculator.mergeFileDetails(
-      slocFileDetails || [],
-      lizardFileDetails || [],
-      duplicationFileDetails || []
-    );
-
-    return {
-      ...slocMetrics,
-      ...lizardMetrics,
-      ...duplicationMetrics,
-      fileDetails: fileDetails,
-      identicalFileDetails: identicalFileDetails || [],
-      // 重复块出现位置列表（含每块的明文 content，由 uploader 做 Base64 编码后分批上报）
-      duplicationOccurrences: duplicationOccurrences || []
-    };
-  }
-
-  // 合并三个检测器的 fileDetails
-  static mergeFileDetails(slocFileDetails, lizardFileDetails, duplicationFileDetails) {
-    // 以 sloc 的 fileDetails 为基础（有 filePath, language, loc）
-    const fileMap = new Map();
-
-    for (const detail of slocFileDetails) {
-      fileMap.set(detail.filePath, {
-        filePath: detail.filePath,
-        language: detail.language || '',
-        loc: detail.loc || 0,
-        commentLines: detail.commentLines || 0,
-        functionCount: 0,
-        avgFunctionLoc: 0,
-        avgCyclomaticComplexity: 0,
-        functionDetails: [],
-        duplicationRate: 0,
-        duplicationLineCount: 0,
-        duplicatedFiles: []
-      });
-    }
-
-    // 合并 lizard 的 fileDetails（按 filePath 匹配）
-    for (const detail of lizardFileDetails) {
-      const existing = fileMap.get(detail.filePath);
-      if (existing) {
-        existing.functionCount = detail.functionCount || 0;
-        existing.avgFunctionLoc = detail.avgFunctionLoc || 0;
-        existing.avgCyclomaticComplexity = detail.avgCyclomaticComplexity || 0;
-        existing.functionDetails = detail.functionDetails || [];
-      } else {
-        fileMap.set(detail.filePath, {
-          filePath: detail.filePath,
-          language: '',
-          loc: 0,
-          commentLines: 0,
-          functionCount: detail.functionCount || 0,
-          avgFunctionLoc: detail.avgFunctionLoc || 0,
-          avgCyclomaticComplexity: detail.avgCyclomaticComplexity || 0,
-          functionDetails: detail.functionDetails || [],
-          duplicationRate: 0,
-          duplicationLineCount: 0,
-          duplicatedFiles: []
-        });
-      }
-    }
-
-    // 合并 duplication 的 fileDetails（按 filePath 匹配）
-    for (const detail of duplicationFileDetails) {
-      const existing = fileMap.get(detail.filePath);
-      if (existing) {
-        existing.duplicationRate = detail.duplicationRate || 0;
-        existing.duplicationLineCount = detail.duplicationLineCount || 0;
-        existing.duplicatedFiles = detail.duplicatedFiles || [];
-        // 上下文片段快照（重复块±5行，整体 Base64 编码），由 buildContextSegments 生成
-        existing.snapshotData = detail.snapshotData || null;
-      } else {
-        // duplication 独有文件（scc 不识别其扩展名，如 .prelds）：
-        // loc 用 duplication 检测携带的 totalLines 兜底（本地"非空非注释"口径），
-        // 避免 loc=0 但 duplicationLineCount>0 的矛盾展示
-        fileMap.set(detail.filePath, {
-          filePath: detail.filePath,
-          language: '',
-          loc: detail.totalLines || 0,
-          commentLines: 0,
-          functionCount: 0,
-          avgFunctionLoc: 0,
-          avgCyclomaticComplexity: 0,
-          functionDetails: [],
-          duplicationRate: detail.duplicationRate || 0,
-          duplicationLineCount: detail.duplicationLineCount || 0,
-          duplicatedFiles: detail.duplicatedFiles || [],
-          snapshotData: detail.snapshotData || null
-        });
-      }
-    }
-
-    return [...fileMap.values()];
-  }
-
-  static validate(metrics) {
-    const required = [
-      'codeScale',
-      'averageFunctionLoc',
-      'averageCyclomaticComplexity',
-      'totalCodeDuplicationRate',
-      'totalFileDuplicationRate'
-    ];
-
-    for (const key of required) {
-      if (metrics[key] === undefined || metrics[key] === null) {
-        throw new Error(`Missing required metric: ${key}`);
-      }
-    }
-
-    return true;
-  }
-
-  static formatForReport(metrics) {
-    // 分离 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
-    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metrics;
-
-    return {
-      codeScale: Number(overallMetrics.codeScale) || 0,
-      // 扫描代码总行数：代码 + 注释 + 空行的物理总行数（scc Lines 汇总，即 rawLines），
-      // 区别于 codeScale（有效代码行）；sloc 检测器禁用时 rawLines 缺失，降级为 0
-      codeLineTotal: Number(overallMetrics.rawLines) || 0,
-      // 注释行数：直接取 sloc 检测器的 scc 汇总 commentLines（现成数据）；
-      // 每文件 commentLines 明细仍随 fileDetails 落 file_detail，供文件级下钻
-      commentLines: Number(overallMetrics.commentLines) || 0,
-      // 总圈复杂度：lizard 函数圈复杂度总和（方法维度总量，与 avgCyclomaticComplexity 同源）
-      complexityCount: Number(overallMetrics.totalCyclomaticComplexity) || 0,
-      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（lizard 口径，
-      // 区别于方法维度的 avgCyclomaticComplexity）
-      cyclomaticComplexityPerFile: Number(overallMetrics.cyclomaticComplexityPerFile) || 0,
-      // 重复代码块数量：重复块出现位置总数（与 duplication_block 表行数一致）
-      duplicatedBlocks: Number(overallMetrics.duplicatedBlocks) || 0,
-      // 重复代码行数量：Σ 每文件重复行数（totalCodeDuplicationRate 的分子）
-      duplicatedLines: Number(overallMetrics.duplicatedLines) || 0,
-      avgFunctionLoc: Number(overallMetrics.averageFunctionLoc) || 0,
-      avgCyclomaticComplexity: Number(overallMetrics.averageCyclomaticComplexity) || 0,
-      totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,
-      totalFileDuplicationRate: Number(overallMetrics.totalFileDuplicationRate) || 0,
-      fileDetails: fileDetails || [],
-      identicalFileDetails: identicalFileDetails || [],
-      // 重复块出现位置列表（含明文 content），uploader 会 Base64 编码后分批上报
-      duplicationOccurrences: duplicationOccurrences || []
-    };
-  }
-}
-
-module.exports = MetricsCalculator;
-
-
-/***/ }),
-
-/***/ 889:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
-
-const fs = __nccwpck_require2_(9896);
-const path = __nccwpck_require2_(6928);
-const yaml = __nccwpck_require2_(4281);
-
-const DEFAULT_CONFIG = {
-  sourceDir: './',
-  output: 'metrics.json',
-  // 排除目录：常见构建产物、依赖目录和 IDE/工具配置目录
-  excludeDirs: [],
-  // 支持的文件扩展名：覆盖主流编程语言
-  allowedExtensions: [],
-  detectors: {
-    sloc: {
-      enabled: true
-    },
-    lizard: {
-      enabled: true
-    },
-    duplication: {
-      enabled: true,
-      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块重复记为一次"
-      minLines: 10,
-      threshold: 0.3
-    }
-  },
-  uploader: {
-    enabled: true,
-    coderepoUrl: '',
-    timeout: 30
-  },
-  verbose: false,
-  parallel: true
-};
-
-class ConfigLoader {
-  static load(configPath) {
-    let config = { ...DEFAULT_CONFIG };
-
-    if (configPath && fs.existsSync(configPath)) {
-      try {
-        const fileContent = fs.readFileSync(configPath, 'utf8');
-        const ext = path.extname(configPath).toLowerCase();
-
-        let userConfig;
-        if (ext === '.yaml' || ext === '.yml') {
-          userConfig = yaml.load(fileContent);
-        } else if (ext === '.json') {
-          userConfig = JSON.parse(fileContent);
-        } else {
-          throw new Error(`Unsupported config file format: ${ext}`);
-        }
-
-        config = this.mergeConfig(config, userConfig);
-      } catch (error) {
-        console.warn(`Warning: Failed to load config file ${configPath}: ${error.message}`);
-      }
-    }
-
-    return config;
-  }
-
-  static mergeConfig(defaultConfig, userConfig) {
-    const merged = { ...defaultConfig };
-
-    for (const key of Object.keys(userConfig)) {
-      if (userConfig[key] === undefined || userConfig[key] === null) {
-        continue;
-      }
-
-      if (Array.isArray(userConfig[key])) {
-        // 如果用户配置了数组，完全替换默认值
-        merged[key] = [...userConfig[key]];
-      } else if (typeof userConfig[key] === 'object' && userConfig[key] !== null) {
-        if (typeof merged[key] === 'object' && merged[key] !== null) {
-          merged[key] = this.mergeConfig(merged[key], userConfig[key]);
-        } else {
-          merged[key] = userConfig[key];
-        }
-      } else {
-        merged[key] = userConfig[key];
-      }
-    }
-
-    return merged;
-  }
-
-  static getDefaultConfig() {
-    return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
-  }
-}
-
-module.exports = ConfigLoader;
-
-
-/***/ }),
-
-/***/ 554:
-/***/ ((module) => {
-
-class BaseDetector {
-  constructor(config = {}) {
-    this.config = config;
-  }
-
-  async detect(sourceDir) {
-    throw new Error('Method detect() must be implemented');
-  }
-
-  getName() {
-    throw new Error('Method getName() must be implemented');
-  }
-}
-
-module.exports = BaseDetector;
-
-
-/***/ }),
-
-/***/ 9263:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
-
-const fs = __nccwpck_require2_(9896);
-const path = __nccwpck_require2_(6928);
-const crypto = __nccwpck_require2_(6982);
-const BaseDetector = __nccwpck_require2_(554);
-const FileCollector = __nccwpck_require2_(4334);
-
-class DuplicationDetector extends BaseDetector {
-  constructor(config = {}) {
-    super(config);
-    // 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
-    // - minLines=10：连续源代码行至少 10 行才算一次重复
-    this.minLines = config.minLines || 10;
-    this.allowedExtensions = config.allowedExtensions || [];
-  }
-
-  async detect(source, slocResult = null) {
-    // 支持单个路径或多个路径
-    const sources = Array.isArray(source) ? source : [source];
-    const excludeDirs = this.config.excludeDirs || [];
-
-    // 相对路径基准：优先用 git 仓库根目录，确保返回的是仓库根的相对全路径
-    // （source-dir 可能是子目录，用 sources 做基准会把子目录前缀也剥掉，只剩文件名）
-    const gitRoot = this.findGitRoot(sources[0]);
-    const pathBase = gitRoot ? [gitRoot] : sources;
-
-    // scc 的总体代码行数（codeScale），作为总重复率的分母
-    const codeScale = slocResult ? slocResult.codeScale : null;
-
-    // scc 每个文件的 loc 作为该文件重复率的权威分母，保证与上报的 loc 完全一致
-    const locByRel = new Map();
-    if (slocResult && Array.isArray(slocResult.fileDetails)) {
-      for (const d of slocResult.fileDetails) {
-        if (d && d.filePath) locByRel.set(d.filePath, Number(d.loc) || 0);
-      }
-    }
-
-    // 收集所有文件
-    const allFiles = [];
-    for (const src of sources) {
-      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-      allFiles.push(...files);
-    }
-    const uniqueFiles = [...new Set(allFiles)];
-
-    if (uniqueFiles.length === 0) {
-      return this.getEmptyResult();
-    }
-
-    // scc 口径有效行 < minLines 的文件不参与重复检测（第二道防线）：
-    // 即使插件注释规则与 scc 口径出现不一致（如历史 bug：CMakeLists.txt 的 #[[ ]]
-    // 注释体被当有效行），纯注释撑起的 10 行窗口也会在文件级被拦截，
-    // 与 cmetrics "≥10 个有效代码行才算重复"的定义对齐。
-    // 仅当 slocResult 中确有该文件的 loc 记录时过滤（路径不匹配/scc 不识别的文件保守放行）。
-    let locFiltered = 0;
-    const effectiveFiles = [];
-    for (const file of uniqueFiles) {
-      const rel = this.toRelativePath(file, pathBase);
-      const loc = locByRel.get(rel);
-      if (loc !== undefined && loc < this.minLines) {
-        locFiltered++;
-        continue;
-      }
-      effectiveFiles.push(file);
-    }
-    if (locFiltered > 0) {
-      console.log(`[duplication] Skipped ${locFiltered} files with scc loc < ${this.minLines}`);
-    }
-
-    const fileContents = new Map();
-    const fileSourceLineMaps = new Map();
-    let totalSourceLines = 0;
-    let binarySkipped = 0;
-    for (const file of effectiveFiles) {
-      try {
-        // 二进制文件嗅探：前 8KB 含 \x00 字节即判定为二进制（与 Git 同款标准），
-        // 跳过重复检测——二进制按 UTF-8 读取会产生 U+FFFD 乱码且大量伪重复块。
-        // 用内容嗅探而非扩展名黑名单：.config/.cfg 等文本配置不能按扩展名误杀。
-        if (DuplicationDetector.isBinaryFile(file)) {
-          binarySkipped++;
-          continue;
-        }
-        const content = fs.readFileSync(file, 'utf8');
-        fileContents.set(file, content);
-        const sourceLineMap = this.buildSourceLineMap(content, file);
-        fileSourceLineMaps.set(file, sourceLineMap);
-        totalSourceLines += sourceLineMap.sourceCount;
-      } catch (error) {
-        console.warn(`[WARN] Failed to read file ${file}: ${error.message}`);
-      }
-    }
-    if (binarySkipped > 0) {
-      console.log(`[duplication] Skipped ${binarySkipped} binary files (NUL byte sniffing)`);
-    }
-
-    // 行级跨文件匹配（与 cmetrics 官方定义对齐："非空非注释行连续 10 行相同"）
-    const lineResult = this.detectWithLineLevel(effectiveFiles, fileSourceLineMaps);
-    // 用 scc 对每个文件的重复行重新计数（分子分母同工具同口径，保证与 loc 完全一致）
-    const sccDupByRel = this.countDuplicatedLinesWithScc(
-        lineResult.fileDuplicatedLines, fileContents, pathBase);
-    // 使用 let 声明：buildContextSegments 会返回带 snapshotData 的新 fileDetails
-    let fileDetails = this.calculateFileDetailsFromLines(
-        lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase, locByRel, sccDupByRel);
-    // 从共享滑动窗口构建重复块出现位置（窗口级 union-find 分组，自动去重）
-    const duplicationOccurrences = this.buildDuplicationOccurrences(
-        lineResult.fileSourceLines, fileContents, pathBase, lineResult.sharedHashWindows);
-
-    // 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData
-    fileDetails = this.buildContextSegments(fileDetails, duplicationOccurrences, fileContents, pathBase);
-
-    const duplicatedLines = fileDetails.reduce((sum, d) => sum + d.duplicationLineCount, 0);
-
-    // 分母：优先用传入的 codeScale（与 cmetrics 和华为云保持一致）
-    // 如果没有 codeScale，则用本地统计的源代码行总数
-    const denominator = codeScale || totalSourceLines;
-
-    const duplicationRate = denominator > 0
-      ? parseFloat(((duplicatedLines / denominator) * 100).toFixed(2))
-      : 0;
-
-    // 完全一致文件计数（用于总文件重复率）
-    const identicalFileCount = this.calculateFileDuplication(fileContents);
-    const fileDuplicationRate = uniqueFiles.length > 0
-      ? parseFloat(((identicalFileCount / uniqueFiles.length) * 100).toFixed(2))
-      : 0;
-
-    // 计算完全一致文件的详情（用于总文件重复率下钻）
-    const identicalFileDetails = this.calculateIdenticalFileDetails(fileContents, pathBase);
-
-    return {
-      totalCodeDuplicationRate: duplicationRate,
-      totalFileDuplicationRate: fileDuplicationRate,
-      // 重复代码块数量：重复块出现位置总数（与 code_metrics_duplication_block 表行数一致）
-      duplicatedBlocks: duplicationOccurrences.length,
-      duplicatedLines: duplicatedLines,
-      totalLines: denominator,
-      duplicatedFiles: identicalFileCount,
-      totalFiles: uniqueFiles.length,
-      fileDetails: fileDetails,
-      identicalFileDetails: identicalFileDetails,
-      // 重复块出现位置列表（同一代码内容的所有出现位置归为同一 group_id），供后端入库 code_metrics_duplication_block
-      duplicationOccurrences: duplicationOccurrences
-    };
-  }
-
-  /**
-   * 行级跨文件重复检测（主路径）
-   * 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
-   *
-   * 算法：
-   * 1. 提取每个文件的源代码行（非空非注释，含 import 行），保留原始行号
-   * 2. 10 源代码行滑动窗口，md5 哈希每个窗口
-   * 3. 同一 hash 有 2+ 个窗口即计为重复（含同文件内重复）
-   * 4. 标记所有被匹配窗口覆盖的源代码行索引
-   * 5. 合并连续的源代码行索引为最大区间 → 每个区间是一个重复块出现位置
-   *
-   * 相比 token 级窗口的优势：
-   * - 按行对齐，30 行连续重复只产生 1 个块（而非多个 19 行碎片）
-   * - 合并后同一 (file, startLine, endLine) 只产生一条记录（避免重复入库）
-   *
-   * @param {string[]} files 文件绝对路径列表
-   * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（含 sourceLines，分类口径与 scc 一致）
-   * @returns {Object} {fileDuplicatedLines, fileSourceLines, sharedHashWindows}
-   */
-  detectWithLineLevel(files, fileSourceLineMaps) {
-    const WINDOW_SIZE = this.minLines; // 10
-
-    // Step 1: 提取每个文件的源代码行（与 scc 有效代码行语义一致），保留原始行号
-    // 直接复用 buildSourceLineMap 已计算好的 sourceLines，避免分类口径不一致
-    const fileSourceLines = new Map();
-    for (const file of files) {
-      const sourceLineMap = fileSourceLineMaps.get(file)
-        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
-      if (!sourceLineMap || !sourceLineMap.sourceLines) continue;
-      fileSourceLines.set(file.replace(/\\/g, '/'), sourceLineMap.sourceLines);
-    }
-
-    // Step 2: 10 源代码行滑动窗口，md5 哈希
-    const hashToWindows = new Map();
-    for (const [normalizedFile, sourceLines] of fileSourceLines) {
-      if (sourceLines.length < WINDOW_SIZE) continue;
-      for (let i = 0; i <= sourceLines.length - WINDOW_SIZE; i++) {
-        const windowText = sourceLines.slice(i, i + WINDOW_SIZE)
-          .map(l => l.text).join('\n');
-        const hash = crypto.createHash('md5').update(windowText).digest('hex');
-        if (!hashToWindows.has(hash)) hashToWindows.set(hash, []);
-        hashToWindows.get(hash).push({
-          file: normalizedFile,
-          startIdx: i,
-          endIdx: i + WINDOW_SIZE - 1
-        });
-      }
-    }
-
-    // Step 3: 标记重复行 + 收集共享 hash 的滑动窗口（供分组使用）
-    const fileDuplicatedLines = new Map();
-    // 仅含跨 2+ 个窗口的共享 hash：hash -> [{file, startIdx, endIdx}]
-    const sharedHashWindows = new Map();
-
-    for (const [hash, windows] of hashToWindows) {
-      if (windows.length < 2) continue;
-      sharedHashWindows.set(hash, windows);
-
-      for (const win of windows) {
-        const sourceLines = fileSourceLines.get(win.file);
-        if (!sourceLines) continue;
-
-        if (!fileDuplicatedLines.has(win.file)) fileDuplicatedLines.set(win.file, new Set());
-
-        const lineSet = fileDuplicatedLines.get(win.file);
-
-        for (let i = win.startIdx; i <= win.endIdx; i++) {
-          lineSet.add(sourceLines[i].lineNum);
-        }
-      }
-    }
-
-    return { fileDuplicatedLines, fileSourceLines, sharedHashWindows };
-  }
-
-  /**
-   * 把行级匹配得到的「文件→重复行号集合」转为 fileDetails 数组（Step 5）
-   * - 过滤为源代码行（剔除空行/注释行）
-   * - 只含有重复的文件入 fileDetails（无重复文件由 sloc 基础记录覆盖）
-   */
-  calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources, locByRel, sccDupByRel) {
-    const fileDetails = [];
-    for (const [file, lineSet] of fileDuplicatedLines) {
-      // 兼容路径分隔符：detectWithLineLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
-      const sourceLineMap = fileSourceLineMaps.get(file)
-        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
-      if (!sourceLineMap) continue;
-
-      // 分母：优先用 scc 每个文件的 loc（与上报的 loc 完全一致），否则回退到本地分类统计
-      const filePath = this.toRelativePath(file, sources);
-      const sccLoc = locByRel ? locByRel.get(filePath) : undefined;
-      const totalFileSourceLines = (sccLoc !== undefined && sccLoc > 0) ? sccLoc : sourceLineMap.sourceCount;
-
-      // 分子：优先用 scc 对重复行的重数结果（与分母完全同工具同口径，
-      // 保证重复率明细中的有效代码行与代码规模文件级明细一致，杜绝 >100%）；
-      // scc 重数失败（返回 null）时回退到本地 lineMap 口径并做分母封顶保护
-      let duplicatedSourceLines;
-      if (sccDupByRel) {
-        duplicatedSourceLines = sccDupByRel.get(filePath) || 0;
-        // 块注释边界等极端情况下抽取行重数可能略超全集，按分母封顶
-        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
-      } else {
-        duplicatedSourceLines = 0;
-        for (const lineNum of lineSet) {
-          if (sourceLineMap.lineMap.get(lineNum)) {
-            duplicatedSourceLines++;
-          }
-        }
-        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
-      }
-      if (duplicatedSourceLines === 0) continue;  // 全是注释/空行：不入 fileDetails
-
-      const duplicationRate = totalFileSourceLines > 0
-        ? parseFloat(((duplicatedSourceLines / totalFileSourceLines) * 100).toFixed(2))
-        : 0;
-
-      fileDetails.push({
-        filePath: filePath,
-        duplicationRate,
-        duplicationLineCount: duplicatedSourceLines,
-        // 该文件的有效代码行数（scc loc 优先，无则本地分类统计）。
-        // scc 不识别的扩展名（如 .prelds）不会出现在 sloc fileDetails 中，
-        // 合并时用该值兜底 loc，避免 loc=0 但 duplicationLineCount>0 的矛盾展示
-        totalLines: totalFileSourceLines
-      });
-    }
-    return fileDetails;
-  }
-
-  /**
-   * 用 scc 对每个文件的重复行重新计数，保证分子（重复有效行数）与分母（loc）完全同口径。
-   *
-   * <p>实现方式：把每个文件的重复物理行按行号顺序抽取到临时镜像目录（保持原相对路径与扩展名，
-   * 让 scc 用与全量扫描完全相同的语言规则解析），单次 scc 扫描取每文件 Code 即为重复有效行数。
-   * 任何异常返回 null，调用方回退本地 lineMap 口径。
-   *
-   * @param {Map<string, Set<number>>} fileDuplicatedLines 文件 → 重复物理行号集合
-   * @param {Map<string, string>} fileContents 文件 → 内容
-   * @param {string[]} sources 源目录（用于相对路径对齐）
-   * @returns {Map<string, number>|null} 相对路径 → 重复有效行数（scc 口径），失败返回 null
-   */
-  countDuplicatedLinesWithScc(fileDuplicatedLines, fileContents, sources) {
-    if (!fileDuplicatedLines || fileDuplicatedLines.size === 0) {
-      return new Map();
-    }
-    const os = __nccwpck_require2_(857);
-    const { execSync } = __nccwpck_require2_(5317);
-    const sccPath = DuplicationDetector.getSccBinPath();
-    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
-    // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
-    if (!sccPath) {
-      return null;
-    }
-    // 临时镜像目录：mkdtemp 防并发冲突，finally 统一清理
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-scc-'));
-    try {
-      for (const [file, lineSet] of fileDuplicatedLines) {
-        const content = fileContents.get(file);
-        if (!content) continue;
-        const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
-        // 按物理行号升序抽取重复行内容，保持原相对路径与扩展名写入镜像
-        const dupTexts = [...lineSet].sort((a, b) => a - b)
-          .filter(n => lines[n - 1] !== undefined)
-          .map(n => lines[n - 1]);
-        if (dupTexts.length === 0) continue;
-        const relPath = this.toRelativePath(file, sources);
-        const dest = path.join(tmpRoot, ...relPath.split('/'));
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
-      }
-      const cmd = `"${sccPath}" -f json --no-cocomo --no-size --by-file "${tmpRoot}"`;
-      const output = execSync(cmd, {
-        encoding: 'utf8',
-        maxBuffer: 100 * 1024 * 1024,
-        timeout: 300000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-      const sccResult = JSON.parse(output.trim());
-      const dupByRel = new Map();
-      for (const lang of sccResult) {
-        for (const f of (lang.Files || [])) {
-          const name = f.Location || f.Name || '';
-          if (!name) continue;
-          const rel = path.relative(tmpRoot, name).replace(/\\/g, '/');
-          dupByRel.set(rel, f.Code || 0);
-        }
-      }
-      console.log(`[duplication] scc recount done for ${dupByRel.size} duplicated files`);
-      return dupByRel;
-    } catch (error) {
-      console.warn(`[WARN] scc recount of duplicated lines failed, fallback to local line-map: ${error.message}`);
-      return null;
-    } finally {
-      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (e) { /* 忽略清理异常 */ }
-    }
-  }
-
-  /**
-   * 获取 scc 二进制路径，策略与 slocDetector 完全一致：
-   * 优先使用 dist/bin 内置二进制，其次回退 PATH 查找（保证分子分母用同一个 scc）。
-   *
-   * @returns {string} scc 可执行路径
-   */
-  static getSccBinPath() {
-    // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
-    // - ncc bundle：用 ncc 注入的 __nccwpck_require3_.ab（bundle 根 = dist/）定位内置 bin
-    // - 源码结构：无 __nccwpck_require3_ 全局，__dirname 即 dist/detectors
-    const bundleRoot = (typeof __nccwpck_require3_ !== 'undefined')
-      ? __nccwpck_require3_.ab
-      : null;
-    // 候选顺序：bundle 根 + bin/ → bundle 根平铺（asset 平铺分发形态）→ 源码结构上溯
-    const candidates = [];
-    if (bundleRoot) {
-      candidates.push(path.join(bundleRoot, 'bin', 'scc'));
-      candidates.push(path.join(bundleRoot, 'scc'));
-    }
-    candidates.push(path.join(__dirname, 'bin', 'scc'));
-    candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
-    candidates.push(path.join(__dirname, 'scc'));
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755
-        try {
-          fs.chmodSync(candidate, 0o755);
-        } catch (e) {
-          console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
-        }
-        return candidate;
-      }
-    }
-    // PATH 探测：确认环境本身安装了 scc 才使用裸命令名，
-    // 避免执行注定失败的命令产生误导性报错
-    try {
-      (__nccwpck_require2_(5317).execSync)('command -v scc', { stdio: 'ignore' });
-      return 'scc';
-    } catch (e) {
-      console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），重复行统计回退到本地 line-map');
-      return null;
-    }
-  }
-
-  // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）
-  // hashIsCode=true：C/C++ 预处理指令（#include/#define 等）计入代码行（scc 计入）
-  // mlStrings：Python 三引号 docstring 按注释处理（scc 不计入代码行）
-  // blockComments：多组块注释标记（如 CMake 的 #[[ ]]），进入后直到对应结束标记出现
-  static getLanguageConfig(ext, fileName) {
-    const e = (ext || '').toLowerCase();
-    // CMake 按文件名/扩展名识别（与 scc 一致）：CMakeLists.txt / *.cmake。
-    // 支持行注释 # 与方括号块注释 #[[ ]]（#[==[ 变体罕见，暂不支持）。
-    // 此前 CMakeLists.txt 按 .txt 走 default 规则，#[[ ]] 注释体被当成有效代码行，
-    // 导致纯 license 注释撑起 10 行窗口被判重复块（scc 口径 loc=2 的矛盾现象）。
-    const base = (fileName || '').toLowerCase();
-    if (base === 'cmakelists.txt' || e === '.cmake') {
-      return { lineComments: ['#'], blockStart: null, blockEnd: null,
-        blockComments: [['#[[', ']]']], mlStrings: [], hashIsCode: false };
-    }
-    switch (e) {
-      case '.c': case '.cpp': case '.cc': case '.cxx': case '.h': case '.hpp': case '.cuh':
-        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: true };
-      case '.java': case '.js': case '.mjs': case '.cjs': case '.ts': case '.go': case '.cs':
-      case '.scala': case '.kt': case '.kts': case '.swift': case '.rs':
-        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
-      case '.php':
-        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
-      case '.py':
-        return { lineComments: ['#'], blockStart: null, blockEnd: null, mlStrings: ['"""', "'''"], hashIsCode: false };
-      case '.rb':
-        // Ruby 块注释：=begin ... =end（必须位于行首），行注释为 #
-        return { lineComments: ['#'], blockStart: '=begin', blockEnd: '=end', mlStrings: [], hashIsCode: false };
-      default:
-        // 未知语言：保守兜底，覆盖 C 风格与 # 注释
-        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
-    }
-  }
-
-  static startsWithAny(text, markers) {
-    for (const m of markers) {
-      if (text.startsWith(m)) return true;
-    }
-    return false;
-  }
-
-  // 判断一行是否以某个多行字符串标记开始；若同一行内已闭合则返回 null（不进入状态）
-  static openMlString(text, markers) {
-    for (const m of markers) {
-      if (text.startsWith(m)) {
-        return text.slice(m.length).includes(m) ? null : m;
-      }
-    }
-    return null;
-  }
-
-  // 判断一行中（非行首）是否出现三引号字符串标记。
-  // 与 scc 语义对齐：行首的三引号是 docstring（注释），行中的三引号是字符串字面量（计入代码行）。
-  // 返回 { marker, open }：open=true 表示该行打开了未在同行闭合的多行字符串；open=false 表示同行已闭合。
-  static findMidLineMlString(line, markers) {
-    for (const m of markers) {
-      const idx = line.indexOf(m);
-      // 只处理出现在行中的标记；行首由调用方走 docstring 分支
-      if (idx > 0) {
-        const after = line.slice(idx + m.length);
-        return { marker: m, open: !after.includes(m) };
-      }
-    }
-    return null;
-  }
-
-  // 逐文件构建"有效代码行"分析：与 scc 口径完全一致
-  // - 剔除空行、行注释、块注释、行首三引号 docstring（注释）
-  // - 行中三引号多行字符串（如 x = '''...'''）整块计入代码行（含内部空白行）
-  // - C/C++ 预处理指令（#include/#define 等）计入代码行
-  // 返回 { lineMap: 行号→是否有效代码行, sourceCount, sourceLines: [{lineNum,text}] }
-  buildSourceLineMap(content, filePath) {
-    const lines = content.split('\n');
-    const lang = DuplicationDetector.getLanguageConfig(
-        filePath ? path.extname(filePath) : '',
-        filePath ? path.basename(filePath) : '');
-    const lineMap = new Map();
-    const sourceLines = [];
-    let sourceCount = 0;
-    let inBlock = null;       // 块注释结束标记（null=不在块注释中；支持多组标记，如 CMake #[[ ]]）
-    let inDocstring = null;   // 行首三引号 docstring（注释）的结束标记
-    let inMlStringCode = null; // 行中三引号多行字符串（代码）的结束标记
-
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      let isCode = false;
-
-      if (inBlock !== null) {
-        // 块注释中：查找当前组的结束标记
-        if (trimmed.includes(inBlock)) inBlock = null;
-      } else if (inDocstring) {
-        // docstring（注释）中：查找结束标记
-        if (trimmed.includes(inDocstring)) inDocstring = null;
-      } else if (inMlStringCode) {
-        // 行中多行字符串中：整块计入代码行（含空白行），查找结束标记
-        isCode = true;
-        if (trimmed.includes(inMlStringCode)) inMlStringCode = null;
-      } else if (trimmed.length === 0) {
-        // 空行
-      } else if (lang.mlStrings.length > 0 && DuplicationDetector.startsWithAny(trimmed, lang.mlStrings)) {
-        // 行首三引号 → docstring，视为注释不计入代码行；未闭合则进入状态
-        const marker = DuplicationDetector.openMlString(trimmed, lang.mlStrings);
-        if (marker !== null) inDocstring = marker;
-      } else if (lang.blockComments
-          && DuplicationDetector.startsWithAny(trimmed, lang.blockComments.map(p => p[0]))) {
-        // 多组块注释开始行（如 CMake #[[ ]]）：进入后直到对应结束标记出现
-        for (const [bs, be] of lang.blockComments) {
-          if (trimmed.startsWith(bs)) {
-            if (!trimmed.slice(bs.length).includes(be)) inBlock = be;
-            break;
-          }
-        }
-      } else if (lang.blockStart && trimmed.startsWith(lang.blockStart)) {
-        // 块注释开始行
-        if (!trimmed.includes(lang.blockEnd)) inBlock = lang.blockEnd;
-      } else if (DuplicationDetector.startsWithAny(trimmed, lang.lineComments)) {
-        // 纯行注释
-      } else if (lang.hashIsCode && trimmed.startsWith('#')) {
-        // C/C++ 预处理指令：计入代码行
-        isCode = true;
-      } else {
-        // 普通代码行；若行中出现三引号且未同行闭合，则进入"行中多行字符串"状态（仍计入代码行）
-        isCode = true;
-        if (lang.mlStrings.length > 0) {
-          const mm = DuplicationDetector.findMidLineMlString(trimmed, lang.mlStrings);
-          if (mm && mm.open) inMlStringCode = mm.marker;
-        }
-      }
-
-      lineMap.set(i + 1, isCode);
-      if (isCode) {
-        sourceCount++;
-        sourceLines.push({ lineNum: i + 1, text: trimmed });
-      }
-    }
-    return { lineMap, sourceCount, sourceLines };
-  }
-
-  calculateFileDuplication(fileContents) {
-    const hashCount = new Map();
-    for (const content of fileContents.values()) {
-      const normalized = content.trim();
-      const hash = crypto.createHash('md5').update(normalized).digest('hex');
-      if (!hashCount.has(hash)) hashCount.set(hash, 0);
-      hashCount.set(hash, hashCount.get(hash) + 1);
-    }
-
-    let identicalFileCount = 0;
-    for (const count of hashCount.values()) {
-      if (count > 1) identicalFileCount += count;
-    }
-    return identicalFileCount;
-  }
-
-  // 将绝对路径转为相对路径
-  // 修复前缀匹配问题：/repo 会误匹配 /repo-other/test.py，需确保 src 是路径分隔符边界
-  toRelativePath(absolutePath, sources) {
-    if (!sources || sources.length === 0) {
-      return absolutePath.replace(/\\/g, '/');
-    }
-    const normalizedPath = absolutePath.replace(/\\/g, '/');
-    for (const src of sources) {
-      const normalizedSrc = src.replace(/\\/g, '/').replace(/\/+$/, ''); // 去掉尾部斜杠
-      // 精确前缀匹配：src 后必须跟 / 或恰好等于完整路径
-      if (normalizedPath === normalizedSrc
-          || normalizedPath.startsWith(normalizedSrc + '/')) {
-        return path.relative(src, absolutePath).replace(/\\/g, '/');
-      }
-    }
-    return absolutePath.replace(/\\/g, '/');
-  }
-
-  /**
-   * 判断文件是否为二进制文件：读取前 8KB，包含 \x00（NUL）字节即判定为二进制。
-   * 与 Git 的 binary 检测标准一致；UTF-8 文本不可能包含 \x00，因此不会误伤文本文件
-   * （.config/.cfg/.json 等文本配置即使扩展名可疑也能正常参与扫描）。
-   *
-   * @param {string} file 文件绝对路径
-   * @returns {boolean} true 表示二进制文件，应跳过重复检测
-   */
-  static isBinaryFile(file) {
-    const SNIFF_BYTES = 8192;
-    let fd = null;
-    try {
-      fd = fs.openSync(file, 'r');
-      const buf = Buffer.alloc(SNIFF_BYTES);
-      const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
-      return buf.slice(0, bytesRead).includes(0);
-    } catch (error) {
-      // 读取失败按非二进制处理，交给后续 readFileSync 的 catch 统一告警
-      return false;
-    } finally {
-      if (fd !== null) {
-        try { fs.closeSync(fd); } catch (e) { /* 忽略关闭异常 */ }
-      }
-    }
-  }
-
-  /**
-   * 从起始目录向上查找 git 仓库根目录（包含 .git 的目录）
-   * .git 既可能是目录（普通仓库）也可能是文件（worktree/submodule）
-   * @param {string} startDir 起始目录
-   * @returns {string|null} 仓库根目录绝对路径，找不到返回 null
-   */
-  findGitRoot(startDir) {
-    let cur = path.resolve(startDir);
-    const root = path.parse(cur).root;
-    for (let i = 0; i < 8 && cur && cur !== root; i++) {
-      if (fs.existsSync(path.join(cur, '.git'))) return cur;
-      const parent = path.dirname(cur);
-      if (parent === cur) break;
-      cur = parent;
-    }
-    return null;
-  }
-
-  // 计算完全一致文件的详情（用于总文件重复率下钻）
-  // 只在文件内容完全一致（MD5相同）时才认为是重复文件
-  // 对于一组重复文件 A、B、C，只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
-  // 前端将同一组的所有文件展示在一起，无需区分"原始文件"和"重复副本"
-  calculateIdenticalFileDetails(fileContents, sources) {
-    // 按内容哈希分组
-    const hashGroups = new Map();
-    for (const [file, content] of fileContents) {
-      const normalized = content.trim();
-      const hash = crypto.createHash('md5').update(normalized).digest('hex');
-      if (!hashGroups.has(hash)) {
-        hashGroups.set(hash, []);
-      }
-      hashGroups.get(hash).push(file);
-    }
-
-    const details = [];
-    for (const [hash, files] of hashGroups) {
-      // 只处理有重复的组（2个及以上文件内容一致）
-      if (files.length < 2) continue;
-
-      // 每组只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
-      // 前端展示时将同一组的所有文件列在一起，不再双向展示
-      const duplicatedFiles = files.map(f => this.toRelativePath(f, sources));
-
-      details.push({
-        duplicatedFiles: duplicatedFiles
-      });
-    }
-
-    return details;
-  }
-
-  /**
-   * 从行级检测的共享滑动窗口构建重复块出现位置列表（主路径）
-   *
-   * 分组策略（基于「精确文件集合分桶」+「完全一致文件去重」+「跨组去重」）：
-   * - 每个共享 hash（10 行连续窗口内容）都有一个「出现文件集合」F(hash)，即共同出现该内容的所有文件
-   * - 内容完全一致的文件（trim 后 MD5 相同）视为同一「等价类」，每个等价类选一个代表；
-   *   每个窗口的「代表集合」F' = { rep(f) | f ∈ F(hash) }
-   * - 按 F' 精确分桶：同一 F' 的窗口归入同一「重复关系」，不再做超集匹配
-   *   ——这保证同一代码块只属于一个精确文件集合组，不会被多个子集组重复包含
-   * - 同一 F' 桶内 |F'| ≥ 2 才算重复关系；桶内按代表合并连续索引为出现区间，每个区间一条 occurrence
-   * - 完全一致文件组单独输出：同一等价类 ≥2 个文件时整块成一组
-   * - 跨组去重保险：最终对同一 (file, startLine, endLine) 出现在多个组的情形，
-   *   只保留行覆盖最大的那个组，从其余组删除该 occurrence（不足 2 条的组整组丢弃）
-   *
-   * 最终分组示例（all_dup_cfile.cpp=A, test-codeql-cpp.cpp=T 完全一致，dup_cfile.cpp=D 为 A 的子集）：
-   * - 完全一致组：{A, T}（整块 1-46 行）
-   * - 部分重复组：{A, D}（L14-46 共同部分），T 因与 A 完全一致被折叠为 A，不再单独出现
-   * - apig 三文件完全共同代码 L4-16：F'={anti, codecheck, sca} 精确成一组，
-   *   不会在 {anti,codecheck}、{codecheck,sca} 等子集组重复出现
-   *
-   * 重复代码行数/重复率仍由行级检测（fileDuplicatedLines）取并集计算，与分组无关，不受影响。
-   *
-   * @param {Map} fileSourceLines file → [{lineNum, text}]（key 为 '/' 归一化路径）
-   * @param {Map} fileContents file(原始路径) → 内容
-   * @param {string[]} sources 源目录列表
-   * @param {Map} sharedHashWindows hash → [{file, startIdx, endIdx}]（仅跨 2+ 窗口的共享 hash）
-   * @returns {Array} duplicationOccurrences 列表
-   */
-  buildDuplicationOccurrences(fileSourceLines, fileContents, sources, sharedHashWindows) {
-    if (!sharedHashWindows || sharedHashWindows.size === 0) return [];
-
-    // 1) 计算「完全一致文件」的等价类：内容(trim 后)哈希相同的文件归为一类
-    //    （如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp 完全相同）
-    const contentHashToFiles = new Map(); // hash -> [归一化路径]
-    const fileToRep = new Map();          // 归一化路径 -> 该类代表
-    for (const [file, content] of fileContents) {
-      const norm = file.replace(/\\/g, '/');
-      const hash = crypto.createHash('md5').update(content.trim()).digest('hex');
-      if (!contentHashToFiles.has(hash)) contentHashToFiles.set(hash, []);
-      contentHashToFiles.get(hash).push(norm);
-    }
-    for (const files of contentHashToFiles.values()) {
-      const rep = files[0];
-      for (const f of files) fileToRep.set(f, rep);
-    }
-
-    const occurrences = [];
-    const W = this.minLines;
-
-    // 2) 预计算每个「代表文件」的 10 行滑动窗口哈希数组（每代表一份，供两两匹配复用）
-    //    repInfo: rep -> { src, winHashes: [idx], hashToPos: Map<hash, [idx]> }
-    const repInfo = new Map();
-    const allReps = new Set();
-    for (const f of fileToRep.keys()) allReps.add(fileToRep.get(f));
-    for (const rep of allReps) {
-      const src = fileSourceLines.get(rep);
-      if (!src || src.length < W) continue;
-      const winHashes = new Array(src.length - W + 1);
-      const hashToPos = new Map();
-      for (let i = 0; i <= src.length - W; i++) {
-        const h = crypto.createHash('md5')
-          .update(src.slice(i, i + W).map(l => l.text).join('\n')).digest('hex');
-        winHashes[i] = h;
-        if (!hashToPos.has(h)) hashToPos.set(h, []);
-        hashToPos.get(h).push(i);
-      }
-      repInfo.set(rep, { src, winHashes, hashToPos });
-    }
-
-    // 3) 两两代表文件：枚举所有「最大连续相同源代码行」运行（run）。
-    //    每个 run 代表一条独立的重复关系；对 run 内的两个出现位置建立连接（union），
-    //    再以「文件+索引区间」为节点做 union-find，把多文件共享同一段内容的出现位置合并成一组。
-    //    这样 A-B(1-45) 与 A-B-C(14-45) 作为两条独立关系同时保留，互不截断——
-    //    不再像旧的「按精确文件集合分桶」那样，把长关系中的窗口让给超集关系导致长关系被截断。
-    const parent = new Map();
-    const find = (k) => {
-      let root = k;
-      while (parent.get(root) !== root) root = parent.get(root);
-      while (parent.get(k) !== root) {
-        const next = parent.get(k);
-        parent.set(k, root);
-        k = next;
-      }
-      return root;
-    };
-    const union = (a, b) => {
-      const ra = find(a), rb = find(b);
-      if (ra !== rb) parent.set(ra, rb);
-    };
-    const nodeKey = (rep, s, e) => `${rep}\u0001${s}\u0001${e}`;
-
-    const repList = [...repInfo.keys()];
-    for (let a = 0; a < repList.length; a++) {
-      const A = repInfo.get(repList[a]);
-      for (let b = a + 1; b < repList.length; b++) {
-        const B = repInfo.get(repList[b]);
-        // 以 A 的窗口为基准，逐个匹配 B 中位置，并沿对角线扩展成最大 run
-        const consumed = new Set(); // "i:j" 已归属某个 run，避免重复枚举
-        for (let i = 0; i < A.winHashes.length; i++) {
-          const positions = B.hashToPos.get(A.winHashes[i]) || [];
-          for (const j of positions) {
-            const ck = i + ':' + j;
-            if (consumed.has(ck)) continue;
-            let k = 0;
-            while (i + k < A.winHashes.length && j + k < B.winHashes.length
-                && A.winHashes[i + k] === B.winHashes[j + k]) k++;
-            for (let t = 0; t < k; t++) consumed.add((i + t) + ':' + (j + t));
-            // run 覆盖的源代码索引区间（含窗口内所有行）
-            const sA = i, eA = i + W - 1 + (k - 1);
-            const sB = j, eB = j + W - 1 + (k - 1);
-            const kA = nodeKey(repList[a], sA, eA);
-            const kB = nodeKey(repList[b], sB, eB);
-            if (!parent.has(kA)) parent.set(kA, kA);
-            if (!parent.has(kB)) parent.set(kB, kB);
-            union(kA, kB);
-          }
-        }
-      }
-    }
-
-    // 3.5) 同文件内自重复：同一文件中相同内容出现在 ≥2 个非重叠位置时，这些区间互相 union。
-    //      行级检测（detectWithLineLevel）把同文件内重复计入重复行数，而上面两两匹配只覆盖跨文件，
-    //      会导致"文件内自重复"的文件（如大型 JSON 配置）重复率有值却没有 occurrence 明细。
-    //      按「对角线 run 扩展」合并长重复（8-36/72-100 不再被切成 10 行小块），并做了两项防爆保护：
-    //      a) 不用 Set 标记已处理位置对：V8 的 Set/Map 元素上限为 2^24（nodejs/node#37320），
-    //         大型配置文件的高频模板窗口对数可达千万级，Set.add 会抛
-    //         RangeError: Value undefined out of range for undefined options property undefined。
-    //         改用「对角线连续性剪枝」：若 (i-1, j-1) 处窗口哈希也相等，说明该对已被更早
-    //         起点的 run 覆盖，直接跳过——每个 run 只从其最左端点完整扩展一次。
-    //      b) 同一 hash 的出现段数超过 MAX_SELF_DUP_SEGS 时退回「所有段 union 成一组」：
-    //         超高频模板（同内容出现上百次）两两配对组合爆炸且展示价值低，整组输出即可。
-    const MAX_SELF_DUP_SEGS = 64;
-    for (const [rep, info] of repInfo) {
-      const winHashes = info.winHashes;
-      const len = winHashes.length;
-      for (const positions of info.hashToPos.values()) {
-        if (positions.length < 2) continue;
-        // 分段：连续窗口位置合段（段内为周期性重叠窗口，j-i < W 会被跳过，不参与配对）
-        const segs = [];
-        let segStart = positions[0];
-        for (let p = 1; p <= positions.length; p++) {
-          const cur = positions[p];
-          if (cur === undefined || cur !== positions[p - 1] + 1) {
-            segs.push([segStart, positions[p - 1]]);
-            segStart = cur;
-          }
-        }
-        if (segs.length < 2) continue;
-        if (segs.length > MAX_SELF_DUP_SEGS) {
-          // 超高频模板：所有段整组 union（每段一个节点），避免两两配对组合爆炸
-          const segNodes = segs.map(([a, b]) => {
-            const k = nodeKey(rep, a, b + W - 1);
-            if (!parent.has(k)) parent.set(k, k);
-            return k;
-          });
-          for (let i = 1; i < segNodes.length; i++) union(segNodes[0], segNodes[i]);
-          continue;
-        }
-        // 常规场景：跨段位置对做对角线 run 扩展（段数 ≤ MAX_SELF_DUP_SEGS，组合可控）
-        for (let si = 0; si < segs.length; si++) {
-          for (let sj = si + 1; sj < segs.length; sj++) {
-            for (let i = segs[si][0]; i <= segs[si][1]; i++) {
-              for (let j = segs[sj][0]; j <= segs[sj][1]; j++) {
-                // 只处理非重叠的后向重复位置：j ≥ i+W 保证两段窗口不重叠
-                if (j < i + W) continue;
-                // 对角线连续性剪枝：(i-1, j-1) 也同哈希 → 该对属于已扩展过的 run，跳过
-                if (i > 0 && winHashes[i - 1] === winHashes[j - 1]) continue;
-                // 从 (i, j) 沿对角线扩展最大 run：(i+k, j+k) 窗口内容一致即同属一段重复
-                let k = 0;
-                while (i + k < len && j + k < len
-                    && winHashes[i + k] === winHashes[j + k]) {
-                  k++;
-                }
-                // run 覆盖的源代码索引区间（含窗口内所有行）
-                const kA = nodeKey(rep, i, i + W - 1 + (k - 1));
-                const kB = nodeKey(rep, j, j + W - 1 + (k - 1));
-                if (!parent.has(kA)) parent.set(kA, kA);
-                if (!parent.has(kB)) parent.set(kB, kB);
-                union(kA, kB);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // 按连通分量分组：每个分量 = 一条独立的重复关系组
-    const compNodes = new Map(); // root -> Set<nodeKey>
-    for (const k of parent.keys()) {
-      const r = find(k);
-      if (!compNodes.has(r)) compNodes.set(r, new Set());
-      compNodes.get(r).add(k);
-    }
-    for (const nodes of compNodes.values()) {
-      if (nodes.size < 2) continue;
-      const fileOccs = [];
-      for (const nk of nodes) {
-        const parts = nk.split('\u0001');
-        const rep = parts[0];
-        const s = Number(parts[1]), e = Number(parts[2]);
-        const src = fileSourceLines.get(rep);
-        if (!src) continue;
-        fileOccs.push({
-          file: rep,
-          startLine: src[s].lineNum,
-          endLine: src[e].lineNum
-        });
-      }
-      if (fileOccs.length < 2) continue; // 少于 2 个出现位置不算重复
-      this.pushGroup(occurrences, fileOccs, sources, fileContents);
-    }
-
-    // 4) 处理「完全一致文件」组：同一内容哈希的 ≥2 个文件单独成一组，
-    //    每个成员各占一条出现记录（整文件为重复块）
-    //    只有源代码行数 ≥ minLines(10) 的文件才可能被滑窗检测为重复块，故以此作为阈值
-    for (const files of contentHashToFiles.values()) {
-      if (files.length < 2) continue;
-      const fileOccs = [];
-      for (const f of files) {
-        const sourceLines = fileSourceLines.get(f);
-        if (!sourceLines || sourceLines.length < this.minLines) continue;
-        fileOccs.push({
-          file: f,
-          startLine: sourceLines[0].lineNum,
-          endLine: sourceLines[sourceLines.length - 1].lineNum
-        });
-      }
-      if (fileOccs.length < 2) continue;
-      this.pushGroup(occurrences, fileOccs, sources, fileContents);
-    }
-
-    // 5) 跨组去重保险：同一 (file, startLine, endLine) 若出现在多个组，
-    //    只保留行覆盖最大的那个组中的出现位置，从其余组删除。
-    //    （理论上精确分桶后不应出现，此处作为防御性兜底，避免任何边界情形造成跨组重复）
-    this.dedupOccurrencesAcrossGroups(occurrences);
-
-    return occurrences;
-  }
-
-  // 跨组去重：同一 (filePath, startLine, endLine) 出现在多个组时，
-  // 只保留组内「所有出现位置行覆盖并集」最大的那个组中的该出现位置，从其它组删除。
-  // 删除后若某组不足 2 条出现位置，则整组丢弃。
-  // 注意：此处以 occurrence 自身的 groupId 为分组依据，不依赖外部结构。
-  dedupOccurrencesAcrossGroups(occurrences) {
-    if (!occurrences || occurrences.length === 0) return;
-
-    // 统计每个组的行覆盖并集大小，用于决定保留哪个组
-    const groupLineSpan = new Map(); // groupId -> Set<lineKey>
-    for (const o of occurrences) {
-      if (!groupLineSpan.has(o.groupId)) groupLineSpan.set(o.groupId, new Set());
-      const span = groupLineSpan.get(o.groupId);
-      for (let ln = o.startLine; ln <= o.endLine; ln++) {
-        span.add(`${o.filePath}:${ln}`);
-      }
-    }
-
-    // 对每个 (filePath, startLine, endLine) 找出它所在的所有组，保留 span 最大者
-    const blockToGroups = new Map(); // blockKey -> Set<groupId>
-    for (const o of occurrences) {
-      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
-      if (!blockToGroups.has(k)) blockToGroups.set(k, new Set());
-      blockToGroups.get(k).add(o.groupId);
-    }
-    const dropGroupForBlock = new Map(); // blockKey -> Set<groupId>(要删除的组)
-    for (const [k, gids] of blockToGroups) {
-      if (gids.size < 2) continue;
-      let best = null, bestSize = -1;
-      for (const gid of gids) {
-        const sz = groupLineSpan.get(gid) ? groupLineSpan.get(gid).size : 0;
-        if (sz > bestSize) { bestSize = sz; best = gid; }
-      }
-      const drop = new Set();
-      for (const gid of gids) if (gid !== best) drop.add(gid);
-      dropGroupForBlock.set(k, drop);
-    }
-    if (dropGroupForBlock.size === 0) return;
-
-    // 执行删除：从被标记为删除的 (blockKey, groupId) 对中移除 occurrence
-    for (let i = occurrences.length - 1; i >= 0; i--) {
-      const o = occurrences[i];
-      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
-      const drop = dropGroupForBlock.get(k);
-      if (drop && drop.has(o.groupId)) {
-        occurrences.splice(i, 1);
-      }
-    }
-
-    // 删除后若某组不足 2 条，整组丢弃
-    const groupCount = new Map();
-    for (const o of occurrences) {
-      groupCount.set(o.groupId, (groupCount.get(o.groupId) || 0) + 1);
-    }
-    for (let i = occurrences.length - 1; i >= 0; i--) {
-      if (groupCount.get(occurrences[i].groupId) < 2) {
-        occurrences.splice(i, 1);
-      }
-    }
-  }
-
-  // 把一组出现位置(重复块)统一排序、生成 groupId 并写入 occurrences
-  pushGroup(occurrences, fileOccs, sources, fileContents) {
-    // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
-    fileOccs.sort((a, b) => {
-      const relA = this.toRelativePath(a.file, sources);
-      const relB = this.toRelativePath(b.file, sources);
-      if (relA !== relB) return relA.localeCompare(relB);
-      return a.startLine - b.startLine;
-    });
-
-    // groupId 用组内所有出现位置(文件+起止行)的结构化哈希，保证不同重复关系唯一。
-    // 同一关系内各 occurrence 的内容可能不同（如共同部分与完全一致块），
-    // 因此不能再用「单一内容哈希」作为组 ID，否则不同关系可能因首块内容相同而碰撞。
-    const groupId = crypto.createHash('sha256')
-      .update(fileOccs
-          .map(o => `${this.toRelativePath(o.file, sources)}:${o.startLine}-${o.endLine}`)
-          .sort()
-          .join('\u0001'))
-      .digest('hex');
-
-    fileOccs.forEach((occ, i) => {
-      const content = this.extractBlockContent(occ.file, occ.startLine, occ.endLine, fileContents);
-      occurrences.push({
-        groupId: groupId,
-        contentHash: groupId,
-        occurrenceIndex: i,
-        filePath: this.toRelativePath(occ.file, sources),
-        startLine: occ.startLine,
-        endLine: occ.endLine,
-        content: content
-      });
-    });
-  }
-
-  /**
-   * 提取文件中指定行号区间的代码内容
-   *
-   * @param {string} file 文件路径（可能是正斜杠或反斜杠格式）
-   * @param {number} startLine 起始行（1-based）
-   * @param {number} endLine 结束行（1-based）
-   * @param {Map} fileContents file(原始路径) → 内容
-   * @returns {string} 代码内容，找不到文件时返回空字符串
-   */
-  extractBlockContent(file, startLine, endLine, fileContents) {
-    // 兼容路径分隔符：fileContents 的 key 是原始路径（Windows 下含反斜杠）
-    const content = fileContents.get(file)
-        || fileContents.get(file.replace(/\//g, '\\'));
-    if (!content) return '';
-    const lines = content.split('\n');
-    const start = Math.max(0, startLine - 1);
-    const end = Math.min(lines.length, endLine);
-    return lines.slice(start, end).join('\n');
-  }
-
-  /**
-   * 合并重叠/相邻的行号区间
-   *
-   * @param {Array} intervals [{startLine, endLine}]
-   * @param {boolean} mergeAdjacent 是否合并相邻区间（间隔 ≤1 行），默认 true。
-   *   重复块本身合并传 true（相邻重复块视为一个连续重复区域）；
-   *   扩展 ±contextLines 后的区间合并传 false（只有真正重叠才合并，避免上下文过长）。
-   * @returns {Array} 合并后的区间列表（按 startLine 排序）
-   */
-  mergeIntervals(intervals, mergeAdjacent = true) {
-    if (intervals.length === 0) return [];
-    const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
-    const merged = [Object.assign({}, sorted[0])];
-    // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
-    const overlapThreshold = mergeAdjacent ? 1 : 0;
-    for (let i = 1; i < sorted.length; i++) {
-      const last = merged[merged.length - 1];
-      if (sorted[i].startLine <= last.endLine + overlapThreshold) {
-        last.endLine = Math.max(last.endLine, sorted[i].endLine);
-        // 合并时透传附加属性（如 oversized）：任一子区间为真则合并区间视为真
-        if (sorted[i].oversized) last.oversized = true;
-      } else {
-        merged.push(Object.assign({}, sorted[i]));
-      }
-    }
-    return merged;
-  }
-
-  /**
-   * 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData。
-   *
-   * segments 生成策略（完整输出，不截断）：
-   * - 所有重复块（含超大块）均完整保留其代码内容（含 ±contextLines 上下文），
-   *   保证前端能展示/高亮全部重复代码；相邻块的上下文重叠时会合并成一个连续区间。
-   * - 超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多个 segment（分段不丢内容），
-   *   不再对超大块做「头+省略+尾」截断；快照整体随全量上报文件上传 OBS。
-   * - 未覆盖的行段由前端根据相邻片段的行号差用 "... N lines omitted ..." 占位。
-   *
-   * snapshotData 结构（整体 Base64 编码）：
-   * {
-   *   totalLines: 原始文件总行数,
-   *   contextLines: 上下文行数(5),
-   *   truncated: 固定 false（保留字段做结构兼容，现已完整输出不再截断）,
-   *   segments: [{originalStartLine, originalEndLine, contentB64}]
-   *   // 每个 segment 的 contentB64 为该片段代码内容再次 Base64 编码
-   * }
-   *
-   * @param {Array} fileDetails 文件明细列表
-   * @param {Array} duplicationOccurrences 重复块出现位置列表
-   * @param {Map} fileContents file(原始路径) → 内容
-   * @param {string[]} sources 源目录列表
-   * @param {number} contextLines 上下文行数，默认 5
-   * @returns {Array} 更新后的 fileDetails（每个有重复的 fileDetail 增加 snapshotData 字段）
-   */
-  buildContextSegments(fileDetails, duplicationOccurrences, fileContents, sources, contextLines = 5) {
-    if (!duplicationOccurrences || duplicationOccurrences.length === 0) {
-      return fileDetails;
-    }
-
-    // 按 filePath 分组出现位置，得到每个文件的重复块区间
-    const blocksByFile = new Map(); // relativePath → [{startLine, endLine}]
-    for (const occ of duplicationOccurrences) {
-      if (!blocksByFile.has(occ.filePath)) blocksByFile.set(occ.filePath, []);
-      blocksByFile.get(occ.filePath).push({ startLine: occ.startLine, endLine: occ.endLine });
-    }
-
-    // 构建 relativePath → content 的映射，便于按 fileDetail.filePath 查找
-    const relativeToContent = new Map();
-    for (const [absPath, content] of fileContents) {
-      relativeToContent.set(this.toRelativePath(absPath, sources), content);
-    }
-
-    for (const fileDetail of fileDetails) {
-      // 只有有重复的文件才生成快照
-      if (!fileDetail.duplicationLineCount || fileDetail.duplicationLineCount === 0) continue;
-
-      const blocks = blocksByFile.get(fileDetail.filePath);
-      if (!blocks || blocks.length === 0) continue;
-
-      // 1. 合并重叠的重复块区间
-      const mergedBlocks = this.mergeIntervals(blocks);
-
-      // 2. 获取文件内容和总行数
-      const content = relativeToContent.get(fileDetail.filePath);
-      if (!content) continue;
-      const lines = content.split('\n');
-      const totalLines = lines.length;
-
-      // 3. 每个块扩展 ±contextLines，再次合并重叠的扩展区间
-      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间。
-      const extended = mergedBlocks.map((b) => ({
-        startLine: Math.max(1, b.startLine - contextLines),
-        endLine: b.endLine + contextLines
-      }));
-      const mergedExtended = this.mergeIntervals(extended, false);
-
-      // 4. 构建 segments：所有区间（含超大块）完整保留代码内容，不做任何省略。
-      //    超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多段（分段不丢内容），
-      //    避免 Base64/JSON 单字符串过大影响传输与解析。
-      const MAX_SEGMENT_CHARS = 24 * 1024; // 单段原始内容字符数上限（仅分段用，不截断内容）
-      const segments = [];
-      // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
-      const pushSegment = (segStart, segEnd, contentText) => {
-        segments.push({
-          originalStartLine: segStart,
-          originalEndLine: segEnd,
-          contentB64: Buffer.from(contentText, 'utf8').toString('base64')
-        });
-      };
-      for (const interval of mergedExtended) {
-        const start = Math.max(1, interval.startLine);
-        const end = Math.min(totalLines, interval.endLine);
-        // 完整保留路径：按字符预算切段（分段间行号连续，内容无丢失）
-        let segStart = start;
-        let segChars = 0;
-        for (let ln = start; ln <= end; ln++) {
-          const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
-          const lineLen = lineText.length + 1; // 行内容 + 换行符
-          if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
-            pushSegment(segStart, ln - 1, lines.slice(segStart - 1, ln - 1).join('\n'));
-            segStart = ln;
-            segChars = 0;
-          }
-          segChars += lineLen;
-        }
-        if (segChars > 0) {
-          pushSegment(segStart, end, lines.slice(segStart - 1, end).join('\n'));
-        }
-      }
-
-      // 5. 构建 snapshotData JSON 并整体 Base64 编码（完整内容随全量上报文件上传 OBS，
-      //    DB snapshot_data 为 LONGTEXT 可承载 MB 级快照，不再做 512KB 截断兜底）
-      const snapshotDataObj = {
-        totalLines: totalLines,
-        contextLines: contextLines,
-        segments: segments,
-        truncated: false // 结构兼容字段：现已完整输出，恒为 false
-      };
-      const snapshotJson = JSON.stringify(snapshotDataObj);
-      fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
-    }
-
-    return fileDetails;
-  }
-
-  getEmptyResult() {
-    return {
-      totalCodeDuplicationRate: 0,
-      totalFileDuplicationRate: 0,
-      duplicatedBlocks: 0,
-      duplicatedLines: 0,
-      totalLines: 0,
-      duplicatedFiles: 0,
-      totalFiles: 0,
-      fileDetails: [],
-      identicalFileDetails: [],
-      duplicationOccurrences: []
-    };
-  }
-
-  getName() {
-    return 'duplication';
-  }
-}
-
-module.exports = DuplicationDetector;
-
-
-/***/ }),
-
-/***/ 1555:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
-
-const { execSync } = __nccwpck_require2_(5317);
-const path = __nccwpck_require2_(6928);
-const fs = __nccwpck_require2_(9896);
-const os = __nccwpck_require2_(857);
-const BaseDetector = __nccwpck_require2_(554);
-const FileCollector = __nccwpck_require2_(4334);
-
-class LizardDetector extends BaseDetector {
-  constructor(config = {}) {
-    super(config);
-    this.tempJsonFile = './lizard_output.json';
-    this.allowedExtensions = config.allowedExtensions || [];
-  }
-
-  async detect(source) {
-    // 支持单个路径或多个路径
-    const sources = Array.isArray(source) ? source : [source];
-    const excludeDirs = this.config.excludeDirs || [];
-
-    // 收集所有文件
-    const allFiles = [];
-    for (const src of sources) {
-      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-      allFiles.push(...files);
-    }
-
-    // 去重
-    const uniqueFiles = [...new Set(allFiles)];
-
-    if (uniqueFiles.length === 0) {
-      return this.getEmptyResult();
-    }
-
-    // Lizard 处理所有文件，统一获取函数数、函数代码行数和圈复杂度
-    let lizardResult = { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-    if (uniqueFiles.length > 0) {
-      lizardResult = this.runLizard(uniqueFiles);
-    }
-
-    const totalFunctions = lizardResult.totalFunctions;
-    const totalNloc = lizardResult.totalNloc;
-    const totalCC = lizardResult.totalCC;
-
-    if (totalFunctions === 0) {
-      return this.getEmptyResult();
-    }
-
-    // 按文件聚合函数数据，计算文件级指标
-    const fileDetails = this.aggregateFileDetails(lizardResult.functions, sources);
-
-    return {
-      totalFunctions,
-      totalNloc,
-      averageFunctionLoc: totalFunctions > 0
-        ? parseFloat((totalNloc / totalFunctions).toFixed(2))
-        : 0,
-      totalCyclomaticComplexity: totalCC,
-      averageCyclomaticComplexity: totalFunctions > 0
-        ? parseFloat((totalCC / totalFunctions).toFixed(2))
-        : 0,
-      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（区别于方法维度的 averageCyclomaticComplexity）
-      cyclomaticComplexityPerFile: fileDetails.length > 0
-        ? parseFloat((totalCC / fileDetails.length).toFixed(2))
-        : 0,
-      fileDetails: fileDetails
-    };
-  }
-
-  // 将文件列表写入临时文件，供 lizard 的 -f 参数读取
-  writeInputFile(files) {
-    const tempInputPath = path.join(os.tmpdir(), `lizard_input_${Date.now()}.txt`);
-    fs.writeFileSync(tempInputPath, files.join('\n'), 'utf8');
-    return tempInputPath;
-  }
-
-  runLizard(files) {
-    const tempJsonPath = path.resolve(this.tempJsonFile);
-    let tempInputPath = null;
-
-    try {
-      if (fs.existsSync(tempJsonPath)) {
-        fs.unlinkSync(tempJsonPath);
-      }
-
-      // 使用 -f 参数从临时文件读取文件列表，避免命令行长度限制
-      tempInputPath = this.writeInputFile(files);
-      const args = ['-f', tempInputPath, '-o', tempJsonPath];
-
-      execSync('python3 -m lizard ' + args.join(' '), {
-        encoding: 'utf8',
-        maxBuffer: 50 * 1024 * 1024,
-        timeout: 300000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-
-      if (tempInputPath) {
-        fs.unlinkSync(tempInputPath);
-        tempInputPath = null;
-      }
-
-      if (!fs.existsSync(tempJsonPath)) {
-        return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-      }
-
-      const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
-      if (fs.existsSync(tempJsonPath)) fs.unlinkSync(tempJsonPath);
-
-      if (!content) {
-        return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-      }
-
-      if (content.startsWith('{')) {
-        const results = JSON.parse(content);
-        return this.calculateMetricsFromLizard(results);
-      } else {
-        return this.parseTextOutput(content);
-      }
-    } catch (error) {
-      if (tempInputPath && fs.existsSync(tempInputPath)) {
-        fs.unlinkSync(tempInputPath);
-        tempInputPath = null;
-      }
-      if (fs.existsSync(tempJsonPath)) {
-        try {
-          const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
-          if (fs.existsSync(tempJsonPath)) fs.unlinkSync(tempJsonPath);
-          if (content) {
-            if (content.startsWith('{')) {
-              return this.calculateMetricsFromLizard(JSON.parse(content));
-            } else {
-              return this.parseTextOutput(content);
-            }
-          }
-        } catch (parseError) {
-          console.warn(`Failed to parse lizard output: ${parseError.message}`);
-        }
-      }
-      console.warn(`Lizard detection warning: ${error.message}`);
-      return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-    }
-  }
-
-  parseTextOutput(content) {
-    let totalFunctions = 0;
-    let totalNloc = 0;
-    let totalCC = 0;
-    const functions = [];
-
-    const lines = content.split('\n');
-    for (const line of lines) {
-      if (!line.trim() || line.includes('NLOC') || line.includes('===') || line.includes('----')) {
-        continue;
-      }
-
-      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+?)@(\d+)-(\d+)@(.+)$/);
-      if (match) {
-        totalFunctions++;
-        const cc = parseInt(match[2], 10);
-        totalCC += cc;
-
-        // 从源文件中计算函数体有效代码行（排除方法签名和参数行）
-        const startLine = parseInt(match[7], 10);
-        const endLine = parseInt(match[8], 10);
-        const filePath = match[9].trim();
-
-        let bodyNloc = parseInt(match[1], 10);
-        try {
-          const fileContent = fs.readFileSync(filePath, 'utf8');
-          const defLines = this.countDefinitionLines(fileContent, startLine);
-          bodyNloc = this.calculateBodyNloc(fileContent, startLine, endLine, defLines);
-        } catch (e) {
-          // 读取源文件失败时，回退到 nloc - 1
-          bodyNloc = Math.max(0, bodyNloc - 1);
-        }
-
-        totalNloc += bodyNloc;
-        // 保留 filename 用于按文件聚合
-        functions.push({
-          // match[6] 是正则捕获的函数名（如 MyClass.myMethod）
-          name: match[6] || '',
-          nloc: bodyNloc,
-          cc: cc,
-          startLine: startLine,
-          endLine: endLine,
-          filename: filePath
-        });
-      }
-    }
-
-    return { totalFunctions, totalNloc, totalCC, functions };
-  }
-
-  getEmptyResult() {
-    return {
-      totalFunctions: 0,
-      totalNloc: 0,
-      averageFunctionLoc: 0,
-      totalCyclomaticComplexity: 0,
-      averageCyclomaticComplexity: 0,
-      cyclomaticComplexityPerFile: 0,
-      fileDetails: []
-    };
-  }
-
-  // 根据源文件内容，计算函数定义占用的行数
-  countDefinitionLines(fileContent, startLine) {
-    const lines = fileContent.split('\n');
-    const startIndex = startLine - 1;
-    if (startIndex < 0 || startIndex >= lines.length) return 1;
-
-    for (let i = startIndex; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.endsWith(':')) {
-        return i - startIndex + 1;
-      }
-      if (line.endsWith('{')) {
-        return i - startIndex + 1;
-      }
-      if (line.endsWith(')') && i + 1 < lines.length && lines[i + 1].trim() === '{') {
-        return i - startIndex + 1;
-      }
-    }
-
-    return 1;
-  }
-
-  // 判断一行是否为有效代码行（非空行、非纯注释行）
-  static isSourceLine(line) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) return false;
-    if (trimmed.startsWith('#')) return false;
-    if (trimmed.startsWith('//')) return false;
-    if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/')) return false;
-    return true;
-  }
-
-  // 从源文件中精确计算函数体的有效代码行数（排除定义行）
-  calculateBodyNloc(fileContent, startLine, endLine, defLines) {
-    const lines = fileContent.split('\n');
-    let bodyNloc = 0;
-
-    const bodyStart = startLine - 1 + defLines;
-    const bodyEnd = endLine;
-
-    for (let i = bodyStart; i < bodyEnd && i < lines.length; i++) {
-      if (LizardDetector.isSourceLine(lines[i])) {
-        bodyNloc++;
-      }
-    }
-
-    return bodyNloc;
-  }
-
-  calculateMetricsFromLizard(results) {
-    let totalFunctions = 0;
-    let totalNloc = 0;
-    let totalCC = 0;
-    const functions = [];
-
-    if (results && results.functions) {
-      for (const func of results.functions) {
-        totalFunctions++;
-        totalCC += func.cyclomatic_complexity || 1;
-
-        // 读取源文件，精确计算函数定义行数，从 nloc 中排除
-        let bodyNloc = func.nloc || 0;
-        if (func.start_line && func.end_line && func.filename) {
-          try {
-            const fileContent = fs.readFileSync(func.filename, 'utf8');
-            const defLines = this.countDefinitionLines(fileContent, func.start_line);
-            bodyNloc = this.calculateBodyNloc(fileContent, func.start_line, func.end_line, defLines);
-          } catch (e) {
-            bodyNloc = Math.max(0, (func.nloc || 0) - 1);
-          }
-        } else {
-          bodyNloc = Math.max(0, (func.nloc || 0) - 1);
-        }
-
-        totalNloc += bodyNloc;
-        functions.push({
-          name: func.name,
-          nloc: bodyNloc,
-          cc: func.cyclomatic_complexity || 1,
-          startLine: func.start_line,
-          endLine: func.end_line,
-          filename: func.filename || ''
-        });
-      }
-    }
-
-    return { totalFunctions, totalNloc, totalCC, functions };
-  }
-
-  // 按文件聚合函数数据，保留每个函数的明细（函数名、行数、开始行、结束行）
-  aggregateFileDetails(functions, sources) {
-    if (!functions || functions.length === 0) return [];
-
-    // 按文件名分组
-    const fileMap = new Map();
-    for (const func of functions) {
-      const filename = func.filename || '';
-      if (!filename) continue;
-      if (!fileMap.has(filename)) {
-        fileMap.set(filename, []);
-      }
-      fileMap.get(filename).push(func);
-    }
-
-    const fileDetails = [];
-    for (const [filename, funcs] of fileMap) {
-      const functionCount = funcs.length;
-      const totalNloc = funcs.reduce((sum, f) => sum + (f.nloc || 0), 0);
-      const totalCC = funcs.reduce((sum, f) => sum + (f.cc || 0), 0);
-
-      // 将绝对路径转为相对路径
-      let filePath = filename;
-      if (sources && sources.length > 0) {
-        for (const src of sources) {
-          const normalizedSrc = src.replace(/\\/g, '/');
-          const normalizedPath = filePath.replace(/\\/g, '/');
-          if (normalizedPath.startsWith(normalizedSrc)) {
-            filePath = path.relative(src, filename);
-            break;
-          }
-        }
-      }
-      filePath = filePath.replace(/\\/g, '/');
-
-      // 保留每个函数的明细信息
-      const functionDetails = funcs.map(f => ({
-        functionName: f.name || '',
-        functionLoc: f.nloc || 0,
-        startLine: f.startLine || 0,
-        endLine: f.endLine || 0
-      }));
-
-      fileDetails.push({
-        filePath: filePath,
-        functionCount: functionCount,
-        avgFunctionLoc: parseFloat((totalNloc / functionCount).toFixed(2)),
-        avgCyclomaticComplexity: parseFloat((totalCC / functionCount).toFixed(2)),
-        functionDetails: functionDetails
-      });
-    }
-
-    return fileDetails;
-  }
-
-  getName() {
-    return 'lizard';
-  }
-}
-
-module.exports = LizardDetector;
-
-
-/***/ }),
-
-/***/ 5722:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
-
-const { execSync } = __nccwpck_require2_(5317);
-const path = __nccwpck_require2_(6928);
-const fs = __nccwpck_require2_(9896);
-const BaseDetector = __nccwpck_require2_(554);
-const FileCollector = __nccwpck_require2_(4334);
-
-// scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
-function getSccPath() {
-  // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
-  // - ncc bundle：用 ncc 注入的 __nccwpck_require3_.ab（bundle 根 = dist/）定位内置 bin
-  // - 源码结构：无 __nccwpck_require3_ 全局，__dirname 即 dist/detectors
-  const bundleRoot = (typeof __nccwpck_require3_ !== 'undefined')
-    ? __nccwpck_require3_.ab
-    : null;
-  // 候选顺序：
-  // 1. bundle 根 + bin/（标准 ncc 打包形态，asset 随目录分发）
-  // 2. bundle 根根目录平铺（部分平台分发时把 asset 平铺到 dist/ 根）
-  // 3. 源码结构：__dirname=dist/detectors，上溯一层为 dist/
-  const candidates = [];
-  if (bundleRoot) {
-    candidates.push(path.join(bundleRoot, 'bin', 'scc'));
-    candidates.push(path.join(bundleRoot, 'scc'));
-  }
-  candidates.push(path.join(__dirname, 'bin', 'scc'));
-  candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
-  candidates.push(path.join(__dirname, 'scc'));
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755，保证可执行
-      try {
-        fs.chmodSync(candidate, 0o755);
-      } catch (e) {
-        console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
-      }
-      return candidate;
-    }
-  }
-  // PATH 探测：确认 runner 环境本身安装了 scc 才使用裸命令名，
-  // 避免执行注定失败的命令产生误导性报错
-  try {
-    execSync('command -v scc', { stdio: 'ignore' });
-    return 'scc';
-  } catch (e) {
-    console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
-    return null;
-  }
-}
-
-class SlocDetector extends BaseDetector {
-  constructor(config = {}) {
-    super(config);
-    this.allowedExtensions = config.allowedExtensions || [];
-    this.sccPath = getSccPath();
-  }
-
-  async detect(source) {
-    const sources = Array.isArray(source) ? source : [source];
-    const excludeDirs = this.config.excludeDirs || [];
-
-    const sccArgs = this.buildSccArgs(sources, excludeDirs);
-
-    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接回退本地逐文件统计，
-    // 跳过注定失败的命令执行
-    if (!this.sccPath) {
-      return this.fallbackDetect(sources, excludeDirs);
-    }
-
-    try {
-      const result = this.runScc(sccArgs, sources);
-      return result;
-    } catch (error) {
-      console.warn(`[WARN] scc 执行失败: ${error.message}，回退到逐文件统计`);
-      return this.fallbackDetect(sources, excludeDirs);
-    }
-  }
-
-  // 构建 scc 命令行参数
-  buildSccArgs(sources, excludeDirs) {
-    const args = ['-f', 'json', '--no-cocomo', '--no-size', '--by-file'];
-
-    // 不再向 scc 传 --exclude-dir：scc 自身的排除规则不支持 ** 等 glob 通配符，
-    // 无法与 FileCollector 的 exclude-dirs 语义对齐。改为扫描全量后，在 runScc 里
-    // 用 FileCollector.isPathExcluded 对每个文件做后置过滤，保证与其余指标完全一致。
-
-    // 限制文件扩展名
-    if (this.allowedExtensions.length > 0) {
-      const exts = this.allowedExtensions
-        .map(e => e.replace(/^\./, ''))
-        .join(',');
-      args.push('--include-ext', exts);
-    }
-
-    // 源目录
-    for (const src of sources) {
-      args.push(src);
-    }
-
-    return args;
-  }
-
-  // 执行 scc 并解析 JSON 输出
-  runScc(args, sources) {
-    const cmd = `"${this.sccPath}" ${args.join(' ')}`;
-
-    const output = execSync(cmd, {
-      encoding: 'utf8',
-      maxBuffer: 100 * 1024 * 1024,
-      timeout: 300000,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    const sccResult = JSON.parse(output.trim());
-
-    // scc JSON 输出格式: 按语言分组
-    // [{ Name, Code, Comment, Blank, Lines, Complexity, Count, Bytes, Files:[...] }]
-    const excludeDirs = this.config.excludeDirs || [];
-    let totalCode = 0;
-    let totalComment = 0;
-    let totalBlank = 0;
-    let totalLines = 0;
-    let totalComplexity = 0;
-    let totalFiles = 0;
-
-    // 收集文件级指标
-    const fileDetails = [];
-
-    for (const lang of sccResult) {
-      // 注意：不再累加语言级汇总（含被 exclude-dirs 排除的文件），改为逐文件统计并
-      // 过滤后累加，保证 codeScale 等与 FileCollector 收集的文件范围口径一致。
-      const langFiles = lang.Files;
-      if (!langFiles || !Array.isArray(langFiles) || langFiles.length === 0) {
-        // 兜底：若某语言条目缺少/为空按文件明细（Files 缺失或为空数组），无法做文件级
-        // 排除，则按语言级汇总计入，避免该语言整体被丢弃导致总代码量/总文件数/总复杂度偏小。
-        totalCode += lang.Code || 0;
-        totalComment += lang.Comment || 0;
-        totalBlank += lang.Blank || 0;
-        totalLines += lang.Lines || 0;
-        totalComplexity += lang.Complexity || 0;
-        totalFiles += lang.Count || 0;
-        continue;
-      }
-      for (const file of langFiles) {
-          // scc 不同版本的 --by-file JSON 输出字段名可能不同：
-          //   - 旧版：Name 是完整路径
-          //   - 新版（3.x+）：Name 是文件名，Location 是完整路径
-          // 优先取完整路径字段（Location），其次 Name（可能是文件名或完整路径）
-          const fileName = file.Location || file.Name || file.Path || file.File || '';
-          // 过滤掉语言汇总行（字段为空或不含路径分隔符/扩展名的语言名）
-          if (!fileName || !this.isFilePath(fileName)) {
-            console.log(`[DEBUG] 跳过非文件条目: Name="${fileName}", Code=${file.Code || 0}, keys=${Object.keys(file).join(',')}`);
-            continue;
-          }
-          // 将绝对路径转为相对路径
-          let filePath = this.toRelativePath(fileName, sources);
-          // 后置过滤：用 FileCollector 的目录剪枝语义排除命中 exclude-dirs 的文件，
-          // 保证与 FileCollector / lizard / duplication 收集的文件范围完全一致
-          if (excludeDirs.length > 0 && FileCollector.isPathExcluded(filePath, excludeDirs)) {
-            continue;
-          }
-          const code = file.Code || 0;
-          const comment = file.Comment || 0;
-          const blank = file.Blank || 0;
-          totalCode += code;
-          totalComment += comment;
-          totalBlank += blank;
-          totalLines += (file.Lines || (code + comment + blank));
-          totalComplexity += (file.Complexity || 0);
-          totalFiles++;
-          fileDetails.push({
-            filePath: filePath,
-            language: lang.Name || '',
-            loc: code,
-            commentLines: comment
-          });
-        }
-    }
-
-    console.log(`  - Total files: ${totalFiles}`);
-    console.log(`  - Code lines (codeScale): ${totalCode}`);
-    console.log(`  - Comment lines: ${totalComment}`);
-    console.log(`  - Blank lines: ${totalBlank}`);
-    console.log(`  - Total lines: ${totalLines}`);
-    console.log(`  - Complexity: ${totalComplexity}`);
-    console.log(`  - File details count: ${fileDetails.length}`);
-
-    // 如果 scc --by-file 未产出有效文件明细，回退到逐文件统计获取明细
-    if (fileDetails.length === 0) {
-      console.log('[DEBUG] scc --by-file 未产出文件明细，回退到逐文件统计');
-      const FileCollector = __nccwpck_require2_(4334);
-      const excludeDirs = this.config.excludeDirs || [];
-      const allFiles = [];
-      for (const src of sources) {
-        const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-        allFiles.push(...files);
-      }
-      const uniqueFiles = [...new Set(allFiles)];
-      for (const file of uniqueFiles) {
-        try {
-          const content = fs.readFileSync(file, 'utf8');
-          let sourceCount = 0;
-          let commentCount = 0;
-          const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('/*') && !trimmed.startsWith('*') && !trimmed.startsWith('#')) {
-              sourceCount++;
-            } else if (trimmed) {
-              commentCount++;
-            }
-          }
-          const filePath = this.toRelativePath(file, sources);
-          const ext = path.extname(file).toLowerCase();
-          const langMap = {
-            '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
-            '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
-            '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
-            '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
-            '.scala': 'Scala', '.swift': 'Swift'
-          };
-          fileDetails.push({
-            filePath: filePath,
-            language: langMap[ext] || ext.replace('.', ''),
-            loc: sourceCount,
-            commentLines: commentCount
-          });
-        } catch (e) {
-          console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
-        }
-      }
-    }
-
-    return {
-      codeScale: totalCode,
-      rawLines: totalLines,
-      commentLines: totalComment,
-      blankLines: totalBlank,
-      sourceLines: totalCode,
-      complexity: totalComplexity,
-      fileDetails: fileDetails
-    };
-  }
-
-  // 判断 Name 是否为文件路径（而非语言名）
-  isFilePath(name) {
-    if (!name) return false;
-    // 文件路径应包含扩展名（含点号）或路径分隔符
-    return name.includes('.') || name.includes('/') || name.includes('\\');
-  }
-
-  // 将绝对路径转为相对路径（统一使用 / 分隔符）
-  toRelativePath(filePath, sources) {
-    if (sources && sources.length > 0) {
-      for (const src of sources) {
-        const normalizedSrc = src.replace(/\\/g, '/');
-        const normalizedPath = filePath.replace(/\\/g, '/');
-        if (normalizedPath.startsWith(normalizedSrc)) {
-          filePath = path.relative(src, filePath);
-          break;
-        }
-      }
-    }
-    return filePath.replace(/\\/g, '/');
-  }
-
-  // 回退方案：当 scc 不可用时，逐文件读取并统计行数
-  fallbackDetect(sources, excludeDirs) {
-    const FileCollector = __nccwpck_require2_(4334);
-    const allFiles = [];
-    for (const src of sources) {
-      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-      allFiles.push(...files);
-    }
-    const uniqueFiles = [...new Set(allFiles)];
-
-    if (uniqueFiles.length === 0) {
-      return { codeScale: 0, rawLines: 0, commentLines: 0, blankLines: 0, sourceLines: 0, complexity: 0, fileDetails: [] };
-    }
-
-    let totalSource = 0;
-    let totalAll = 0;
-    let totalComment = 0;
-    let totalEmpty = 0;
-
-    // 收集文件级指标
-    const fileDetails = [];
-
-    for (const file of uniqueFiles) {
-      try {
-        const content = fs.readFileSync(file, 'utf8');
-        let normalized = content.replace(/\r\n|\r/g, '\n');
-        if (normalized.slice(-1) === '\n') normalized = normalized.slice(0, -1);
-        const lines = normalized.split('\n');
-        totalAll += lines.length;
-
-        let fileSourceLines = 0;
-        let fileCommentLines = 0;
-        let inBlock = false;
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (inBlock) {
-            totalComment++;
-            fileCommentLines++;
-            if (trimmed.includes('*/')) inBlock = false;
-            continue;
-          }
-          if (trimmed === '') { totalEmpty++; continue; }
-          if (trimmed.startsWith('/*')) {
-            totalComment++;
-            fileCommentLines++;
-            if (!trimmed.includes('*/')) inBlock = true;
-            continue;
-          }
-          if (trimmed.startsWith('//')) { totalComment++; fileCommentLines++; continue; }
-          totalSource++;
-          fileSourceLines++;
-        }
-
-        // 将绝对路径转为相对路径
-        let filePath = file;
-        for (const src of sources) {
-          const normalizedSrc = src.replace(/\\/g, '/');
-          const normalizedPath = filePath.replace(/\\/g, '/');
-          if (normalizedPath.startsWith(normalizedSrc)) {
-            filePath = path.relative(src, file);
-            break;
-          }
-        }
-        filePath = filePath.replace(/\\/g, '/');
-
-        // 根据扩展名推断语言
-        const ext = path.extname(file).toLowerCase();
-        const langMap = {
-          '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
-          '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
-          '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
-          '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
-          '.scala': 'Scala', '.swift': 'Swift'
-        };
-
-        fileDetails.push({
-          filePath: filePath,
-          language: langMap[ext] || ext.replace('.', ''),
-          loc: fileSourceLines,
-          commentLines: fileCommentLines
-        });
-      } catch (e) {
-        console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
-      }
-    }
-
-    console.log(`[DEBUG] Fallback statistics (scc 不可用):`);
-    console.log(`  - Code scale: ${totalSource}`);
-
-    return {
-      codeScale: totalSource,
-      rawLines: totalAll,
-      commentLines: totalComment,
-      blankLines: totalEmpty,
-      sourceLines: totalSource,
-      complexity: 0,
-      fileDetails: fileDetails
-    };
-  }
-
-  getName() {
-    return 'sloc';
-  }
-}
-
-module.exports = SlocDetector;
-
-
-/***/ }),
-
-/***/ 6863:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
-
-const SlocDetector = __nccwpck_require2_(5722);
-const LizardDetector = __nccwpck_require2_(1555);
-const DuplicationDetector = __nccwpck_require2_(9263);
-const MetricsCalculator = __nccwpck_require2_(7386);
-const CoderepoUploader = __nccwpck_require2_(4786);
-const ConfigLoader = __nccwpck_require2_(889);
-const Logger = __nccwpck_require2_(8555);
-const FileUtils = __nccwpck_require2_(4760);
-const FileCollector = __nccwpck_require2_(4334);
-const path = __nccwpck_require2_(6928);
-
-// 将日期格式化为 yyyy-MM-dd HH:mm:ss
-function formatDateTime(date) {
-  // 固定按东八区输出：CI runner 容器时区多为 UTC，用本地组件取值会使检测时间比实际早 8 小时
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hourCycle: 'h23'
-  });
-  // en-CA 输出形如 "2026-08-24, 11:05:29"，把逗号替换为空格统一为 yyyy-MM-dd HH:mm:ss
-  return fmt.format(date).replace(',', '');
-}
-
-class MetricsScanner {
-  constructor(config = {}) {
-    this.config = config;
-    this.logger = new Logger({ verbose: config.verbose });
-    this.workingDir = config.workingDir || process.cwd();
-
-    const allowedExtensions = config.allowedExtensions || [];
-
-    this.slocDetector = new SlocDetector({
-      excludeDirs: config.excludeDirs,
-      allowedExtensions: allowedExtensions
-    });
-
-    this.lizardDetector = new LizardDetector({
-      excludeDirs: config.excludeDirs,
-      allowedExtensions: allowedExtensions,
-      lizardPath: config.detectors?.lizard?.path || 'lizard',
-      workingDir: this.workingDir
-    });
-
-    this.duplicationDetector = new DuplicationDetector({
-      excludeDirs: config.excludeDirs,
-      allowedExtensions: allowedExtensions,
-      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"
-      // - minLines=10：连续代码块至少 10 行才算一次重复
-      minLines: config.detectors?.duplication?.minLines || 10
-    });
-
-    this.uploader = new CoderepoUploader({
-      coderepoUrl: config.uploader?.coderepoUrl,
-      timeout: (config.uploader?.timeout || 30) * 1000,
-      useOidc: config.uploader?.useOidc,
-      apigAppKey: config.uploader?.apigAppKey,
-      apigAppSecret: config.uploader?.apigAppSecret,
-      obsAk: config.uploader?.obsAk,
-      obsSk: config.uploader?.obsSk
-    });
-  }
-
-  async scan(options = {}) {
-    const startTime = new Date();
-    const startTimeFormatted = formatDateTime(startTime);
-    this.logger.info('Starting code metrics scan...');
-
-    const sourceInput = options.sourceDir || this.config.sourceDir;
-    const sources = Array.isArray(sourceInput) ? sourceInput : [sourceInput];
-    const resolvedSources = sources.map(src =>
-      path.isAbsolute(src) ? src : path.resolve(this.workingDir, src)
-    );
-
-    const previewFiles = FileCollector.collectFiles(
-      resolvedSources,
-      this.config.excludeDirs || [],
-      this.config.allowedExtensions || []
-    );
-    let slocResult = {};
-    let lizardResult = {};
-    let duplicationResult = {};
-    let status = 0;
-
-    try {
-      if (this.config.detectors?.sloc?.enabled !== false) {
-        this.logger.info('Running scc detector (code size)...');
-        slocResult = await this.slocDetector.detect(resolvedSources);
-      }
-
-      if (this.config.detectors?.lizard?.enabled !== false) {
-        this.logger.info('Running lizard detector (function complexity)...');
-        lizardResult = await this.lizardDetector.detect(resolvedSources);
-      }
-
-      if (this.config.detectors?.duplication?.enabled !== false) {
-        this.logger.info('Running duplication detector (code duplication)...');
-        // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
-        duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
-      }
-
-      const mergedMetrics = MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
-      MetricsCalculator.validate(mergedMetrics);
-      const formattedMetrics = MetricsCalculator.formatForReport(mergedMetrics);
-
-      // 从格式化结果中分离 fileDetails 和总体指标
-      const { fileDetails, ...overallMetrics } = formattedMetrics;
-
-      const endTime = new Date();
-      const endTimeFormatted = formatDateTime(endTime);
-      const durationMs = endTime.getTime() - startTime.getTime();
-
-      const result = {
-        ...overallMetrics,
-        fileDetails: fileDetails,
-        detectionInfo: {
-          startTime: startTimeFormatted,
-          endTime: endTimeFormatted,
-          durationMs: durationMs,
-          sources: resolvedSources,
-          tools: {
-            sloc: this.config.detectors?.sloc?.enabled !== false,
-            lizard: this.config.detectors?.lizard?.enabled !== false,
-            duplication: this.config.detectors?.duplication?.enabled !== false
-          }
-        }
-      };
-
-      this.logger.info(`Scan completed in ${durationMs}ms`);
-
-      // 诊断日志：输出扫描结果规模，用于定位大数据量下的序列化超限问题
-      let snapshotTotal = 0;
-      for (const fd of fileDetails || []) {
-        if (fd.snapshotData) snapshotTotal += fd.snapshotData.length;
-      }
-      this.logger.info(
-        `Result scale: fileDetails=${(fileDetails || []).length}, snapshotDataTotal=${snapshotTotal} bytes, occurrences=${(formattedMetrics.duplicationOccurrences || []).length}`
-      );
-
-      if (options.output || this.config.output) {
-        const outputPath = path.isAbsolute(options.output || this.config.output)
-          ? (options.output || this.config.output)
-          : path.resolve(this.workingDir, options.output || this.config.output);
-        // 本地输出文件剥离大数据字段（snapshotData 与 duplicationOccurrences 的明文 content），
-        // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length。
-        // - snapshotData 仅详情页展示用，DB 上报另有一份
-        // - occurrence 的明文 content 仅上报用（uploader 已 Base64 编码后分批上报），
-        //   本地保留 groupId/filePath/起止行等元数据即可
-        const compactResult = {
-          ...result,
-          fileDetails: (result.fileDetails || []).map(fd => {
-            const { snapshotData, ...rest } = fd;
-            return rest;
-          }),
-          // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
-          // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
-          duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
-            const MAX_CONTENT_CHARS = 15 * 1024;
-            if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
-              return {
-                ...occ,
-                content: this.uploader.clipOversizeContent(occ.content, MAX_CONTENT_CHARS)
-              };
-            }
-            return occ;
-          })
-        };
-        FileUtils.writeJsonFile(outputPath, compactResult);
-        this.logger.info(`Results saved to: ${outputPath}`);
-        this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
-      }
-
-      if (options.upload || this.config.uploader?.enabled) {
-        const uploadResult = await this.uploader.upload(formattedMetrics, {
-          gitUrl: options.gitUrl,
-          branchName: options.branchName,
-          pipelineRunId: options.pipelineRunId,
-          commitId: options.commitId,
-          runNumber: options.runNumber,
-          pipelineName: options.pipelineName,
-          startTime: startTimeFormatted,
-          endTime: endTimeFormatted,
-          status: status
-        });
-
-        if (uploadResult.success) {
-          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
-          this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
-          // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
-          result.uploadInfo = {
-            success: true,
-            obsUrl: uploadResult.obsUrl,
-            detailLink: uploadResult.detailLink || '',
-            tip: uploadResult.tip || ''
-          };
-        } else {
-          this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
-          result.uploadInfo = { success: false, error: uploadResult.error };
-        }
-      }
-
-      return result;
-
-    } catch (error) {
-      this.logger.error(`Scan failed: ${error.message}`);
-      if (error && error.stack) {
-        // 输出堆栈头部，辅助定位是哪个 JSON.stringify / 哪个阶段抛错
-        this.logger.error(`Stack head: ${error.stack.split('\n').slice(0, 12).join('\n')}`);
-      }
-
-      // 失败时也上传报告，附带错误信息
-      if (options.upload || this.config.uploader?.enabled) {
-        const endTimeFormatted = formatDateTime(new Date());
-        try {
-          await this.uploader.upload({}, {
-            gitUrl: options.gitUrl,
-            branchName: options.branchName,
-            pipelineRunId: options.pipelineRunId,
-            commitId: options.commitId,
-            runNumber: options.runNumber,
-            pipelineName: options.pipelineName,
-            startTime: startTimeFormatted,
-            endTime: endTimeFormatted,
-            status: 1,
-            errorMessage: error.message
-          });
-        } catch (uploadError) {
-          this.logger.error(`Failed to upload error report: ${uploadError.message}`);
-        }
-      }
-
-      throw error;
-    }
-  }
-}
-
-module.exports = {
-  MetricsScanner,
-  ConfigLoader,
-  SlocDetector,
-  LizardDetector,
-  DuplicationDetector,
-  MetricsCalculator
-};
-
-
-/***/ }),
-
-/***/ 4786:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
-
-const axios = __nccwpck_require2_(7269);
-const crypto = __nccwpck_require2_(6982);
-const { callApig, getCredentials } = __nccwpck_require2_(6239);
-const fs = __nccwpck_require2_(9896);
-const os = __nccwpck_require2_(857);
-const path = __nccwpck_require2_(6928);
-const { execSync, execFileSync } = __nccwpck_require2_(5317);
-
-// 上报接口路径前缀：新旧网关接口与认证方式一一对应
-// - OIDC 联邦认证（新）：workflow 声明 permissions: id-token: write 时启用
-// - AK/SK 签名（旧）：存量脚本兼容，接口与认证方式保持不变
-const OIDC_API_PREFIX = '/action-api';
-const AKSK_API_PREFIX = '/openlibing-coderepo';
-
-/**
- * 华为云 APIG 签名器（SDK-HMAC-SHA256，AK/SK 模式使用）
- * 基于官方 SDK APIGW-javascript-sdk-2.0.6 的 signer.js 完全对齐
- * 签名流程：CanonicalRequest → StringToSign → HMAC-SHA256 → Authorization
- */
-class ApigSigner {
-  constructor(ak, sk) {
-    this.ak = ak;
-    this.sk = sk;
-  }
-
-  /**
-   * 对请求进行签名，返回包含签名头的完整 headers
-   * 与官方 SDK 的 Signer.prototype.Sign() 方法对齐
-   */
-  sign({ method, url, headers = {}, body = '' }) {
-    // 解析 URL，提取 host、pathname、查询参数
-    const parsed = new URL(url);
-    const host = parsed.host;
-
-    // 解析 URI 和查询参数（与官方 SDK 的 HttpRequest 构造函数对齐）
-    const uri = decodeURIComponent(parsed.pathname);
-    const query = {};
-    if (parsed.search) {
-      const searchStr = parsed.search.substring(1);
-      for (const pair of searchStr.split('&')) {
-        const idx = pair.indexOf('=');
-        const key = idx >= 0 ? pair.substring(0, idx) : pair;
-        const value = idx >= 0 ? pair.substring(idx + 1) : '';
-        if (key) {
-          const decodedKey = decodeURIComponent(key);
-          const decodedValue = decodeURIComponent(value);
-          if (query[decodedKey] === undefined) {
-            query[decodedKey] = [decodedValue];
-          } else {
-            query[decodedKey].push(decodedValue);
-          }
-        }
-      }
-    }
-
-    // 设置时间戳（检查是否已有 X-Sdk-Date 头）
-    let datetime = null;
-    for (const k of Object.keys(headers)) {
-      if (k.toLowerCase() === 'x-sdk-date') {
-        datetime = headers[k];
-        break;
-      }
-    }
-    if (!datetime) {
-      datetime = this._getDateTime();
-      headers['X-Sdk-Date'] = datetime;
-    }
-
-    // 非 PUT/PATCH/POST 时 body 不参与签名（官方 SDK 规范）
-    if (method !== 'PUT' && method !== 'PATCH' && method !== 'POST') {
-      body = '';
-    }
-
-    // 确保 host 头存在
-    let hasHost = false;
-    for (const k of Object.keys(headers)) {
-      if (k.toLowerCase() === 'host') { hasHost = true; break; }
-    }
-    if (!hasHost) {
-      headers['Host'] = host;
-    }
-
-    // 获取参与签名的 header 列表（所有 header 名称小写排序）
-    const signedHeaderNames = Object.keys(headers).map(k => k.toLowerCase()).sort();
-
-    // 构造规范化 URI：每段 URL 编码后用 / 拼接，末尾强制补 /
-    const canonicalUri = this._canonicalUri(uri);
-
-    // 构造规范化查询字符串
-    const canonicalQs = this._canonicalQueryString(query);
-
-    // 构造规范化 Headers
-    const lowerHeaders = {};
-    for (const [k, v] of Object.entries(headers)) {
-      lowerHeaders[k.toLowerCase()] = v;
-    }
-    const canonicalHeaders = signedHeaderNames
-      .map(name => `${name}:${lowerHeaders[name].trim()}`)
-      .join('\n') + '\n';
-
-    const signedHeadersStr = signedHeaderNames.join(';');
-
-    // 计算 body 哈希（如果请求头中有 x-sdk-content-sha256，直接使用其值）
-    let hashedPayload;
-    let hasContentSha256 = false;
-    for (const k of Object.keys(headers)) {
-      if (k.toLowerCase() === 'x-sdk-content-sha256') {
-        hashedPayload = headers[k];
-        hasContentSha256 = true;
-        break;
-      }
-    }
-    if (!hasContentSha256) {
-      hashedPayload = this._sha256Hex(body);
-    }
-
-    // 构造规范化请求
-    const canonicalRequest = [
-      method.toUpperCase(),
-      canonicalUri,
-      canonicalQs,
-      canonicalHeaders,
-      signedHeadersStr,
-      hashedPayload
-    ].join('\n');
-
-    // 构造待签名字符串
-    const stringToSign = [
-      'SDK-HMAC-SHA256',
-      datetime,
-      this._sha256Hex(canonicalRequest)
-    ].join('\n');
-
-    // 计算签名
-    const signature = this._hmacSha256Hex(this.sk, stringToSign);
-
-    // 构造 Authorization 头
-    headers['Authorization'] = `SDK-HMAC-SHA256 Access=${this.ak}, SignedHeaders=${signedHeadersStr}, Signature=${signature}`;
-
-    return headers;
-  }
-
-  /**
-   * 构造规范化 URI：每段用 SDK 的 urlEncode 编码，末尾强制补 /
-   * 与官方 SDK 的 CanonicalURI() 函数完全对齐
-   */
-  _canonicalUri(uri) {
-    if (!uri || uri === '') return '/';
-    const parts = uri.split('/');
-    const encoded = parts.map(s => this._urlEncode(s));
-    let urlpath = encoded.join('/');
-    // 末尾强制补 /（官方 SDK 规范，APIG 网关签名校验要求）
-    if (urlpath[urlpath.length - 1] !== '/') {
-      urlpath = urlpath + '/';
-    }
-    return urlpath;
-  }
-
-  /**
-   * 构造规范化查询字符串
-   * 与官方 SDK 的 CanonicalQueryString() 函数对齐
-   */
-  _canonicalQueryString(query) {
-    const keys = Object.keys(query).sort();
-    if (keys.length === 0) return '';
-    const parts = [];
-    for (const key of keys) {
-      const k = this._urlEncode(key);
-      const values = Array.isArray(query[key]) ? [...query[key]].sort() : [query[key]];
-      for (const v of values) {
-        parts.push(`${k}=${this._urlEncode(v)}`);
-      }
-    }
-    return parts.join('&');
-  }
-
-  /**
-   * URL 编码：基于 Node.js querystring 模块改写，与官方 SDK 的 urlEncode() 完全对齐
-   * 不编码字符：A-Z a-z 0-9 - . _ ~
-   * 与 encodeURIComponent 的区别：! * ' ( ) 会被编码（encodeURIComponent 不编码这些）
-   */
-  _urlEncode(str) {
-    if (typeof str !== 'string') {
-      if (typeof str === 'object') str = String(str);
-      else str += '';
-    }
-    const hexTable = [];
-    for (let i = 0; i < 256; ++i) {
-      hexTable[i] = '%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase();
-    }
-    const noEscape = [
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0,
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1,
-      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0
-    ];
-    let out = '';
-    let lastPos = 0;
-    for (let i = 0; i < str.length; ++i) {
-      // 代理对场景下需在下方重新赋值（c = 0x10000 + ...），此处必须用 let
-      let c = str.charCodeAt(i);
-      if (c < 0x80) {
-        if (noEscape[c] === 1) continue;
-        if (lastPos < i) out += str.slice(lastPos, i);
-        lastPos = i + 1;
-        out += hexTable[c];
-        continue;
-      }
-      if (lastPos < i) out += str.slice(lastPos, i);
-      if (c < 0x800) {
-        lastPos = i + 1;
-        out += hexTable[0xC0 | (c >> 6)] + hexTable[0x80 | (c & 0x3F)];
-        continue;
-      }
-      if (c < 0xD800 || c >= 0xE000) {
-        lastPos = i + 1;
-        out += hexTable[0xE0 | (c >> 12)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
-        continue;
-      }
-      ++i;
-      if (i >= str.length) throw new URIError('ERR_INVALID_URI');
-      const c2 = str.charCodeAt(i) & 0x3FF;
-      lastPos = i + 1;
-      c = 0x10000 + (((c & 0x3FF) << 10) | c2);
-      out += hexTable[0xF0 | (c >> 18)] + hexTable[0x80 | ((c >> 12) & 0x3F)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
-    }
-    if (lastPos === 0) return str;
-    if (lastPos < str.length) return out + str.slice(lastPos);
-    return out;
-  }
-
-  _getDateTime() {
-    const now = new Date();
-    const p = (n) => String(n).padStart(2, '0');
-    return `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}T${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}Z`;
-  }
-
-  _sha256Hex(data) {
-    return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
-  }
-
-  _hmacSha256Hex(key, data) {
-    return crypto.createHmac('sha256', key).update(data, 'utf8').digest('hex');
-  }
-}
-
-class CoderepoUploader {
-  constructor(config = {}) {
-    this.baseUrl = config.coderepoUrl || 'http://localhost:8080';
-    this.timeout = config.timeout || 30000;
-    // 认证模式：useOidc=true 走新接口（/action-api/...）+ OIDC 免密联邦认证；
-    // 否则走旧接口（/openlibing-coderepo/...）+ AK/SK（SDK-HMAC-SHA256）签名，兼容存量脚本
-    this.useOidc = !!config.useOidc;
-    this.apigAppKey = config.apigAppKey || '';
-    this.apigAppSecret = config.apigAppSecret || '';
-    // OBS 上传凭证（AK/SK 模式使用）：复用 openlibing 平台 gitcode-action 统一桶（私有对象，供后端按 objectKey 下载）
-    this.obsAk = config.obsAk || '';
-    this.obsSk = config.obsSk || '';
-    // 平台所有 gitcode-action 插件上报结果的统一桶，code-metrics-action 目录存放代码度量上报
-    this.obsBucket = config.obsBucket || 'openlibing-gitcode-action';
-    // OBS 写/读 endpoint（华为云西南-贵阳一）
-    this.obsEndpoint = config.obsEndpoint || 'obs.cn-southwest-2.myhuaweicloud.com';
-    this.obsutilPath = '';
-  }
-
-  /**
-   * 上报代码度量指标。
-   *
-   * 认证模式（由 workflow 是否声明 permissions: id-token: write 决定）：
-   * - OIDC 联邦认证（新）：APIG 上报走 callApig 自动换证签名；OBS 上传走 STS 临时凭证
-   * - AK/SK 签名（旧）：APIG 上报走 ApigSigner 签名；OBS 上传走 obs-ak/obs-sk 静态凭证
-   *
-   * 流程（OBS 中转 + 单接口，彻底规避 APIG 12MB 请求体上限）：
-   * 1. 组装全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences），写本地临时 json
-   * 2. 上传到 OBS（桶 openlibing-gitcode-action / code-metrics-action/ 前缀，私有对象）
-   * 3. 仅调一次 POST /metrics/code/report：只传元数据 + obsUrl（固定格式下载链接），后端按 objectKey 下载解析入库
-   *
-   * 兜底：即使第 3 步上报失败（网络原因），第 2 步 OBS 文件已完整上传，可通过平台保底定时任务
-   * （入参 objectKey）下载补导入，保证数据不丢失。
-   *
-   * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
-   */
-  async upload(metricsData, options = {}) {
-    // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
-    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
-
-    // 1. 组装全量上报文件：元数据 + 全部指标明细（含 snapshotData / contentB64 等大 payload）
-    const fullPayload = {
-      gitUrl: options.gitUrl,
-      branchName: options.branchName,
-      pipelineRunId: options.pipelineRunId,
-      commitId: options.commitId,
-      runNumber: options.runNumber,
-      // pipelineName：流水线名称（GitCode runner 注入的 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
-      pipelineName: options.pipelineName,
-      metricsData: overallMetrics,
-      detectionStartedAt: options.startTime,
-      detectionCompletedAt: options.endTime,
-      status: options.status || 0,
-      fileDetails: fileDetails || [],
-      identicalFileDetails: identicalFileDetails || [],
-      duplicationOccurrences: this.encodeOccurrences(duplicationOccurrences || [])
-    };
-    if (options.errorMessage) {
-      fullPayload.errorMessage = options.errorMessage;
-    }
-
-    // 2. 上传全量文件到 OBS，得到固定格式下载链接
-    const obsResult = await this.uploadFullPayloadToOBS(fullPayload, options);
-    if (!obsResult.success) {
-      // OBS 上传失败：数据未落盘，直接返回失败（可整体重扫重传）
-      return obsResult;
-    }
-
-    // 3. 单次 /report：只传元数据 + obsUrl（body 恒定极小，远低于 APIG 12MB 上限）
-    const payload = {
-      gitUrl: options.gitUrl,
-      branchName: options.branchName,
-      pipelineRunId: options.pipelineRunId,
-      commitId: options.commitId,
-      runNumber: options.runNumber,
-      detectionStartedAt: options.startTime,
-      detectionCompletedAt: options.endTime,
-      status: options.status || 0,
-      obsUrl: obsResult.obsUrl
-    };
-    if (options.errorMessage) {
-      payload.errorMessage = options.errorMessage;
-    }
-
-    const mainUrl = this.buildUrl('/metrics/code/report');
-    const mainBody = JSON.stringify(payload);
-    console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${obsResult.obsUrl}`);
-    const mainResult = await this.report(mainUrl, mainBody);
-    if (!mainResult.success) {
-      // 上报失败但 OBS 文件已完整上传：打印固定格式链接，提示可走保底定时任务补导入
-      console.warn(
-        `[upload] report failed: ${mainResult.error}. 全量数据已上传 OBS(${obsResult.obsUrl})，` +
-          '可通过平台保底定时任务(入参 objectKey)补导入'
-      );
-      return { ...mainResult, obsUrl: obsResult.obsUrl };
-    }
-
-    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口输出
-    return {
-      success: true,
-      recordId: mainResult.recordId,
-      obsUrl: obsResult.obsUrl,
-      detailLink: mainResult.detailLink,
-      tip: mainResult.tip
-    };
-  }
-
-  /**
-   * 组装全量上报文件并上传到 OBS，返回固定格式下载链接与 objectKey。
-   * OBS 凭证按认证模式选择：
-   * - OIDC 模式：getCredentials 获取 STS 临时凭证（短时效，仅本次流水线运行有效）
-   * - AK/SK 模式：workflow 传入的 obs-ak / obs-sk 静态凭证
-   */
-  async uploadFullPayloadToOBS(fullPayload, options) {
-    let cred;
-    if (this.useOidc) {
-      try {
-        // 获取 STS 临时凭证（SDK 内部缓存，同一次流水线运行内只换证一次）
-        cred = await getCredentials();
-      } catch (e) {
-        return { success: false, error: `获取 OIDC 临时凭证失败: ${e.message}` };
-      }
-    } else if (!this.obsAk || !this.obsSk) {
-      return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
-    }
-    // 写本地临时文件（runner 上临时目录，用完即删）
-    const tmpFile = path.join(os.tmpdir(), `code-metrics-${Date.now()}.json`);
-    fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), 'utf-8');
-
-    const objectKey = this.buildObjectKey(options);
-    try {
-      await this.uploadToOBS(cred, tmpFile, objectKey);
-      const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
-      console.log(`[upload] OBS uploaded: ${obsUrl}`);
-      return { success: true, obsUrl: obsUrl, objectKey: objectKey };
-    } catch (e) {
-      return { success: false, error: `OBS 上传失败: ${e.message}` };
-    } finally {
-      // 清理本地临时文件，避免在 runner 上残留大文件
-      try {
-        fs.unlinkSync(tmpFile);
-      } catch (e) {
-        // 忽略清理失败
-      }
-    }
-  }
-
-  /**
-   * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
-   * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
-   *
-   * 凭证传递（按认证模式）：
-   * - OIDC 模式：STS 临时凭证，经 -e/-i/-k/-t 命令行参数传 endpoint/临时AK/临时SK/SecurityToken
-   * - AK/SK 模式：静态 obs-ak/obs-sk，经 -e/-i/-k 命令行参数传递
-   * CI 平台对 secrets/临时令牌自动掩码，不会明文落日志。
-   *
-   * 安全处理：用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
-   * 外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令。
-   */
-  async uploadToOBS(cred, localFilePath, objectKey) {
-    const obsutil = await this.ensureObsutil();
-    // 记录 obsutil 版本，便于排查 runner 与本地环境差异
-    try {
-      const versionOut = execFileSync(obsutil, ['version'], { encoding: 'utf8' }).trim();
-      console.log(`[upload] obsutil version: ${versionOut}`);
-    } catch (e) {
-      console.log(`[upload] obsutil version check failed: ${e.message}`);
-    }
-    const args = [
-      'cp',
-      localFilePath,
-      `obs://${this.obsBucket}/${objectKey}`,
-      '-f',
-      `-e=${this.obsEndpoint}`
-    ];
-    if (this.useOidc) {
-      // OIDC 模式：STS 临时凭证 + SecurityToken
-      args.push(`-i=${cred.accessKeyId}`, `-k=${cred.secretAccessKey}`, `-t=${cred.securityToken}`);
-    } else {
-      // AK/SK 模式：静态凭证
-      args.push(`-i=${this.obsAk}`, `-k=${this.obsSk}`);
-    }
-    // 打印执行命令（-k/-t 参数脱敏），便于定位上传失败原因
-    const maskedArgs = args.map(a => (a.startsWith('-k=') || a.startsWith('-t=') ? `${a.split('=')[0]}=***` : a));
-    console.log(`[upload] exec obsutil ${maskedArgs.join(' ')}`);
-    execFileSync(obsutil, args, { stdio: 'inherit' });
-  }
-
-  /**
-   * 确保 obsutil 可用：不存在时下载并解压到临时目录（与 upload-sarif-action 一致）。
-   * 下载失败时回退到系统已安装的 obsutil，避免网络抖动导致上传中断。
-   */
-  async ensureObsutil() {
-    if (this.obsutilPath && fs.existsSync(this.obsutilPath)) {
-      return this.obsutilPath;
-    }
-    const tmpDir = os.tmpdir();
-    const downloadUrl =
-      'https://obs-community.obs.cn-north-1.myhuaweicloud.com/obsutil/current/obsutil_linux_amd64.tar.gz';
-    const tarball = path.join(tmpDir, 'obsutil_linux_amd64.tar.gz');
-    const extractedDir = path.join(tmpDir, 'obsutil');
-    try {
-      if (!fs.existsSync(extractedDir)) {
-        execSync(`mkdir -p "${extractedDir}"`, { shell: '/bin/bash' });
-      }
-      execSync(
-        `wget -q "${downloadUrl}" -O "${tarball}" 2>/dev/null || curl -sL "${downloadUrl}" -o "${tarball}"`,
-        { shell: '/bin/bash' }
-      );
-      execSync(`tar zxf "${tarball}" -C "${extractedDir}" --strip-components=1`, { shell: '/bin/bash' });
-      execSync(`chmod 755 "${extractedDir}/obsutil"`, { shell: '/bin/bash' });
-      this.obsutilPath = path.join(extractedDir, 'obsutil');
-    } catch (e) {
-      // 下载失败时尝试使用系统已安装的 obsutil
-      try {
-        const existing = execSync('which obsutil', { encoding: 'utf8', shell: '/bin/bash' }).trim();
-        if (existing) {
-          this.obsutilPath = existing;
-        }
-      } catch (e2) {
-        // 无系统 obsutil，抛错
-      }
-      if (!this.obsutilPath) {
-        throw new Error(`obsutil 安装失败: ${e.message}`);
-      }
-    }
-    return this.obsutilPath;
-  }
-
-  /**
-   * 构造 OBS 对象 key（固定格式，供后端/保底任务按 objectKey 下载解析入库）。
-   * 规则：code-metrics-action/{owner}/{repo}/{pipelineRunId}/{ts}-metrics.json
-   * branchName 不进入路径（远端分支可能含 / 造成路径歧义），只放在文件内元数据中。
-   */
-  buildObjectKey(options) {
-    const ownerRepo = this.extractOwnerRepo(options.gitUrl) || 'unknown';
-    const pipelineRunId = options.pipelineRunId || 'manual';
-    const ts = this.formatDateTime(new Date());
-    return `code-metrics-action/${ownerRepo}/${pipelineRunId}/${ts}-metrics.json`;
-  }
-
-  /**
-   * 从 gitUrl 提取 owner/repo（形如 git@host:owner/repo 或 https://host/owner/repo）。
-   */
-  extractOwnerRepo(gitUrl) {
-    if (!gitUrl) {
-      return '';
-    }
-    const url = String(gitUrl).replace(/\.git$/, '').replace(/\/+$/, '');
-    const match = url.match(/(?:git@[^:]+:|https?:\/\/[^/]+\/)(.+)$/);
-    return match ? match[1] : '';
-  }
-
-  /**
-   * 格式化时间为 yyyyMMddHHmmss（OBS 对象 key 用，UTC）。
-   */
-  formatDateTime(date) {
-    const p = (n) => String(n).padStart(2, '0');
-    return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}`;
-  }
-
-  /**
-   * 把出现位置列表中的明文 content 编码为 contentB64，移除明文字段。
-   * 已编码数据跳过（防二次编码）。
-   * 重复块内容完整编码不做截断：全量上报文件上传 OBS（不受 APIG body 限制），
-   * 入库 code_metrics_duplication_block.content_b64 为 LONGTEXT 可承载。
-   */
-  encodeOccurrences(occurrences) {
-    return occurrences.map(occ => {
-      return {
-        groupId: occ.groupId,
-        contentHash: occ.contentHash,
-        occurrenceIndex: occ.occurrenceIndex,
-        filePath: occ.filePath,
-        startLine: occ.startLine,
-        endLine: occ.endLine,
-        contentB64: this.encodeB64(occ.content)
-      };
-    });
-  }
-
-  /**
-   * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
-   * 按行省略：头/尾各保留若干整行，省略标记显示被省略的行数。
-   * 仅用于本地 metrics.json 输出文件的防护性裁剪（防 V8 单字符串上限）；
-   * 上报链路（encodeOccurrences）不截断，完整内容上传 OBS。
-   */
-  clipOversizeContent(content, maxChars) {
-    if (typeof content !== 'string' || content.length <= maxChars) {
-      return content;
-    }
-    // 按行拆分；头/尾各以预算的 35% 为字符配额累积整行，保证裁剪后总量仍受控
-    const lines = content.split('\n');
-    const totalLines = lines.length;
-    const sideChars = Math.floor(maxChars * 0.35);
-    // 头部：从首行开始累积整行，直到逼近 sideChars
-    let headLines = 0;
-    let headChars = 0;
-    for (let i = 0; i < totalLines; i++) {
-      const len = lines[i].length + 1; // 行内容 + 换行符
-      if (headLines > 0 && headChars + len > sideChars) break;
-      headChars += len;
-      headLines++;
-    }
-    // 尾部：从末行开始累积整行，直到逼近 sideChars
-    let tailLines = 0;
-    let tailChars = 0;
-    for (let i = totalLines - 1; i >= 0; i--) {
-      const len = lines[i].length + 1;
-      if (tailLines > 0 && tailChars + len > sideChars) break;
-      tailChars += len;
-      tailLines++;
-    }
-    const omittedLines = Math.max(0, totalLines - headLines - tailLines);
-    const head = lines.slice(0, headLines).join('\n');
-    const tail = lines.slice(totalLines - tailLines).join('\n');
-    const clipped =
-      (headLines > 0 ? head : '') +
-      (omittedLines > 0 ? `\n... ${omittedLines} lines omitted ...\n` : '') +
-      (tailLines > 0 ? tail : '');
-    // 兜底：单行超长导致按行裁剪后仍超限时，退化为按字符裁剪
-    if (clipped.length > maxChars) {
-      const headChars2 = Math.floor(maxChars * 0.35);
-      const tailChars2 = Math.floor(maxChars * 0.35);
-      const omittedChars = content.length - headChars2 - tailChars2;
-      return (
-        content.slice(0, headChars2) +
-        `\n... ${omittedChars} chars omitted ...\n` +
-        content.slice(content.length - tailChars2)
-      );
-    }
-    return clipped;
-  }
-
-  /**
-   * Base64 编码字符串（UTF-8）。
-   * 已编码数据（通过回检判定）跳过，防二次编码。
-   */
-  encodeB64(str) {
-    if (!str) return '';
-    // 简单回检：若解码后重新编码与原值一致，视为已编码
-    try {
-      const decoded = Buffer.from(str, 'base64').toString('utf8');
-      const reEncoded = Buffer.from(decoded, 'utf8').toString('base64');
-      if (reEncoded === str) return str;
-    } catch (e) {
-      // 解码失败说明是明文，继续编码
-    }
-    return Buffer.from(str, 'utf8').toString('base64');
-  }
-
-  /**
-   * 拼接完整请求 URL：按认证模式选择新旧接口前缀
-   * - OIDC 模式：/action-api/metrics/code/report
-   * - AK/SK 模式：/openlibing-coderepo/metrics/code/report
-   */
-  buildUrl(path) {
-    const prefix = this.useOidc ? OIDC_API_PREFIX : AKSK_API_PREFIX;
-    return this.baseUrl.replace(/\/+$/, '') + prefix + path;
-  }
-
-  /**
-   * 调用 APIG 上报接口并解析 DataResult 响应（按认证模式选择签名方式）。
-   * - OIDC 模式：SDK callApig 免密联邦认证（OIDC ID Token -> STS 临时凭证 ->
-   *   V11-HMAC-SHA256 签名 + X-Security-Token）
-   * - AK/SK 模式：ApigSigner SDK-HMAC-SHA256 签名（原有方式）
-   * 返回 { success, recordId?, detailLink?, tip?, error? }
-   */
-  async report(url, body) {
-    try {
-      let resData;
-      if (this.useOidc) {
-        const res = await callApig('POST', url, { 'Content-Type': 'application/json' }, body);
-        resData = res.data;
-
-        // 非 2xx：HTTP 层失败（网关拒绝、鉴权失败等）
-        if (res.status < 200 || res.status >= 300) {
-          const httpMsg = (resData && (resData.msg || resData.message || resData.error_msg)) || `HTTP ${res.status}`;
-          console.error(`Upload failed: HTTP ${res.status}, URL: ${url}`);
-          return { success: false, error: httpMsg };
-        }
-      } else {
-        // AK/SK 模式：凭证缺失时直接失败并给出明确提示
-        if (!this.apigAppKey || !this.apigAppSecret) {
-          return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 AK/SK 凭证（apig-app-key / apig-app-secret），无法上报' };
-        }
-        const signer = new ApigSigner(this.apigAppKey, this.apigAppSecret);
-        const headers = signer.sign({
-          method: 'POST',
-          url: url,
-          headers: { 'Content-Type': 'application/json' },
-          body: body
-        });
-        const response = await axios.post(url, body, { headers, timeout: this.timeout });
-        resData = response.data;
-      }
-
-      // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功
-      if (resData?.code !== 200) {
-        // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因
-        console.error(
-          `[upload] report business failed: code=${resData?.code}, msg=${resData?.msg}, adviceMsg=${resData?.adviceMsg}`
-        );
-        return { success: false, error: resData?.msg || 'Unknown error' };
-      }
-
-      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象；当前服务端返回 CodeMetricsReportVO
-      const recordId = resData?.data?.recordId
-        || resData?.data?.id
-        || (typeof resData?.data === 'number' || typeof resData?.data === 'string' ? resData.data : null)
-        || resData?.recordId
-        || resData?.id;
-
-      // data.detailLink：平台分支页固定单条跳转链接；data.tip：仓未录入/分支未登记提示（两者互斥，可均为空）
-      const detailLink = typeof resData?.data?.detailLink === 'string' ? resData.data.detailLink : '';
-      const tip = typeof resData?.data?.tip === 'string' ? resData.data.tip : '';
-
-      return { success: true, recordId: recordId, detailLink: detailLink, tip: tip };
-    } catch (error) {
-      // 输出详细错误信息以便排查网络问题
-      console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
-      const resData = error.response?.data;
-      const errorMsg = resData?.msg || resData?.message || error.message;
-      return { success: false, error: errorMsg };
-    }
-  }
-}
-
-module.exports = CoderepoUploader;
-
-
-/***/ }),
-
-/***/ 4334:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
-
-const fs = __nccwpck_require2_(9896);
-const path = __nccwpck_require2_(6928);
-
-class FileCollector {
-  // 缺省代码扩展名白名单（allowed-extensions 未配置时生效，业界惯例为白名单制，
-  // 对齐 scc/cloc 内置语言的常见子集；.gn/.gni/.prelds 为 OHOS 构建体系特有脚本）
-  static DEFAULT_CODE_EXTENSIONS = [
-    // C/C++ 家族
-    '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hxx', '.inl', '.cu', '.cuh',
-    // 主流通用语言
-    '.java', '.cs', '.go', '.rs', '.swift', '.kt', '.kts', '.scala', '.groovy',
-    '.py', '.rb', '.php', '.pl', '.pm', '.lua', '.r', '.jl', '.dart', '.m', '.mm',
-    '.tcl', '.asm', '.s',
-    // 前端
-    '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue', '.svelte',
-    '.html', '.htm', '.css', '.scss', '.less',
-    // 脚本
-    '.sh', '.bash', '.ps1', '.bat', '.cmd', '.gradle',
-    // 数据/配置（scc 亦将这些计入统计）
-    '.json', '.xml', '.yml', '.yaml', '.toml', '.ini', '.cfg', '.conf', '.properties',
-    '.sql', '.proto',
-    // 构建脚本
-    '.cmake', '.mk',
-    // OHOS 构建体系
-    '.gn', '.gni', '.prelds'
-  ];
-
-  // 文件名特例：无扩展名或需按文件名识别的构建/入口文件（对齐 scc/cloc 的文件名识别规则），
-  // 不受扩展名白名单限制，始终放行
-  static SPECIAL_FILE_NAMES = [
-    'cmakelists.txt', 'makefile', 'gnumakefile', 'dockerfile', 'jenkinsfile',
-    'rakefile', 'gemfile', 'build', 'build.bazel', 'workspace'
-  ];
-
-  // 默认跳过的隐藏目录（定向黑名单）：只排版本控制与 IDE 的私有目录，
-  // 不再按「. 开头」一刀切——否则 .gitcode 这类承载流水线配置的正式源码目录会被连带剪枝，
-  // 使本地收集范围（重复率分子）小于 scc 全量扫描范围（分母），重复率被系统性低估。
-  static DEFAULT_EXCLUDED_DIRS = ['.git', '.svn', '.hg', '.idea', '.vscode'];
-
-  /**
-   * 判断目录是否属于默认跳过的隐藏目录（版本控制/IDE 私有目录）
-   *
-   * @param {string} dirName 目录名（不含路径）
-   * @return {boolean} 命中默认跳过名单返回 true，否则返回 false
-   */
-  static isDefaultExcludedDir(dirName) {
-    return FileCollector.DEFAULT_EXCLUDED_DIRS.includes(String(dirName || '').toLowerCase());
-  }
-
-  /**
-   * 判断文件是否放行：文件名特例 > 显式 allowed-extensions > 缺省白名单。
-   * 扩展名统一小写比较；显式配置为覆盖式语义——用户指定扩展名后，
-   * 扫描范围 = 用户指定的扩展名 + 文件名特例（如指定 .h,.cpp 则只扫这两类 + CMakeLists.txt 等），
-   * 不再叠加缺省白名单。
-   */
-  static isAllowedFile(fileName, allowedExtensions) {
-    const lower = (fileName || '').toLowerCase();
-    if (FileCollector.SPECIAL_FILE_NAMES.includes(lower)) {
-      return true;
-    }
-    const normalized = (allowedExtensions || []).map(e => String(e).toLowerCase());
-    const list = normalized.length > 0 ? normalized : FileCollector.DEFAULT_CODE_EXTENSIONS;
-    const ext = path.extname(lower);
-    return list.includes(ext);
-  }
-
-  /**
-   * 判断目录/文件是否被 excludeDirs 命中（大小写敏感）。匹配目标为条目相对扫描根的路径（正斜杠）。
-   * 规则：
-   * 1. 裸名称（不含 /）：
-   *    - 无通配符：仅顶层精确匹配。例：test.ts、docs（不命中 src/test.ts；排任意层级同名文件请用 globstar 路径）
-   *    - 含通配符：任意层级匹配条目名。例：*.test.js、*test*
-   * 2. 路径（含 /）：锚定扫描根，匹配相对路径，命中目录即整棵子树剪枝。
-   *    例：src/opensource/grapesjs、src/opensource/*
-   * 前导斜杠为可选显式写法（/test.ts 仅匹配顶层 test.ts），尾部斜杠忽略（docs/ ≡ docs）。
-   * 通配符：*（单段不含 /）、**（跨目录）、?（单字符）、[abc]/[!abc]（字符类）。
-   * 目录与文件统一适用同一条规则，不按类型区分。
-   */
-  static isExcluded(name, relPath, excludeDirs) {
-    if (!excludeDirs || excludeDirs.length === 0) {
-      return false;
-    }
-    const rel = (relPath || '').replace(/\\/g, '/');
-    for (const raw of excludeDirs) {
-      let d = String(raw).trim().replace(/\\/g, '/');
-      if (!d) continue;
-      // 尾部斜杠忽略（docs/ ≡ docs），先剥离再做通配符/斜杠判定
-      d = d.replace(/\/+$/g, '');
-      if (!d) continue;
-      // 是否含斜杠决定规则：含 /（内部或前导）走路径锚定，不含 / 走名称匹配。
-      // 先判再剥前导斜杠（/i18n 含 / 应锚定顶层，剥掉后匹配串为 i18n）
-      const hasSlash = d.indexOf('/') >= 0;
-      d = d.replace(/^\/+/, '');
-      if (!d) continue;
-      // 是否含 glob 通配符（* ? [）
-      const hasWildcard = d.indexOf('*') >= 0 || d.indexOf('?') >= 0 || d.indexOf('[') >= 0;
-      if (hasSlash) {
-        // 路径规则：锚定扫描根，匹配相对路径
-        if (FileCollector.globToRegExp(d).test(rel)) {
-          return true;
-        }
-      } else if (hasWildcard) {
-        // 裸名称 + 通配符：任意层级匹配条目名
-        if (FileCollector.globToRegExp(d).test(name)) {
-          return true;
-        }
-      } else if (d === rel) {
-        // 裸名称（无通配符）：仅顶层精确匹配（等价锚定根）
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * 判断某条相对路径（文件或目录）是否被 excludeDirs 整棵剪枝命中（大小写敏感）。
-   * 与 _walkDir 的目录剪枝语义一致：逐层考察「文件自身 + 所有祖先目录」，
-   * 任一层级被 isExcluded 命中即判定排除。用于对 scc 等外部扫描器的输出做后置过滤，
-   * 保证与 FileCollector 收集的文件范围完全一致。
-   * 例：excludeDirs=['go/','cpp/**'] 时，
-   *   - go/test-codeql.go：祖先目录 go 命中顶层规则 → 排除
-   *   - cpp/part_dup1.cpp：自身命中 cpp/** → 排除
-   *   - src/go/x.go：go 非顶层，不命中 go/ → 保留
-   */
-  static isPathExcluded(relPath, excludeDirs) {
-    const p = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
-    if (!p) return false;
-    const parts = p.split('/');
-    let prefix = '';
-    for (let i = 0; i < parts.length; i++) {
-      prefix = prefix ? prefix + '/' + parts[i] : parts[i];
-      if (FileCollector.isExcluded(parts[i], prefix, excludeDirs)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // 将单个 glob 模式转为锚定整串匹配的正则（大小写敏感）。
-  // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
-  // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
-  static globToRegExp(glob) {
-    let re = '^';
-    for (let i = 0; i < glob.length; i++) {
-      const c = glob[i];
-      if (c === '*') {
-        // 连续 * 合并为 **（跨目录分隔符）
-        if (glob[i + 1] === '*') {
-          while (glob[i + 1] === '*') i++;
-          if (glob[i + 1] === '/') {
-            // **/：匹配 0 层或多层目录，顶层与任意深层均命中
-            re += '(?:.*/)?';
-            i++;
-          } else {
-            re += '.*';
-          }
-        } else {
-          // *：单段内任意字符（不含 /）
-          re += '[^/]*';
-        }
-      } else if (c === '?') {
-        re += '[^/]';
-      } else if (c === '[') {
-        // 字符类：[abc]、[a-z]、[!abc]（或 [^abc]）；未闭合的 [ 当作普通字符
-        let j = i + 1;
-        let negate = false;
-        if (glob[j] === '!' || glob[j] === '^') {
-          negate = true;
-          j++;
-        }
-        let cls = '';
-        let closed = false;
-        let first = true;
-        while (j < glob.length) {
-          if (glob[j] === ']' && !first) {
-            closed = true;
-            break;
-          }
-          first = false;
-          cls += glob[j];
-          j++;
-        }
-        if (closed) {
-          re += '[' + (negate ? '^' : '') + cls + ']';
-          i = j;
-        } else {
-          re += '\\[';
-        }
-      } else {
-        // 正则元字符转义，其余按字面匹配
-        re += '\\^$.|+(){}'.indexOf(c) >= 0 ? '\\' + c : c;
-      }
-    }
-    return new RegExp(re + '$');
-  }
-
-  /**
-   * 收集文件列表
-   * @param {string|string[]} source - 源代码目录或文件路径（可以是字符串或数组）
-   * @param {string[]} excludeDirs - 排除列表（目录名 / 相对路径 / 文件名，逗号分隔）
-   * @param {string[]} allowedExtensions - 允许的文件扩展名列表（配置后完全覆盖缺省白名单）
-   * @returns {string[]} 文件路径列表
-   */
-  static collectFiles(source, excludeDirs = [], allowedExtensions = []) {
-    const files = [];
-
-    // 支持传入单个路径或路径数组
-    const sources = Array.isArray(source) ? source : [source];
-
-    for (const src of sources) {
-      const absolutePath = path.resolve(src);
-
-      if (!fs.existsSync(absolutePath)) {
-        console.warn(`[WARN] 路径不存在: ${absolutePath}`);
-        continue;
-      }
-
-      const stat = fs.statSync(absolutePath);
-
-      if (stat.isDirectory()) {
-        // 如果是目录，递归遍历
-        FileCollector._walkDir(absolutePath, '', excludeDirs, allowedExtensions, files);
-      } else if (stat.isFile()) {
-        // 单文件输入：文件级排除 + 扩展名白名单双重过滤
-        const name = path.basename(absolutePath);
-        // 相对扫描根的路径取调用方传入路径（正斜杠、剥离前导 ./ 与 /），
-        // 使含斜杠的路径式规则（如 src/opensource/*）在传入相对路径时同样生效；
-        // 两种形态叠加判断，保持与目录扫描的 isExcluded 语义一致。
-        const relInput = String(src).replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
-        if (FileCollector.isPathExcluded(name, excludeDirs) || FileCollector.isPathExcluded(relInput, excludeDirs)) {
-          continue;
-        }
-        if (!FileCollector.isAllowedFile(name, allowedExtensions)) {
-          console.warn(`[WARN] 文件扩展名不在允许列表中: ${absolutePath}`);
-          continue;
-        }
-        files.push(absolutePath);
-      }
-    }
-
-    return files;
-  }
-
-  // 递归遍历目录，根据排除规则和扩展名过滤文件。
-  // relPrefix：当前目录相对扫描根的路径（用于路径式排除匹配），根目录本身为 ''
-  static _walkDir(dir, relPrefix, excludeDirs, allowedExtensions, files) {
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch (error) {
-      return;
-    }
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      // 当前条目相对扫描根的路径（正斜杠），用于路径式排除匹配
-      const relPath = relPrefix ? relPrefix + '/' + entry.name : entry.name;
-
-      if (entry.isDirectory()) {
-        // 跳过默认隐藏目录（版本控制/IDE 私有目录）和 excludeDirs 命中的目录
-        // （纯目录名任意层级生效；相对路径如 src/opensource/grapesjs 命中即整棵子树剪枝）
-        if (FileCollector.isDefaultExcludedDir(entry.name)
-            || FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
-          continue;
-        }
-        FileCollector._walkDir(fullPath, relPath, excludeDirs, allowedExtensions, files);
-      } else if (entry.isFile()) {
-        // 文件级排除（文件名/相对路径命中 excludeDirs 即跳过）
-        if (FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
-          continue;
-        }
-        // 白名单三段式过滤：文件名特例 > 显式扩展名 > 缺省白名单
-        if (!FileCollector.isAllowedFile(entry.name, allowedExtensions)) {
-          continue;
-        }
-        files.push(fullPath);
-      }
-    }
-  }
-}
-
-module.exports = FileCollector;
-
-
-/***/ }),
-
-/***/ 4760:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
-
-const fs = __nccwpck_require2_(9896);
-const path = __nccwpck_require2_(6928);
-
-class FileUtils {
-  static writeJsonFile(filePath, data, pretty = true) {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    const content = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
-    fs.writeFileSync(filePath, content, 'utf8');
-  }
-
-  static ensureDirectory(dirPath) {
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-    }
-    return dirPath;
-  }
-
-  static getExtension(filePath) {
-    return path.extname(filePath);
-  }
-
-  static isFileAllowed(filePath, allowedExtensions) {
-    if (!allowedExtensions || allowedExtensions.length === 0) {
-      return true;
-    }
-    const ext = this.getExtension(filePath).toLowerCase();
-    return allowedExtensions.includes(ext);
-  }
-
-  static isDirectoryExcluded(dirPath, excludeDirs) {
-    if (!excludeDirs || excludeDirs.length === 0) {
-      return false;
-    }
-    const dirName = path.basename(dirPath);
-    return excludeDirs.some(exclude => {
-      return dirName === exclude || dirPath.includes(`/${exclude}/`);
-    });
-  }
-}
-
-module.exports = FileUtils;
-
-
-/***/ }),
-
-/***/ 8555:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
-
-const winston = __nccwpck_require2_(4240);
-
-class Logger {
-  constructor(config = {}) {
-    this.verbose = config.verbose || false;
-    this.logger = winston.createLogger({
-      level: this.verbose ? 'debug' : 'info',
-      format: winston.format.combine(
-        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-        winston.format.colorize(),
-        winston.format.printf(({ timestamp, level, message }) => {
-          return `${timestamp} [${level}] ${message}`;
-        })
-      ),
-      transports: [
-        new winston.transports.Console()
-      ]
-    });
-  }
-
-  // 支持多参数，拼接为一条消息
-  debug(...args) {
-    if (this.verbose) {
-      this.logger.debug(args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' '));
-    }
-  }
-
-  info(message) {
-    this.logger.info(message);
-  }
-
-  warn(message) {
-    this.logger.warn(message);
-  }
-
-  error(message) {
-    this.logger.error(message);
-  }
-}
-
-module.exports = Logger;
-
-
-/***/ }),
-
 /***/ 4914:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -3551,8 +31,8 @@ var __importStar = (this && this.__importStar) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.issue = exports.issueCommand = void 0;
-const os = __importStar(__nccwpck_require2_(857));
-const utils_1 = __nccwpck_require2_(302);
+const os = __importStar(__nccwpck_require__(857));
+const utils_1 = __nccwpck_require__(302);
 /**
  * Commands
  *
@@ -3625,7 +105,7 @@ function escapeProperty(s) {
 /***/ }),
 
 /***/ 7484:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -3663,12 +143,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.platform = exports.toPlatformPath = exports.toWin32Path = exports.toPosixPath = exports.markdownSummary = exports.summary = exports.getIDToken = exports.getState = exports.saveState = exports.group = exports.endGroup = exports.startGroup = exports.info = exports.notice = exports.warning = exports.error = exports.debug = exports.isDebug = exports.setFailed = exports.setCommandEcho = exports.setOutput = exports.getBooleanInput = exports.getMultilineInput = exports.getInput = exports.addPath = exports.setSecret = exports.exportVariable = exports.ExitCode = void 0;
-const command_1 = __nccwpck_require2_(4914);
-const file_command_1 = __nccwpck_require2_(4753);
-const utils_1 = __nccwpck_require2_(302);
-const os = __importStar(__nccwpck_require2_(857));
-const path = __importStar(__nccwpck_require2_(6928));
-const oidc_utils_1 = __nccwpck_require2_(5306);
+const command_1 = __nccwpck_require__(4914);
+const file_command_1 = __nccwpck_require__(4753);
+const utils_1 = __nccwpck_require__(302);
+const os = __importStar(__nccwpck_require__(857));
+const path = __importStar(__nccwpck_require__(6928));
+const oidc_utils_1 = __nccwpck_require__(5306);
 /**
  * The code to exit an action
  */
@@ -3953,30 +433,30 @@ exports.getIDToken = getIDToken;
 /**
  * Summary exports
  */
-var summary_1 = __nccwpck_require2_(1847);
+var summary_1 = __nccwpck_require__(1847);
 Object.defineProperty(exports, "summary", ({ enumerable: true, get: function () { return summary_1.summary; } }));
 /**
  * @deprecated use core.summary
  */
-var summary_2 = __nccwpck_require2_(1847);
+var summary_2 = __nccwpck_require__(1847);
 Object.defineProperty(exports, "markdownSummary", ({ enumerable: true, get: function () { return summary_2.markdownSummary; } }));
 /**
  * Path exports
  */
-var path_utils_1 = __nccwpck_require2_(1976);
+var path_utils_1 = __nccwpck_require__(1976);
 Object.defineProperty(exports, "toPosixPath", ({ enumerable: true, get: function () { return path_utils_1.toPosixPath; } }));
 Object.defineProperty(exports, "toWin32Path", ({ enumerable: true, get: function () { return path_utils_1.toWin32Path; } }));
 Object.defineProperty(exports, "toPlatformPath", ({ enumerable: true, get: function () { return path_utils_1.toPlatformPath; } }));
 /**
  * Platform utilities exports
  */
-exports.platform = __importStar(__nccwpck_require2_(8968));
+exports.platform = __importStar(__nccwpck_require__(8968));
 //# sourceMappingURL=core.js.map
 
 /***/ }),
 
 /***/ 4753:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -4008,10 +488,10 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.prepareKeyValueMessage = exports.issueFileCommand = void 0;
 // We use any as a valid input type
 /* eslint-disable @typescript-eslint/no-explicit-any */
-const crypto = __importStar(__nccwpck_require2_(6982));
-const fs = __importStar(__nccwpck_require2_(9896));
-const os = __importStar(__nccwpck_require2_(857));
-const utils_1 = __nccwpck_require2_(302);
+const crypto = __importStar(__nccwpck_require__(6982));
+const fs = __importStar(__nccwpck_require__(9896));
+const os = __importStar(__nccwpck_require__(857));
+const utils_1 = __nccwpck_require__(302);
 function issueFileCommand(command, message) {
     const filePath = process.env[`GITHUB_${command}`];
     if (!filePath) {
@@ -4045,7 +525,7 @@ exports.prepareKeyValueMessage = prepareKeyValueMessage;
 /***/ }),
 
 /***/ 5306:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -4060,9 +540,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.OidcClient = void 0;
-const http_client_1 = __nccwpck_require2_(4844);
-const auth_1 = __nccwpck_require2_(4552);
-const core_1 = __nccwpck_require2_(7484);
+const http_client_1 = __nccwpck_require__(4844);
+const auth_1 = __nccwpck_require__(4552);
+const core_1 = __nccwpck_require__(7484);
 class OidcClient {
     static createHttpClient(allowRetry = true, maxRetry = 10) {
         const requestOptions = {
@@ -4092,8 +572,8 @@ class OidcClient {
             const res = yield httpclient
                 .getJson(id_token_url)
                 .catch(error => {
-                throw new Error(`Failed to get ID Token. \n
-        Error Code : ${error.statusCode}\n
+                throw new Error(`Failed to get ID Token. \n 
+        Error Code : ${error.statusCode}\n 
         Error Message: ${error.message}`);
             });
             const id_token = (_a = res.result) === null || _a === void 0 ? void 0 : _a.value;
@@ -4129,7 +609,7 @@ exports.OidcClient = OidcClient;
 /***/ }),
 
 /***/ 1976:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -4158,7 +638,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.toPlatformPath = exports.toWin32Path = exports.toPosixPath = void 0;
-const path = __importStar(__nccwpck_require2_(6928));
+const path = __importStar(__nccwpck_require__(6928));
 /**
  * toPosixPath converts the given path to the posix form. On Windows, \\ will be
  * replaced with /.
@@ -4198,7 +678,7 @@ exports.toPlatformPath = toPlatformPath;
 /***/ }),
 
 /***/ 8968:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -4239,8 +719,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getDetails = exports.isLinux = exports.isMacOS = exports.isWindows = exports.arch = exports.platform = void 0;
-const os_1 = __importDefault(__nccwpck_require2_(857));
-const exec = __importStar(__nccwpck_require2_(5236));
+const os_1 = __importDefault(__nccwpck_require__(857));
+const exec = __importStar(__nccwpck_require__(5236));
 const getWindowsInfo = () => __awaiter(void 0, void 0, void 0, function* () {
     const { stdout: version } = yield exec.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Version"', undefined, {
         silent: true
@@ -4299,7 +779,7 @@ exports.getDetails = getDetails;
 /***/ }),
 
 /***/ 1847:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -4314,8 +794,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.summary = exports.markdownSummary = exports.SUMMARY_DOCS_URL = exports.SUMMARY_ENV_VAR = void 0;
-const os_1 = __nccwpck_require2_(857);
-const fs_1 = __nccwpck_require2_(9896);
+const os_1 = __nccwpck_require__(857);
+const fs_1 = __nccwpck_require__(9896);
 const { access, appendFile, writeFile } = fs_1.promises;
 exports.SUMMARY_ENV_VAR = 'GITHUB_STEP_SUMMARY';
 exports.SUMMARY_DOCS_URL = 'https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions#adding-a-job-summary';
@@ -4636,7 +1116,7 @@ exports.toCommandProperties = toCommandProperties;
 /***/ }),
 
 /***/ 5236:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -4670,8 +1150,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getExecOutput = exports.exec = void 0;
-const string_decoder_1 = __nccwpck_require2_(3193);
-const tr = __importStar(__nccwpck_require2_(6665));
+const string_decoder_1 = __nccwpck_require__(3193);
+const tr = __importStar(__nccwpck_require__(6665));
 /**
  * Exec a command.
  * Output will be streamed to the live console.
@@ -4746,7 +1226,7 @@ exports.getExecOutput = getExecOutput;
 /***/ }),
 
 /***/ 6665:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -4780,13 +1260,13 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.argStringToArray = exports.ToolRunner = void 0;
-const os = __importStar(__nccwpck_require2_(857));
-const events = __importStar(__nccwpck_require2_(4434));
-const child = __importStar(__nccwpck_require2_(5317));
-const path = __importStar(__nccwpck_require2_(6928));
-const io = __importStar(__nccwpck_require2_(4994));
-const ioUtil = __importStar(__nccwpck_require2_(5207));
-const timers_1 = __nccwpck_require2_(3557);
+const os = __importStar(__nccwpck_require__(857));
+const events = __importStar(__nccwpck_require__(4434));
+const child = __importStar(__nccwpck_require__(5317));
+const path = __importStar(__nccwpck_require__(6928));
+const io = __importStar(__nccwpck_require__(4994));
+const ioUtil = __importStar(__nccwpck_require__(5207));
+const timers_1 = __nccwpck_require__(3557);
 /* eslint-disable @typescript-eslint/unbound-method */
 const IS_WINDOWS = process.platform === 'win32';
 /*
@@ -5459,7 +1939,7 @@ exports.PersonalAccessTokenCredentialHandler = PersonalAccessTokenCredentialHand
 /***/ }),
 
 /***/ 4844:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -5498,11 +1978,11 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.HttpClient = exports.isHttps = exports.HttpClientResponse = exports.HttpClientError = exports.getProxyUrl = exports.MediaTypes = exports.Headers = exports.HttpCodes = void 0;
-const http = __importStar(__nccwpck_require2_(8611));
-const https = __importStar(__nccwpck_require2_(5692));
-const pm = __importStar(__nccwpck_require2_(4988));
-const tunnel = __importStar(__nccwpck_require2_(770));
-const undici_1 = __nccwpck_require2_(6752);
+const http = __importStar(__nccwpck_require__(8611));
+const https = __importStar(__nccwpck_require__(5692));
+const pm = __importStar(__nccwpck_require__(4988));
+const tunnel = __importStar(__nccwpck_require__(770));
+const undici_1 = __nccwpck_require__(6752);
 var HttpCodes;
 (function (HttpCodes) {
     HttpCodes[HttpCodes["OK"] = 200] = "OK";
@@ -6220,7 +2700,7 @@ class DecodedURL extends URL {
 /***/ }),
 
 /***/ 5207:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -6255,8 +2735,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getCmdPath = exports.tryGetExecutablePath = exports.isRooted = exports.isDirectory = exports.exists = exports.READONLY = exports.UV_FS_O_EXLOCK = exports.IS_WINDOWS = exports.unlink = exports.symlink = exports.stat = exports.rmdir = exports.rm = exports.rename = exports.readlink = exports.readdir = exports.open = exports.mkdir = exports.lstat = exports.copyFile = exports.chmod = void 0;
-const fs = __importStar(__nccwpck_require2_(9896));
-const path = __importStar(__nccwpck_require2_(6928));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
 _a = fs.promises
 // export const {open} = 'fs'
 , exports.chmod = _a.chmod, exports.copyFile = _a.copyFile, exports.lstat = _a.lstat, exports.mkdir = _a.mkdir, exports.open = _a.open, exports.readdir = _a.readdir, exports.readlink = _a.readlink, exports.rename = _a.rename, exports.rm = _a.rm, exports.rmdir = _a.rmdir, exports.stat = _a.stat, exports.symlink = _a.symlink, exports.unlink = _a.unlink;
@@ -6410,7 +2890,7 @@ exports.getCmdPath = getCmdPath;
 /***/ }),
 
 /***/ 4994:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -6444,9 +2924,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.findInPath = exports.which = exports.mkdirP = exports.rmRF = exports.mv = exports.cp = void 0;
-const assert_1 = __nccwpck_require2_(2613);
-const path = __importStar(__nccwpck_require2_(6928));
-const ioUtil = __importStar(__nccwpck_require2_(5207));
+const assert_1 = __nccwpck_require__(2613);
+const path = __importStar(__nccwpck_require__(6928));
+const ioUtil = __importStar(__nccwpck_require__(5207));
 /**
  * Copies a file or folder.
  * Based off of shelljs - https://github.com/shelljs/shelljs/blob/9237f66c52e5daa40458f94f9565e18e8132f5a6/src/cp.js
@@ -6716,9 +3196,9 @@ function copyFile(srcFile, destFile, force) {
 /***/ }),
 
 /***/ 3451:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var enabled = __nccwpck_require2_(5909);
+var enabled = __nccwpck_require__(5909);
 
 /**
  * Creates a new Adapter.
@@ -6741,9 +3221,9 @@ module.exports = function create(fn) {
 /***/ }),
 
 /***/ 1159:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var adapter = __nccwpck_require2_(3451);
+var adapter = __nccwpck_require__(3451);
 
 /**
  * Extracts the values from process.env.
@@ -7004,10 +3484,10 @@ module.exports = function (meta, messages) {
 /***/ }),
 
 /***/ 910:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var colorspace = __nccwpck_require2_(4174);
-var kuler = __nccwpck_require2_(9703);
+var colorspace = __nccwpck_require__(4174);
+var kuler = __nccwpck_require__(9703);
 
 /**
  * Prefix the messages with a colored namespace.
@@ -7031,10 +3511,10 @@ module.exports = function ansiModifier(args, options) {
 /***/ }),
 
 /***/ 7570:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var create = __nccwpck_require2_(6713);
-var tty = (__nccwpck_require2_(2018).isatty)(1);
+var create = __nccwpck_require__(6713);
+var tty = (__nccwpck_require__(2018).isatty)(1);
 
 /**
  * Create a new diagnostics logger.
@@ -7054,16 +3534,16 @@ var diagnostics = create(function dev(namespace, options) {
   if (!dev.enabled(namespace) && !(options.force || dev.force)) {
     return dev.nope(options);
   }
-
+  
   return dev.yep(options);
 });
 
 //
 // Configure the logger for the given environment.
 //
-diagnostics.modify(__nccwpck_require2_(910));
-diagnostics.use(__nccwpck_require2_(1159));
-diagnostics.set(__nccwpck_require2_(602));
+diagnostics.modify(__nccwpck_require__(910));
+diagnostics.use(__nccwpck_require__(1159));
+diagnostics.set(__nccwpck_require__(602));
 
 //
 // Expose the diagnostics logger.
@@ -7074,24 +3554,24 @@ module.exports = diagnostics;
 /***/ }),
 
 /***/ 1379:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 //
 // Select the correct build version depending on the environment.
 //
 if (process.env.NODE_ENV === 'production') {
-  module.exports = __nccwpck_require2_(6400);
+  module.exports = __nccwpck_require__(6400);
 } else {
-  module.exports = __nccwpck_require2_(7570);
+  module.exports = __nccwpck_require__(7570);
 }
 
 
 /***/ }),
 
 /***/ 6400:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var create = __nccwpck_require2_(6713);
+var create = __nccwpck_require__(6713);
 
 /**
  * Create a new diagnostics logger.
@@ -7120,7 +3600,7 @@ module.exports = diagnostics;
 /***/ }),
 
 /***/ 578:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -7131,10 +3611,10 @@ module.exports = diagnostics;
  * X-Security-Token 注入 -> 发送请求。需精细控制时可自行组合 V11Signer + sendRequest。
  */
 
-const { cfg } = __nccwpck_require2_(3298);
-const { getCredentials } = __nccwpck_require2_(6477);
-const { V11Signer } = __nccwpck_require2_(9692);
-const { sendRequest } = __nccwpck_require2_(5531);
+const { cfg } = __nccwpck_require__(3298);
+const { getCredentials } = __nccwpck_require__(6477);
+const { V11Signer } = __nccwpck_require__(9692);
+const { sendRequest } = __nccwpck_require__(5531);
 
 /**
  * 调用 APIG 接口：自动换证（带缓存）、V11 签名（自动携带 X-Security-Token）并发送请求。
@@ -7154,7 +3634,13 @@ async function callApig(method, url, headers, body, opts = {}) {
   const signer = new V11Signer({ region: opts.region || cfg.region });
   signer.Key = cred.accessKeyId;
   signer.Secret = cred.secretAccessKey;
-  const mergedHeaders = { 'Content-Type': 'application/json', ...(headers || {}) };
+  // 大小写不敏感地检查用户是否已设置 Content-Type，避免默认 application/json 与用户传入的
+  // content-type（大小写不同）共存导致规范请求重复头、签名校验失败（APIG.0301）
+  const hasContentType = headers && Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
+  const mergedHeaders = {
+    ...(hasContentType ? {} : { 'Content-Type': 'application/json' }),
+    ...(headers || {})
+  };
   if (cred.securityToken) {
     mergedHeaders['X-Security-Token'] = cred.securityToken;
   }
@@ -7231,7 +3717,7 @@ module.exports = { CONFIG, cfg, configure };
 /***/ }),
 
 /***/ 6477:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -7242,10 +3728,10 @@ module.exports = { CONFIG, cfg, configure };
  * -> 华为云 STS AssumeAgencyWithOIDC，带缓存自动刷新、force 强制刷新、并发去重。
  */
 
-const { cfg } = __nccwpck_require2_(3298);
-const { info, debug, error, mask, maskBody } = __nccwpck_require2_(9463);
-const { sendRequest } = __nccwpck_require2_(5531);
-const { getOidcToken } = __nccwpck_require2_(8790);
+const { cfg } = __nccwpck_require__(3298);
+const { info, debug, error, mask, maskBody } = __nccwpck_require__(9463);
+const { sendRequest } = __nccwpck_require__(5531);
+const { getOidcToken } = __nccwpck_require__(8790);
 
 let _credentials = null; // { accessKeyId, secretAccessKey, securityToken, expiresAt, expiresAtISO }
 let _credentialPromise = null; // 进行中的换证 Promise（并发去重）
@@ -7420,7 +3906,7 @@ module.exports = { getCredentials };
 /***/ }),
 
 /***/ 5531:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -7431,7 +3917,7 @@ module.exports = { getCredentials };
  * 调试模式打印完整请求/响应日志（敏感字段自动脱敏），非调试模式不打印请求详情。
  */
 
-const { debug, maskHeaders, maskBody, clip } = __nccwpck_require2_(9463);
+const { debug, maskHeaders, maskBody, clip } = __nccwpck_require__(9463);
 
 // Node 18+ 有内置全局 fetch；在只支持 node16 运行时的 CI 平台（如 GitCode Action）下
 // 回退到 undici（作为 Action 产物时由 @actions/core 的传递依赖随 ncc 一并内联）。
@@ -7456,7 +3942,7 @@ async function sendRequest(method, url, headers, body) {
 
   let res;
   try {
-    const fetchImpl = typeof fetch === 'function' ? fetch : (...args) => (__nccwpck_require2_(6752).fetch)(...args);
+    const fetchImpl = typeof fetch === 'function' ? fetch : (...args) => (__nccwpck_require__(6752).fetch)(...args);
     res = await fetchImpl(url, {
       method,
       headers,
@@ -7513,7 +3999,7 @@ module.exports = { sendRequest };
 /***/ }),
 
 /***/ 6239:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -7579,18 +4065,18 @@ module.exports = { sendRequest };
  */
 
 module.exports = {
-  callApig: (__nccwpck_require2_(578).callApig),
-  getCredentials: (__nccwpck_require2_(6477).getCredentials),
-  configure: (__nccwpck_require2_(3298).configure),
-  V11Signer: (__nccwpck_require2_(9692).V11Signer),
-  sendRequest: (__nccwpck_require2_(5531).sendRequest)
+  callApig: (__nccwpck_require__(578).callApig),
+  getCredentials: (__nccwpck_require__(6477).getCredentials),
+  configure: (__nccwpck_require__(3298).configure),
+  V11Signer: (__nccwpck_require__(9692).V11Signer),
+  sendRequest: (__nccwpck_require__(5531).sendRequest)
 };
 
 
 /***/ }),
 
 /***/ 9463:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -7600,7 +4086,7 @@ module.exports = {
  * 各级别日志均带 [INFO] / [DEBUG] / [ERROR] 前缀与 ISO 8601 UTC 时间戳，便于肉眼区分、排序与按级别检索。
  */
 
-const { cfg } = __nccwpck_require2_(3298);
+const { cfg } = __nccwpck_require__(3298);
 
 /** 当前时间戳（ISO 8601 UTC，如 2026-08-28T12:03:54.123Z）。 */
 function ts() {
@@ -7694,7 +4180,7 @@ module.exports = { info, debug, error, mask, maskText, maskDeep, maskHeaders, ma
 /***/ }),
 
 /***/ 8790:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -7706,9 +4192,9 @@ module.exports = { info, debug, error, mask, maskText, maskDeep, maskHeaders, ma
  * 环境变量申请（GitCode Actions 流水线与 GitHub Actions 运行器协议兼容）。
  */
 
-const { cfg } = __nccwpck_require2_(3298);
-const { info, error } = __nccwpck_require2_(9463);
-const { sendRequest } = __nccwpck_require2_(5531);
+const { cfg } = __nccwpck_require__(3298);
+const { info, error } = __nccwpck_require__(9463);
+const { sendRequest } = __nccwpck_require__(5531);
 
 /** 申请 OIDC ID Token（自包含，不依赖 @actions/core，GitHub / GitCode Actions 流水线均适用）。 */
 async function getOidcToken() {
@@ -7762,7 +4248,7 @@ module.exports = { getOidcToken };
 /***/ }),
 
 /***/ 9692:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -7772,7 +4258,7 @@ module.exports = { getOidcToken };
  * 仅适用于 APIG 网关接口，签名作用域服务名固定为 apic。
  */
 
-const crypto = __nccwpck_require2_(6982);
+const crypto = __nccwpck_require__(6982);
 
 const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 const APIC_SERVICE = 'apic';
@@ -7871,11 +4357,25 @@ function canonicalQueryString(searchParams) {
  * CanonicalHeaders：按 signed headers 顺序，name:value\n（value 去首尾空格）。
  * 注意：allHeaders 的 key 可能保留原始大小写，因此先构建小写 key 的查找表，
  * 否则会取到 undefined，导致规范请求错误、签名不匹配（表现为 APIG.0602 等）。
+ *
+ * 防御性检查：若同一头名以不同大小写重复出现（如 Content-Type 与 content-type），
+ * 规范化时会后值覆盖前值，签名与请求实际头不一致导致 APIG.0301 验签失败。
+ * 此处检测到重复时通过 console.warn 输出提示，便于调用方排查。
  */
 function canonicalHeaders(allHeaders, signedHeaders) {
   const normalized = {};
+  const seen = {};
+  const duplicates = [];
   for (const k of Object.keys(allHeaders)) {
-    normalized[k.toLowerCase()] = allHeaders[k];
+    const lowerK = k.toLowerCase();
+    if (seen[lowerK] && !duplicates.includes(lowerK)) {
+      duplicates.push(lowerK);
+    }
+    seen[lowerK] = true;
+    normalized[lowerK] = allHeaders[k];
+  }
+  if (duplicates.length > 0) {
+    console.warn(`[V11Signer] 检测到重复请求头（将使用最后出现的值）: ${duplicates.join(', ')}`);
   }
   const arr = [];
   for (const k of signedHeaders) {
@@ -10089,16 +6589,16 @@ module.exports = colorspace;
 /***/ }),
 
 /***/ 8207:
-/***/ (function(module, __unused_webpack_exports, __nccwpck_require2_) {
+/***/ (function(module, __unused_webpack_exports, __nccwpck_require__) {
 
 "use strict";
 
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-const events_1 = __nccwpck_require2_(4434);
-const debug_1 = __importDefault(__nccwpck_require2_(2830));
-const promisify_1 = __importDefault(__nccwpck_require2_(8067));
+const events_1 = __nccwpck_require__(4434);
+const debug_1 = __importDefault(__nccwpck_require__(2830));
+const promisify_1 = __importDefault(__nccwpck_require__(8067));
 const debug = debug_1.default('agent-base');
 function isAgent(v) {
     return Boolean(v) && typeof v.addRequest === 'function';
@@ -10324,7 +6824,7 @@ exports["default"] = promisify;
 /***/ }),
 
 /***/ 8300:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -10334,15 +6834,15 @@ Object.defineProperty(exports, "__esModule", ({
 }));
 exports["default"] = asyncify;
 
-var _initialParams = __nccwpck_require2_(890);
+var _initialParams = __nccwpck_require__(890);
 
 var _initialParams2 = _interopRequireDefault(_initialParams);
 
-var _setImmediate = __nccwpck_require2_(3787);
+var _setImmediate = __nccwpck_require__(3787);
 
 var _setImmediate2 = _interopRequireDefault(_setImmediate);
 
-var _wrapAsync = __nccwpck_require2_(6212);
+var _wrapAsync = __nccwpck_require__(6212);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
@@ -10449,7 +6949,7 @@ module.exports = exports.default;
 /***/ }),
 
 /***/ 6186:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -10458,31 +6958,31 @@ Object.defineProperty(exports, "__esModule", ({
     value: true
 }));
 
-var _isArrayLike = __nccwpck_require2_(3078);
+var _isArrayLike = __nccwpck_require__(3078);
 
 var _isArrayLike2 = _interopRequireDefault(_isArrayLike);
 
-var _breakLoop = __nccwpck_require2_(265);
+var _breakLoop = __nccwpck_require__(265);
 
 var _breakLoop2 = _interopRequireDefault(_breakLoop);
 
-var _eachOfLimit = __nccwpck_require2_(8991);
+var _eachOfLimit = __nccwpck_require__(8991);
 
 var _eachOfLimit2 = _interopRequireDefault(_eachOfLimit);
 
-var _once = __nccwpck_require2_(3491);
+var _once = __nccwpck_require__(3491);
 
 var _once2 = _interopRequireDefault(_once);
 
-var _onlyOnce = __nccwpck_require2_(4085);
+var _onlyOnce = __nccwpck_require__(4085);
 
 var _onlyOnce2 = _interopRequireDefault(_onlyOnce);
 
-var _wrapAsync = __nccwpck_require2_(6212);
+var _wrapAsync = __nccwpck_require__(6212);
 
 var _wrapAsync2 = _interopRequireDefault(_wrapAsync);
 
-var _awaitify = __nccwpck_require2_(5534);
+var _awaitify = __nccwpck_require__(5534);
 
 var _awaitify2 = _interopRequireDefault(_awaitify);
 
@@ -10641,7 +7141,7 @@ module.exports = exports.default;
 /***/ }),
 
 /***/ 8991:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -10650,15 +7150,15 @@ Object.defineProperty(exports, "__esModule", ({
     value: true
 }));
 
-var _eachOfLimit2 = __nccwpck_require2_(4543);
+var _eachOfLimit2 = __nccwpck_require__(4543);
 
 var _eachOfLimit3 = _interopRequireDefault(_eachOfLimit2);
 
-var _wrapAsync = __nccwpck_require2_(6212);
+var _wrapAsync = __nccwpck_require__(6212);
 
 var _wrapAsync2 = _interopRequireDefault(_wrapAsync);
 
-var _awaitify = __nccwpck_require2_(5534);
+var _awaitify = __nccwpck_require__(5534);
 
 var _awaitify2 = _interopRequireDefault(_awaitify);
 
@@ -10695,7 +7195,7 @@ module.exports = exports.default;
 /***/ }),
 
 /***/ 5283:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -10704,11 +7204,11 @@ Object.defineProperty(exports, "__esModule", ({
     value: true
 }));
 
-var _eachOfLimit = __nccwpck_require2_(8991);
+var _eachOfLimit = __nccwpck_require__(8991);
 
 var _eachOfLimit2 = _interopRequireDefault(_eachOfLimit);
 
-var _awaitify = __nccwpck_require2_(5534);
+var _awaitify = __nccwpck_require__(5534);
 
 var _awaitify2 = _interopRequireDefault(_awaitify);
 
@@ -10741,7 +7241,7 @@ module.exports = exports.default;
 /***/ }),
 
 /***/ 3650:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -10750,19 +7250,19 @@ Object.defineProperty(exports, "__esModule", ({
     value: true
 }));
 
-var _eachOf = __nccwpck_require2_(6186);
+var _eachOf = __nccwpck_require__(6186);
 
 var _eachOf2 = _interopRequireDefault(_eachOf);
 
-var _withoutIndex = __nccwpck_require2_(2914);
+var _withoutIndex = __nccwpck_require__(2914);
 
 var _withoutIndex2 = _interopRequireDefault(_withoutIndex);
 
-var _wrapAsync = __nccwpck_require2_(6212);
+var _wrapAsync = __nccwpck_require__(6212);
 
 var _wrapAsync2 = _interopRequireDefault(_wrapAsync);
 
-var _awaitify = __nccwpck_require2_(5534);
+var _awaitify = __nccwpck_require__(5534);
 
 var _awaitify2 = _interopRequireDefault(_awaitify);
 
@@ -10877,7 +7377,7 @@ module.exports = exports.default;
 /***/ }),
 
 /***/ 9325:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -10887,7 +7387,7 @@ Object.defineProperty(exports, "__esModule", ({
 }));
 exports["default"] = asyncEachOfLimit;
 
-var _breakLoop = __nccwpck_require2_(265);
+var _breakLoop = __nccwpck_require__(265);
 
 var _breakLoop2 = _interopRequireDefault(_breakLoop);
 
@@ -11011,7 +7511,7 @@ module.exports = exports.default;
 /***/ }),
 
 /***/ 4543:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -11020,25 +7520,25 @@ Object.defineProperty(exports, "__esModule", ({
     value: true
 }));
 
-var _once = __nccwpck_require2_(3491);
+var _once = __nccwpck_require__(3491);
 
 var _once2 = _interopRequireDefault(_once);
 
-var _iterator = __nccwpck_require2_(9052);
+var _iterator = __nccwpck_require__(9052);
 
 var _iterator2 = _interopRequireDefault(_iterator);
 
-var _onlyOnce = __nccwpck_require2_(4085);
+var _onlyOnce = __nccwpck_require__(4085);
 
 var _onlyOnce2 = _interopRequireDefault(_onlyOnce);
 
-var _wrapAsync = __nccwpck_require2_(6212);
+var _wrapAsync = __nccwpck_require__(6212);
 
-var _asyncEachOfLimit = __nccwpck_require2_(9325);
+var _asyncEachOfLimit = __nccwpck_require__(9325);
 
 var _asyncEachOfLimit2 = _interopRequireDefault(_asyncEachOfLimit);
 
-var _breakLoop = __nccwpck_require2_(265);
+var _breakLoop = __nccwpck_require__(265);
 
 var _breakLoop2 = _interopRequireDefault(_breakLoop);
 
@@ -11164,7 +7664,7 @@ module.exports = exports.default;
 /***/ }),
 
 /***/ 9052:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -11174,11 +7674,11 @@ Object.defineProperty(exports, "__esModule", ({
 }));
 exports["default"] = createIterator;
 
-var _isArrayLike = __nccwpck_require2_(3078);
+var _isArrayLike = __nccwpck_require__(3078);
 
 var _isArrayLike2 = _interopRequireDefault(_isArrayLike);
 
-var _getIterator = __nccwpck_require2_(2350);
+var _getIterator = __nccwpck_require__(2350);
 
 var _getIterator2 = _interopRequireDefault(_getIterator);
 
@@ -11274,7 +7774,7 @@ module.exports = exports.default;
 /***/ }),
 
 /***/ 530:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -11283,15 +7783,15 @@ Object.defineProperty(exports, "__esModule", ({
     value: true
 }));
 
-var _isArrayLike = __nccwpck_require2_(3078);
+var _isArrayLike = __nccwpck_require__(3078);
 
 var _isArrayLike2 = _interopRequireDefault(_isArrayLike);
 
-var _wrapAsync = __nccwpck_require2_(6212);
+var _wrapAsync = __nccwpck_require__(6212);
 
 var _wrapAsync2 = _interopRequireDefault(_wrapAsync);
 
-var _awaitify = __nccwpck_require2_(5534);
+var _awaitify = __nccwpck_require__(5534);
 
 var _awaitify2 = _interopRequireDefault(_awaitify);
 
@@ -11373,7 +7873,7 @@ module.exports = exports.default;
 /***/ }),
 
 /***/ 6212:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -11383,7 +7883,7 @@ Object.defineProperty(exports, "__esModule", ({
 }));
 exports.isAsyncIterable = exports.isAsyncGenerator = exports.isAsync = undefined;
 
-var _asyncify = __nccwpck_require2_(8300);
+var _asyncify = __nccwpck_require__(8300);
 
 var _asyncify2 = _interopRequireDefault(_asyncify);
 
@@ -11414,7 +7914,7 @@ exports.isAsyncIterable = isAsyncIterable;
 /***/ }),
 
 /***/ 8719:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -11424,11 +7924,11 @@ Object.defineProperty(exports, "__esModule", ({
 }));
 exports["default"] = series;
 
-var _parallel2 = __nccwpck_require2_(530);
+var _parallel2 = __nccwpck_require__(530);
 
 var _parallel3 = _interopRequireDefault(_parallel2);
 
-var _eachOfSeries = __nccwpck_require2_(5283);
+var _eachOfSeries = __nccwpck_require__(5283);
 
 var _eachOfSeries2 = _interopRequireDefault(_eachOfSeries);
 
@@ -11607,13 +8107,13 @@ module.exports = exports.default;
 /***/ }),
 
 /***/ 1324:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 module.exports =
 {
-  parallel      : __nccwpck_require2_(3857),
-  serial        : __nccwpck_require2_(1054),
-  serialOrdered : __nccwpck_require2_(3961)
+  parallel      : __nccwpck_require__(3857),
+  serial        : __nccwpck_require__(1054),
+  serialOrdered : __nccwpck_require__(3961)
 };
 
 
@@ -11656,9 +8156,9 @@ function clean(key)
 /***/ }),
 
 /***/ 8452:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var defer = __nccwpck_require2_(9200);
+var defer = __nccwpck_require__(9200);
 
 // API
 module.exports = async;
@@ -11730,10 +8230,10 @@ function defer(fn)
 /***/ }),
 
 /***/ 4902:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var async = __nccwpck_require2_(8452)
-  , abort = __nccwpck_require2_(4818)
+var async = __nccwpck_require__(8452)
+  , abort = __nccwpck_require__(4818)
   ;
 
 // API
@@ -11856,10 +8356,10 @@ function state(list, sortMethod)
 /***/ }),
 
 /***/ 3351:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var abort = __nccwpck_require2_(4818)
-  , async = __nccwpck_require2_(8452)
+var abort = __nccwpck_require__(4818)
+  , async = __nccwpck_require__(8452)
   ;
 
 // API
@@ -11892,11 +8392,11 @@ function terminator(callback)
 /***/ }),
 
 /***/ 3857:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var iterate    = __nccwpck_require2_(4902)
-  , initState  = __nccwpck_require2_(1721)
-  , terminator = __nccwpck_require2_(3351)
+var iterate    = __nccwpck_require__(4902)
+  , initState  = __nccwpck_require__(1721)
+  , terminator = __nccwpck_require__(3351)
   ;
 
 // Public API
@@ -11942,9 +8442,9 @@ function parallel(list, iterator, callback)
 /***/ }),
 
 /***/ 1054:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var serialOrdered = __nccwpck_require2_(3961);
+var serialOrdered = __nccwpck_require__(3961);
 
 // Public API
 module.exports = serial;
@@ -11966,11 +8466,11 @@ function serial(list, iterator, callback)
 /***/ }),
 
 /***/ 3961:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var iterate    = __nccwpck_require2_(4902)
-  , initState  = __nccwpck_require2_(1721)
-  , terminator = __nccwpck_require2_(3351)
+var iterate    = __nccwpck_require__(4902)
+  , initState  = __nccwpck_require__(1721)
+  , terminator = __nccwpck_require__(3351)
   ;
 
 // Public API
@@ -12048,16 +8548,16 @@ function descending(a, b)
 /***/ }),
 
 /***/ 2639:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var bind = __nccwpck_require2_(7564);
+var bind = __nccwpck_require__(7564);
 
-var $apply = __nccwpck_require2_(3945);
-var $call = __nccwpck_require2_(8093);
-var $reflectApply = __nccwpck_require2_(1330);
+var $apply = __nccwpck_require__(3945);
+var $call = __nccwpck_require__(8093);
+var $reflectApply = __nccwpck_require__(1330);
 
 /** @type {import('./actualApply')} */
 module.exports = $reflectApply || bind.call($call, $apply);
@@ -12090,16 +8590,16 @@ module.exports = Function.prototype.call;
 /***/ }),
 
 /***/ 8705:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var bind = __nccwpck_require2_(7564);
-var $TypeError = __nccwpck_require2_(3314);
+var bind = __nccwpck_require__(7564);
+var $TypeError = __nccwpck_require__(3314);
 
-var $call = __nccwpck_require2_(8093);
-var $actualApply = __nccwpck_require2_(2639);
+var $call = __nccwpck_require__(8093);
+var $actualApply = __nccwpck_require__(2639);
 
 /** @type {(args: [Function, thisArg?: unknown, ...args: unknown[]]) => Function} TODO FIXME, find a way to use import('.') */
 module.exports = function callBindBasic(args) {
@@ -12125,11 +8625,11 @@ module.exports = typeof Reflect !== 'undefined' && Reflect && Reflect.apply;
 /***/ }),
 
 /***/ 5630:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var util = __nccwpck_require2_(9023);
-var Stream = (__nccwpck_require2_(2203).Stream);
-var DelayedStream = __nccwpck_require2_(2710);
+var util = __nccwpck_require__(9023);
+var Stream = (__nccwpck_require__(2203).Stream);
+var DelayedStream = __nccwpck_require__(2710);
 
 module.exports = CombinedStream;
 function CombinedStream() {
@@ -12340,7 +8840,7 @@ CombinedStream.prototype._emitError = function(err) {
 /***/ }),
 
 /***/ 6110:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 /* eslint-env browser */
 
@@ -12599,7 +9099,7 @@ function localstorage() {
 	}
 }
 
-module.exports = __nccwpck_require2_(897)(exports);
+module.exports = __nccwpck_require__(897)(exports);
 
 const {formatters} = module.exports;
 
@@ -12619,7 +9119,7 @@ formatters.j = function (v) {
 /***/ }),
 
 /***/ 897:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 
 /**
@@ -12634,7 +9134,7 @@ function setup(env) {
 	createDebug.disable = disable;
 	createDebug.enable = enable;
 	createDebug.enabled = enabled;
-	createDebug.humanize = __nccwpck_require2_(744);
+	createDebug.humanize = __nccwpck_require__(744);
 	createDebug.destroy = destroy;
 
 	Object.keys(env).forEach(key => {
@@ -12918,7 +9418,7 @@ module.exports = setup;
 /***/ }),
 
 /***/ 2830:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 /**
  * Detect Electron renderer / nwjs process, which is node, but we should
@@ -12926,23 +9426,23 @@ module.exports = setup;
  */
 
 if (typeof process === 'undefined' || process.type === 'renderer' || process.browser === true || process.__nwjs) {
-	module.exports = __nccwpck_require2_(6110);
+	module.exports = __nccwpck_require__(6110);
 } else {
-	module.exports = __nccwpck_require2_(5108);
+	module.exports = __nccwpck_require__(5108);
 }
 
 
 /***/ }),
 
 /***/ 5108:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 /**
  * Module dependencies.
  */
 
-const tty = __nccwpck_require2_(2018);
-const util = __nccwpck_require2_(9023);
+const tty = __nccwpck_require__(2018);
+const util = __nccwpck_require__(9023);
 
 /**
  * This is the Node.js implementation of `debug()`.
@@ -12968,7 +9468,7 @@ exports.colors = [6, 2, 3, 4, 5, 1];
 try {
 	// Optional dependency (as in, doesn't need to be installed, NOT like optionalDependencies in package.json)
 	// eslint-disable-next-line import/no-extraneous-dependencies
-	const supportsColor = __nccwpck_require2_(75);
+	const supportsColor = __nccwpck_require__(1450);
 
 	if (supportsColor && (supportsColor.stderr || supportsColor).level >= 2) {
 		exports.colors = [
@@ -13176,7 +9676,7 @@ function init(debug) {
 	}
 }
 
-module.exports = __nccwpck_require2_(897)(exports);
+module.exports = __nccwpck_require__(897)(exports);
 
 const {formatters} = module.exports;
 
@@ -13205,10 +9705,10 @@ formatters.O = function (v) {
 /***/ }),
 
 /***/ 2710:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var Stream = (__nccwpck_require2_(2203).Stream);
-var util = __nccwpck_require2_(9023);
+var Stream = (__nccwpck_require__(2203).Stream);
+var util = __nccwpck_require__(9023);
 
 module.exports = DelayedStream;
 function DelayedStream() {
@@ -13319,13 +9819,13 @@ DelayedStream.prototype._checkIfMaxDataSizeExceeded = function() {
 /***/ }),
 
 /***/ 6669:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var callBind = __nccwpck_require2_(8705);
-var gOPD = __nccwpck_require2_(3170);
+var callBind = __nccwpck_require__(8705);
+var gOPD = __nccwpck_require__(3170);
 
 var hasProtoAccessor;
 try {
@@ -13517,18 +10017,18 @@ module.exports = Object;
 /***/ }),
 
 /***/ 8700:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var GetIntrinsic = __nccwpck_require2_(470);
+var GetIntrinsic = __nccwpck_require__(470);
 
 var $defineProperty = GetIntrinsic('%Object.defineProperty%', true);
 
-var hasToStringTag = __nccwpck_require2_(5479)();
-var hasOwn = __nccwpck_require2_(4076);
-var $TypeError = __nccwpck_require2_(3314);
+var hasToStringTag = __nccwpck_require__(5479)();
+var hasOwn = __nccwpck_require__(4076);
+var $TypeError = __nccwpck_require__(3314);
 
 var toStringTag = hasToStringTag ? Symbol.toStringTag : null;
 
@@ -13563,7 +10063,7 @@ module.exports = function setToStringTag(object, value) {
 /***/ (function(__unused_webpack_module, exports) {
 
 (function (global, factory) {
-    true ? factory(exports) :
+   true ? factory(exports) :
   0;
 }(this, (function (exports) { 'use strict';
 
@@ -14034,7 +10534,7 @@ module.exports = function name(fn) {
 /***/ }),
 
 /***/ 4778:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 var debug;
 
@@ -14042,7 +10542,7 @@ module.exports = function () {
   if (!debug) {
     try {
       /* eslint global-require: off */
-      debug = __nccwpck_require2_(2830)("follow-redirects");
+      debug = __nccwpck_require__(2830)("follow-redirects");
     }
     catch (error) { /* */ }
     if (typeof debug !== "function") {
@@ -14056,15 +10556,15 @@ module.exports = function () {
 /***/ }),
 
 /***/ 1573:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var url = __nccwpck_require2_(7016);
+var url = __nccwpck_require__(7016);
 var URL = url.URL;
-var http = __nccwpck_require2_(8611);
-var https = __nccwpck_require2_(5692);
-var Writable = (__nccwpck_require2_(2203).Writable);
-var assert = __nccwpck_require2_(2613);
-var debug = __nccwpck_require2_(4778);
+var http = __nccwpck_require__(8611);
+var https = __nccwpck_require__(5692);
+var Writable = (__nccwpck_require__(2203).Writable);
+var assert = __nccwpck_require__(2613);
+var debug = __nccwpck_require__(4778);
 
 // Preventive platform detection
 // istanbul ignore next
@@ -14772,25 +11272,25 @@ module.exports.wrap = wrap;
 /***/ }),
 
 /***/ 6454:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var CombinedStream = __nccwpck_require2_(5630);
-var util = __nccwpck_require2_(9023);
-var path = __nccwpck_require2_(6928);
-var http = __nccwpck_require2_(8611);
-var https = __nccwpck_require2_(5692);
-var parseUrl = (__nccwpck_require2_(7016).parse);
-var fs = __nccwpck_require2_(9896);
-var Stream = (__nccwpck_require2_(2203).Stream);
-var crypto = __nccwpck_require2_(6982);
-var mime = __nccwpck_require2_(4096);
-var asynckit = __nccwpck_require2_(1324);
-var setToStringTag = __nccwpck_require2_(8700);
-var hasOwn = __nccwpck_require2_(4076);
-var populate = __nccwpck_require2_(1835);
+var CombinedStream = __nccwpck_require__(5630);
+var util = __nccwpck_require__(9023);
+var path = __nccwpck_require__(6928);
+var http = __nccwpck_require__(8611);
+var https = __nccwpck_require__(5692);
+var parseUrl = (__nccwpck_require__(7016).parse);
+var fs = __nccwpck_require__(9896);
+var Stream = (__nccwpck_require__(2203).Stream);
+var crypto = __nccwpck_require__(6982);
+var mime = __nccwpck_require__(4096);
+var asynckit = __nccwpck_require__(1324);
+var setToStringTag = __nccwpck_require__(8700);
+var hasOwn = __nccwpck_require__(4076);
+var populate = __nccwpck_require__(1835);
 
 /**
  * Escape CR, LF, and `"` in a multipart `name`/`filename` parameter, so a field
@@ -15396,12 +11896,12 @@ module.exports = function bind(that) {
 /***/ }),
 
 /***/ 7564:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var implementation = __nccwpck_require2_(9808);
+var implementation = __nccwpck_require__(9808);
 
 module.exports = Function.prototype.bind || implementation;
 
@@ -15409,30 +11909,30 @@ module.exports = Function.prototype.bind || implementation;
 /***/ }),
 
 /***/ 470:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
 var undefined;
 
-var $Object = __nccwpck_require2_(5399);
+var $Object = __nccwpck_require__(5399);
 
-var $Error = __nccwpck_require2_(1620);
-var $EvalError = __nccwpck_require2_(3056);
-var $RangeError = __nccwpck_require2_(4585);
-var $ReferenceError = __nccwpck_require2_(6905);
-var $SyntaxError = __nccwpck_require2_(105);
-var $TypeError = __nccwpck_require2_(3314);
-var $URIError = __nccwpck_require2_(2578);
+var $Error = __nccwpck_require__(1620);
+var $EvalError = __nccwpck_require__(3056);
+var $RangeError = __nccwpck_require__(4585);
+var $ReferenceError = __nccwpck_require__(6905);
+var $SyntaxError = __nccwpck_require__(105);
+var $TypeError = __nccwpck_require__(3314);
+var $URIError = __nccwpck_require__(2578);
 
-var abs = __nccwpck_require2_(5641);
-var floor = __nccwpck_require2_(6171);
-var max = __nccwpck_require2_(7147);
-var min = __nccwpck_require2_(1017);
-var pow = __nccwpck_require2_(6947);
-var round = __nccwpck_require2_(2621);
-var sign = __nccwpck_require2_(156);
+var abs = __nccwpck_require__(5641);
+var floor = __nccwpck_require__(6171);
+var max = __nccwpck_require__(7147);
+var min = __nccwpck_require__(1017);
+var pow = __nccwpck_require__(6947);
+var round = __nccwpck_require__(2621);
+var sign = __nccwpck_require__(156);
 
 var $Function = Function;
 
@@ -15443,8 +11943,8 @@ var getEvalledConstructor = function (expressionSyntax) {
 	} catch (e) {}
 };
 
-var $gOPD = __nccwpck_require2_(3170);
-var $defineProperty = __nccwpck_require2_(9094);
+var $gOPD = __nccwpck_require__(3170);
+var $defineProperty = __nccwpck_require__(9094);
 
 var throwTypeError = function () {
 	throw new $TypeError();
@@ -15466,14 +11966,14 @@ var ThrowTypeError = $gOPD
 	}())
 	: throwTypeError;
 
-var hasSymbols = __nccwpck_require2_(3336)();
+var hasSymbols = __nccwpck_require__(3336)();
 
-var getProto = __nccwpck_require2_(1967);
-var $ObjectGPO = __nccwpck_require2_(1311);
-var $ReflectGPO = __nccwpck_require2_(8681);
+var getProto = __nccwpck_require__(1967);
+var $ObjectGPO = __nccwpck_require__(1311);
+var $ReflectGPO = __nccwpck_require__(8681);
 
-var $apply = __nccwpck_require2_(3945);
-var $call = __nccwpck_require2_(8093);
+var $apply = __nccwpck_require__(3945);
+var $call = __nccwpck_require__(8093);
 
 var needsEval = {};
 
@@ -15654,8 +12154,8 @@ var LEGACY_ALIASES = {
 	'%WeakSetPrototype%': ['WeakSet', 'prototype']
 };
 
-var bind = __nccwpck_require2_(7564);
-var hasOwn = __nccwpck_require2_(4076);
+var bind = __nccwpck_require__(7564);
+var hasOwn = __nccwpck_require__(4076);
 var $concat = bind.call($call, Array.prototype.concat);
 var $spliceApply = bind.call($apply, Array.prototype.splice);
 var $replace = bind.call($call, String.prototype.replace);
@@ -15795,12 +12295,12 @@ module.exports = function GetIntrinsic(name, allowMissing) {
 /***/ }),
 
 /***/ 1311:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var $Object = __nccwpck_require2_(5399);
+var $Object = __nccwpck_require__(5399);
 
 /** @type {import('./Object.getPrototypeOf')} */
 module.exports = $Object.getPrototypeOf || null;
@@ -15821,15 +12321,15 @@ module.exports = (typeof Reflect !== 'undefined' && Reflect.getPrototypeOf) || n
 /***/ }),
 
 /***/ 1967:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var reflectGetProto = __nccwpck_require2_(8681);
-var originalGetProto = __nccwpck_require2_(1311);
+var reflectGetProto = __nccwpck_require__(8681);
+var originalGetProto = __nccwpck_require__(1311);
 
-var getDunderProto = __nccwpck_require2_(6669);
+var getDunderProto = __nccwpck_require__(6669);
 
 /** @type {import('.')} */
 module.exports = reflectGetProto
@@ -15868,13 +12368,13 @@ module.exports = Object.getOwnPropertyDescriptor;
 /***/ }),
 
 /***/ 3170:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
 /** @type {import('.')} */
-var $gOPD = __nccwpck_require2_(1174);
+var $gOPD = __nccwpck_require__(1174);
 
 if ($gOPD) {
 	try {
@@ -15890,14 +12390,30 @@ module.exports = $gOPD;
 
 /***/ }),
 
+/***/ 3813:
+/***/ ((module) => {
+
+"use strict";
+
+
+module.exports = (flag, argv = process.argv) => {
+	const prefix = flag.startsWith('-') ? '' : (flag.length === 1 ? '-' : '--');
+	const position = argv.indexOf(prefix + flag);
+	const terminatorPosition = argv.indexOf('--');
+	return position !== -1 && (terminatorPosition === -1 || position < terminatorPosition);
+};
+
+
+/***/ }),
+
 /***/ 3336:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
 var origSymbol = typeof Symbol !== 'undefined' && Symbol;
-var hasSymbolSham = __nccwpck_require2_(1114);
+var hasSymbolSham = __nccwpck_require__(1114);
 
 /** @type {import('.')} */
 module.exports = function hasNativeSymbols() {
@@ -15966,12 +12482,12 @@ module.exports = function hasSymbols() {
 /***/ }),
 
 /***/ 5479:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var hasSymbols = __nccwpck_require2_(1114);
+var hasSymbols = __nccwpck_require__(1114);
 
 /** @type {import('.')} */
 module.exports = function hasToStringTagShams() {
@@ -15982,14 +12498,14 @@ module.exports = function hasToStringTagShams() {
 /***/ }),
 
 /***/ 4076:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
 var call = Function.prototype.call;
 var $hasOwn = Object.prototype.hasOwnProperty;
-var bind = __nccwpck_require2_(7564);
+var bind = __nccwpck_require__(7564);
 
 /** @type {import('.')} */
 module.exports = bind.call(call, $hasOwn);
@@ -15998,7 +12514,7 @@ module.exports = bind.call(call, $hasOwn);
 /***/ }),
 
 /***/ 6904:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -16015,13 +12531,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const net_1 = __importDefault(__nccwpck_require2_(9278));
-const tls_1 = __importDefault(__nccwpck_require2_(4756));
-const url_1 = __importDefault(__nccwpck_require2_(7016));
-const assert_1 = __importDefault(__nccwpck_require2_(2613));
-const debug_1 = __importDefault(__nccwpck_require2_(2830));
-const agent_base_1 = __nccwpck_require2_(8207);
-const parse_proxy_response_1 = __importDefault(__nccwpck_require2_(7943));
+const net_1 = __importDefault(__nccwpck_require__(9278));
+const tls_1 = __importDefault(__nccwpck_require__(4756));
+const url_1 = __importDefault(__nccwpck_require__(7016));
+const assert_1 = __importDefault(__nccwpck_require__(2613));
+const debug_1 = __importDefault(__nccwpck_require__(2830));
+const agent_base_1 = __nccwpck_require__(8207);
+const parse_proxy_response_1 = __importDefault(__nccwpck_require__(7943));
 const debug = debug_1.default('https-proxy-agent:agent');
 /**
  * The `HttpsProxyAgent` implements an HTTP Agent subclass that connects to
@@ -16182,14 +12698,14 @@ function omit(obj, ...keys) {
 /***/ }),
 
 /***/ 3669:
-/***/ (function(module, __unused_webpack_exports, __nccwpck_require2_) {
+/***/ (function(module, __unused_webpack_exports, __nccwpck_require__) {
 
 "use strict";
 
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-const agent_1 = __importDefault(__nccwpck_require2_(6904));
+const agent_1 = __importDefault(__nccwpck_require__(6904));
 function createHttpsProxyAgent(opts) {
     return new agent_1.default(opts);
 }
@@ -16203,7 +12719,7 @@ module.exports = createHttpsProxyAgent;
 /***/ }),
 
 /***/ 7943:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require2_) {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
@@ -16211,7 +12727,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const debug_1 = __importDefault(__nccwpck_require2_(2830));
+const debug_1 = __importDefault(__nccwpck_require__(2830));
 const debug = debug_1.default('https-proxy-agent:parse-proxy-response');
 function parseProxyResponse(socket) {
     return new Promise((resolve, reject) => {
@@ -16276,16 +12792,16 @@ exports["default"] = parseProxyResponse;
 /***/ }),
 
 /***/ 9598:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 try {
-  var util = __nccwpck_require2_(9023);
+  var util = __nccwpck_require__(9023);
   /* istanbul ignore next */
   if (typeof util.inherits !== 'function') throw '';
   module.exports = util.inherits;
 } catch (e) {
   /* istanbul ignore next */
-  module.exports = __nccwpck_require2_(6589);
+  module.exports = __nccwpck_require__(6589);
 }
 
 
@@ -16362,56 +12878,53 @@ module.exports = isStream;
 /***/ }),
 
 /***/ 4281:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
+const loader = __nccwpck_require__(1950)
+const dumper = __nccwpck_require__(9980)
 
-var loader = __nccwpck_require2_(1950);
-var dumper = __nccwpck_require2_(9980);
-
-
-function renamed(from, to) {
+function renamed (from, to) {
   return function () {
     throw new Error('Function yaml.' + from + ' is removed in js-yaml 4. ' +
-      'Use yaml.' + to + ' instead, which is now safe by default.');
-  };
+      'Use yaml.' + to + ' instead, which is now safe by default.')
+  }
 }
 
-
-module.exports.Type = __nccwpck_require2_(9557);
-module.exports.Schema = __nccwpck_require2_(2046);
-module.exports.FAILSAFE_SCHEMA = __nccwpck_require2_(9832);
-module.exports.JSON_SCHEMA = __nccwpck_require2_(8927);
-module.exports.CORE_SCHEMA = __nccwpck_require2_(5746);
-module.exports.DEFAULT_SCHEMA = __nccwpck_require2_(7336);
-module.exports.load                = loader.load;
-module.exports.loadAll             = loader.loadAll;
-module.exports.dump                = dumper.dump;
-module.exports.YAMLException = __nccwpck_require2_(1248);
+module.exports.Type = __nccwpck_require__(9557)
+module.exports.Schema = __nccwpck_require__(2046)
+module.exports.FAILSAFE_SCHEMA = __nccwpck_require__(9832)
+module.exports.JSON_SCHEMA = __nccwpck_require__(8927)
+module.exports.CORE_SCHEMA = __nccwpck_require__(5746)
+module.exports.DEFAULT_SCHEMA = __nccwpck_require__(7336)
+module.exports.load = loader.load
+module.exports.loadAll = loader.loadAll
+module.exports.dump = dumper.dump
+module.exports.YAMLException = __nccwpck_require__(1248)
 
 // Re-export all types in case user wants to create custom schema
 module.exports.types = {
-  binary:    __nccwpck_require2_(8149),
-  float:     __nccwpck_require2_(7584),
-  map:       __nccwpck_require2_(7316),
-  null:      __nccwpck_require2_(4333),
-  pairs:     __nccwpck_require2_(6267),
-  set:       __nccwpck_require2_(8758),
-  timestamp: __nccwpck_require2_(8966),
-  bool:      __nccwpck_require2_(7296),
-  int:       __nccwpck_require2_(4652),
-  merge:     __nccwpck_require2_(6854),
-  omap:      __nccwpck_require2_(8649),
-  seq:       __nccwpck_require2_(7161),
-  str:       __nccwpck_require2_(3929)
-};
+  binary: __nccwpck_require__(8149),
+  float: __nccwpck_require__(7584),
+  map: __nccwpck_require__(7316),
+  null: __nccwpck_require__(4333),
+  pairs: __nccwpck_require__(6267),
+  set: __nccwpck_require__(8758),
+  timestamp: __nccwpck_require__(8966),
+  bool: __nccwpck_require__(7296),
+  int: __nccwpck_require__(4652),
+  merge: __nccwpck_require__(6854),
+  omap: __nccwpck_require__(8649),
+  seq: __nccwpck_require__(7161),
+  str: __nccwpck_require__(3929)
+}
 
 // Removed functions from JS-YAML 3.0.x
-module.exports.safeLoad            = renamed('safeLoad', 'load');
-module.exports.safeLoadAll         = renamed('safeLoadAll', 'loadAll');
-module.exports.safeDump            = renamed('safeDump', 'dump');
+module.exports.safeLoad = renamed('safeLoad', 'load')
+module.exports.safeLoadAll = renamed('safeLoadAll', 'loadAll')
+module.exports.safeDump = renamed('safeDump', 'dump')
 
 
 /***/ }),
@@ -16422,270 +12935,254 @@ module.exports.safeDump            = renamed('safeDump', 'dump');
 "use strict";
 
 
-
-function isNothing(subject) {
-  return (typeof subject === 'undefined') || (subject === null);
+function isNothing (subject) {
+  return (typeof subject === 'undefined') || (subject === null)
 }
 
-
-function isObject(subject) {
-  return (typeof subject === 'object') && (subject !== null);
+function isObject (subject) {
+  return (typeof subject === 'object') && (subject !== null)
 }
 
+function toArray (sequence) {
+  if (Array.isArray(sequence)) return sequence
+  else if (isNothing(sequence)) return []
 
-function toArray(sequence) {
-  if (Array.isArray(sequence)) return sequence;
-  else if (isNothing(sequence)) return [];
-
-  return [ sequence ];
+  return [sequence]
 }
 
-
-function extend(target, source) {
-  var index, length, key, sourceKeys;
-
+function extend (target, source) {
   if (source) {
-    sourceKeys = Object.keys(source);
+    const sourceKeys = Object.keys(source)
 
-    for (index = 0, length = sourceKeys.length; index < length; index += 1) {
-      key = sourceKeys[index];
-      target[key] = source[key];
+    for (let index = 0, length = sourceKeys.length; index < length; index += 1) {
+      const key = sourceKeys[index]
+      target[key] = source[key]
     }
   }
 
-  return target;
+  return target
 }
 
+function repeat (string, count) {
+  let result = ''
 
-function repeat(string, count) {
-  var result = '', cycle;
-
-  for (cycle = 0; cycle < count; cycle += 1) {
-    result += string;
+  for (let cycle = 0; cycle < count; cycle += 1) {
+    result += string
   }
 
-  return result;
+  return result
 }
 
-
-function isNegativeZero(number) {
-  return (number === 0) && (Number.NEGATIVE_INFINITY === 1 / number);
+function isNegativeZero (number) {
+  return (number === 0) && (Number.NEGATIVE_INFINITY === 1 / number)
 }
 
-
-module.exports.isNothing      = isNothing;
-module.exports.isObject       = isObject;
-module.exports.toArray        = toArray;
-module.exports.repeat         = repeat;
-module.exports.isNegativeZero = isNegativeZero;
-module.exports.extend         = extend;
+module.exports.isNothing = isNothing
+module.exports.isObject = isObject
+module.exports.toArray = toArray
+module.exports.repeat = repeat
+module.exports.isNegativeZero = isNegativeZero
+module.exports.extend = extend
 
 
 /***/ }),
 
 /***/ 9980:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-/*eslint-disable no-use-before-define*/
+const common = __nccwpck_require__(9816)
+const YAMLException = __nccwpck_require__(1248)
+const DEFAULT_SCHEMA = __nccwpck_require__(7336)
 
-var common              = __nccwpck_require2_(9816);
-var YAMLException       = __nccwpck_require2_(1248);
-var DEFAULT_SCHEMA      = __nccwpck_require2_(7336);
+const _toString = Object.prototype.toString
+const _hasOwnProperty = Object.prototype.hasOwnProperty
 
-var _toString       = Object.prototype.toString;
-var _hasOwnProperty = Object.prototype.hasOwnProperty;
+const CHAR_BOM = 0xFEFF
+const CHAR_TAB = 0x09 /* Tab */
+const CHAR_LINE_FEED = 0x0A /* LF */
+const CHAR_CARRIAGE_RETURN = 0x0D /* CR */
+const CHAR_SPACE = 0x20 /* Space */
+const CHAR_EXCLAMATION = 0x21 /* ! */
+const CHAR_DOUBLE_QUOTE = 0x22 /* " */
+const CHAR_SHARP = 0x23 /* # */
+const CHAR_PERCENT = 0x25 /* % */
+const CHAR_AMPERSAND = 0x26 /* & */
+const CHAR_SINGLE_QUOTE = 0x27 /* ' */
+const CHAR_ASTERISK = 0x2A /* * */
+const CHAR_COMMA = 0x2C /* , */
+const CHAR_MINUS = 0x2D /* - */
+const CHAR_COLON = 0x3A /* : */
+const CHAR_EQUALS = 0x3D /* = */
+const CHAR_GREATER_THAN = 0x3E /* > */
+const CHAR_QUESTION = 0x3F /* ? */
+const CHAR_COMMERCIAL_AT = 0x40 /* @ */
+const CHAR_LEFT_SQUARE_BRACKET = 0x5B /* [ */
+const CHAR_RIGHT_SQUARE_BRACKET = 0x5D /* ] */
+const CHAR_GRAVE_ACCENT = 0x60 /* ` */
+const CHAR_LEFT_CURLY_BRACKET = 0x7B /* { */
+const CHAR_VERTICAL_LINE = 0x7C /* | */
+const CHAR_RIGHT_CURLY_BRACKET = 0x7D /* } */
 
-var CHAR_BOM                  = 0xFEFF;
-var CHAR_TAB                  = 0x09; /* Tab */
-var CHAR_LINE_FEED            = 0x0A; /* LF */
-var CHAR_CARRIAGE_RETURN      = 0x0D; /* CR */
-var CHAR_SPACE                = 0x20; /* Space */
-var CHAR_EXCLAMATION          = 0x21; /* ! */
-var CHAR_DOUBLE_QUOTE         = 0x22; /* " */
-var CHAR_SHARP                = 0x23; /* # */
-var CHAR_PERCENT              = 0x25; /* % */
-var CHAR_AMPERSAND            = 0x26; /* & */
-var CHAR_SINGLE_QUOTE         = 0x27; /* ' */
-var CHAR_ASTERISK             = 0x2A; /* * */
-var CHAR_COMMA                = 0x2C; /* , */
-var CHAR_MINUS                = 0x2D; /* - */
-var CHAR_COLON                = 0x3A; /* : */
-var CHAR_EQUALS               = 0x3D; /* = */
-var CHAR_GREATER_THAN         = 0x3E; /* > */
-var CHAR_QUESTION             = 0x3F; /* ? */
-var CHAR_COMMERCIAL_AT        = 0x40; /* @ */
-var CHAR_LEFT_SQUARE_BRACKET  = 0x5B; /* [ */
-var CHAR_RIGHT_SQUARE_BRACKET = 0x5D; /* ] */
-var CHAR_GRAVE_ACCENT         = 0x60; /* ` */
-var CHAR_LEFT_CURLY_BRACKET   = 0x7B; /* { */
-var CHAR_VERTICAL_LINE        = 0x7C; /* | */
-var CHAR_RIGHT_CURLY_BRACKET  = 0x7D; /* } */
+const ESCAPE_SEQUENCES = {}
 
-var ESCAPE_SEQUENCES = {};
+ESCAPE_SEQUENCES[0x00] = '\\0'
+ESCAPE_SEQUENCES[0x07] = '\\a'
+ESCAPE_SEQUENCES[0x08] = '\\b'
+ESCAPE_SEQUENCES[0x09] = '\\t'
+ESCAPE_SEQUENCES[0x0A] = '\\n'
+ESCAPE_SEQUENCES[0x0B] = '\\v'
+ESCAPE_SEQUENCES[0x0C] = '\\f'
+ESCAPE_SEQUENCES[0x0D] = '\\r'
+ESCAPE_SEQUENCES[0x1B] = '\\e'
+ESCAPE_SEQUENCES[0x22] = '\\"'
+ESCAPE_SEQUENCES[0x5C] = '\\\\'
+ESCAPE_SEQUENCES[0x85] = '\\N'
+ESCAPE_SEQUENCES[0xA0] = '\\_'
+ESCAPE_SEQUENCES[0x2028] = '\\L'
+ESCAPE_SEQUENCES[0x2029] = '\\P'
 
-ESCAPE_SEQUENCES[0x00]   = '\\0';
-ESCAPE_SEQUENCES[0x07]   = '\\a';
-ESCAPE_SEQUENCES[0x08]   = '\\b';
-ESCAPE_SEQUENCES[0x09]   = '\\t';
-ESCAPE_SEQUENCES[0x0A]   = '\\n';
-ESCAPE_SEQUENCES[0x0B]   = '\\v';
-ESCAPE_SEQUENCES[0x0C]   = '\\f';
-ESCAPE_SEQUENCES[0x0D]   = '\\r';
-ESCAPE_SEQUENCES[0x1B]   = '\\e';
-ESCAPE_SEQUENCES[0x22]   = '\\"';
-ESCAPE_SEQUENCES[0x5C]   = '\\\\';
-ESCAPE_SEQUENCES[0x85]   = '\\N';
-ESCAPE_SEQUENCES[0xA0]   = '\\_';
-ESCAPE_SEQUENCES[0x2028] = '\\L';
-ESCAPE_SEQUENCES[0x2029] = '\\P';
-
-var DEPRECATED_BOOLEANS_SYNTAX = [
+const DEPRECATED_BOOLEANS_SYNTAX = [
   'y', 'Y', 'yes', 'Yes', 'YES', 'on', 'On', 'ON',
   'n', 'N', 'no', 'No', 'NO', 'off', 'Off', 'OFF'
-];
+]
 
-var DEPRECATED_BASE60_SYNTAX = /^[-+]?[0-9_]+(?::[0-9_]+)+(?:\.[0-9_]*)?$/;
+const DEPRECATED_BASE60_SYNTAX = /^[-+]?[0-9_]+(?::[0-9_]+)+(?:\.[0-9_]*)?$/
 
-function compileStyleMap(schema, map) {
-  var result, keys, index, length, tag, style, type;
+function compileStyleMap (schema, map) {
+  if (map === null) return {}
 
-  if (map === null) return {};
+  const result = {}
+  const keys = Object.keys(map)
 
-  result = {};
-  keys = Object.keys(map);
-
-  for (index = 0, length = keys.length; index < length; index += 1) {
-    tag = keys[index];
-    style = String(map[tag]);
+  for (let index = 0, length = keys.length; index < length; index += 1) {
+    let tag = keys[index]
+    let style = String(map[tag])
 
     if (tag.slice(0, 2) === '!!') {
-      tag = 'tag:yaml.org,2002:' + tag.slice(2);
+      tag = 'tag:yaml.org,2002:' + tag.slice(2)
     }
-    type = schema.compiledTypeMap['fallback'][tag];
+    const type = schema.compiledTypeMap['fallback'][tag]
 
     if (type && _hasOwnProperty.call(type.styleAliases, style)) {
-      style = type.styleAliases[style];
+      style = type.styleAliases[style]
     }
 
-    result[tag] = style;
+    result[tag] = style
   }
 
-  return result;
+  return result
 }
 
-function encodeHex(character) {
-  var string, handle, length;
+function encodeHex (character) {
+  let handle
+  let length
 
-  string = character.toString(16).toUpperCase();
+  const string = character.toString(16).toUpperCase()
 
   if (character <= 0xFF) {
-    handle = 'x';
-    length = 2;
+    handle = 'x'
+    length = 2
   } else if (character <= 0xFFFF) {
-    handle = 'u';
-    length = 4;
+    handle = 'u'
+    length = 4
   } else if (character <= 0xFFFFFFFF) {
-    handle = 'U';
-    length = 8;
+    handle = 'U'
+    length = 8
   } else {
-    throw new YAMLException('code point within a string may not be greater than 0xFFFFFFFF');
+    throw new YAMLException('code point within a string may not be greater than 0xFFFFFFFF')
   }
 
-  return '\\' + handle + common.repeat('0', length - string.length) + string;
+  return '\\' + handle + common.repeat('0', length - string.length) + string
 }
 
+const QUOTING_TYPE_SINGLE = 1
+const QUOTING_TYPE_DOUBLE = 2
 
-var QUOTING_TYPE_SINGLE = 1,
-    QUOTING_TYPE_DOUBLE = 2;
+function State (options) {
+  this.schema = options['schema'] || DEFAULT_SCHEMA
+  this.indent = Math.max(1, (options['indent'] || 2))
+  this.noArrayIndent = options['noArrayIndent'] || false
+  this.skipInvalid = options['skipInvalid'] || false
+  this.flowLevel = (common.isNothing(options['flowLevel']) ? -1 : options['flowLevel'])
+  this.styleMap = compileStyleMap(this.schema, options['styles'] || null)
+  this.sortKeys = options['sortKeys'] || false
+  this.lineWidth = options['lineWidth'] || 80
+  this.noRefs = options['noRefs'] || false
+  this.noCompatMode = options['noCompatMode'] || false
+  this.condenseFlow = options['condenseFlow'] || false
+  this.quotingType = options['quotingType'] === '"' ? QUOTING_TYPE_DOUBLE : QUOTING_TYPE_SINGLE
+  this.forceQuotes = options['forceQuotes'] || false
+  this.replacer = typeof options['replacer'] === 'function' ? options['replacer'] : null
 
-function State(options) {
-  this.schema        = options['schema'] || DEFAULT_SCHEMA;
-  this.indent        = Math.max(1, (options['indent'] || 2));
-  this.noArrayIndent = options['noArrayIndent'] || false;
-  this.skipInvalid   = options['skipInvalid'] || false;
-  this.flowLevel     = (common.isNothing(options['flowLevel']) ? -1 : options['flowLevel']);
-  this.styleMap      = compileStyleMap(this.schema, options['styles'] || null);
-  this.sortKeys      = options['sortKeys'] || false;
-  this.lineWidth     = options['lineWidth'] || 80;
-  this.noRefs        = options['noRefs'] || false;
-  this.noCompatMode  = options['noCompatMode'] || false;
-  this.condenseFlow  = options['condenseFlow'] || false;
-  this.quotingType   = options['quotingType'] === '"' ? QUOTING_TYPE_DOUBLE : QUOTING_TYPE_SINGLE;
-  this.forceQuotes   = options['forceQuotes'] || false;
-  this.replacer      = typeof options['replacer'] === 'function' ? options['replacer'] : null;
+  this.implicitTypes = this.schema.compiledImplicit
+  this.explicitTypes = this.schema.compiledExplicit
 
-  this.implicitTypes = this.schema.compiledImplicit;
-  this.explicitTypes = this.schema.compiledExplicit;
+  this.tag = null
+  this.result = ''
 
-  this.tag = null;
-  this.result = '';
-
-  this.duplicates = [];
-  this.usedDuplicates = null;
+  this.duplicates = []
+  this.usedDuplicates = null
 }
 
 // Indents every line in a string. Empty lines (\n only) are not indented.
-function indentString(string, spaces) {
-  var ind = common.repeat(' ', spaces),
-      position = 0,
-      next = -1,
-      result = '',
-      line,
-      length = string.length;
+function indentString (string, spaces) {
+  const ind = common.repeat(' ', spaces)
+  let position = 0
+  let result = ''
+  const length = string.length
 
   while (position < length) {
-    next = string.indexOf('\n', position);
+    let line
+    const next = string.indexOf('\n', position)
     if (next === -1) {
-      line = string.slice(position);
-      position = length;
+      line = string.slice(position)
+      position = length
     } else {
-      line = string.slice(position, next + 1);
-      position = next + 1;
+      line = string.slice(position, next + 1)
+      position = next + 1
     }
 
-    if (line.length && line !== '\n') result += ind;
+    if (line.length && line !== '\n') result += ind
 
-    result += line;
+    result += line
   }
 
-  return result;
+  return result
 }
 
-function generateNextLine(state, level) {
-  return '\n' + common.repeat(' ', state.indent * level);
+function generateNextLine (state, level) {
+  return '\n' + common.repeat(' ', state.indent * level)
 }
 
-function testImplicitResolving(state, str) {
-  var index, length, type;
-
-  for (index = 0, length = state.implicitTypes.length; index < length; index += 1) {
-    type = state.implicitTypes[index];
+function testImplicitResolving (state, str) {
+  for (let index = 0, length = state.implicitTypes.length; index < length; index += 1) {
+    const type = state.implicitTypes[index]
 
     if (type.resolve(str)) {
-      return true;
+      return true
     }
   }
 
-  return false;
+  return false
 }
 
 // [33] s-white ::= s-space | s-tab
-function isWhitespace(c) {
-  return c === CHAR_SPACE || c === CHAR_TAB;
+function isWhitespace (c) {
+  return c === CHAR_SPACE || c === CHAR_TAB
 }
 
 // Returns true if the character can be printed without escaping.
 // From YAML 1.2: "any allowed characters known to be non-printable
 // should also be escaped. [However,] This isn’t mandatory"
 // Derived from nb-char - \t - #x85 - #xA0 - #x2028 - #x2029.
-function isPrintable(c) {
-  return  (0x00020 <= c && c <= 0x00007E)
-      || ((0x000A1 <= c && c <= 0x00D7FF) && c !== 0x2028 && c !== 0x2029)
-      || ((0x0E000 <= c && c <= 0x00FFFD) && c !== CHAR_BOM)
-      ||  (0x10000 <= c && c <= 0x10FFFF);
+function isPrintable (c) {
+  return (c >= 0x00020 && c <= 0x00007E) ||
+    ((c >= 0x000A1 && c <= 0x00D7FF) && c !== 0x2028 && c !== 0x2029) ||
+    ((c >= 0x0E000 && c <= 0x00FFFD) && c !== CHAR_BOM) ||
+    (c >= 0x10000 && c <= 0x10FFFF)
 }
 
 // [34] ns-char ::= nb-char - s-white
@@ -16693,12 +13190,12 @@ function isPrintable(c) {
 // [26] b-char  ::= b-line-feed | b-carriage-return
 // Including s-white (for some reason, examples doesn't match specs in this aspect)
 // ns-char ::= c-printable - b-line-feed - b-carriage-return - c-byte-order-mark
-function isNsCharOrWhitespace(c) {
-  return isPrintable(c)
-    && c !== CHAR_BOM
+function isNsCharOrWhitespace (c) {
+  return isPrintable(c) &&
+    c !== CHAR_BOM &&
     // - b-char
-    && c !== CHAR_CARRIAGE_RETURN
-    && c !== CHAR_LINE_FEED;
+    c !== CHAR_CARRIAGE_RETURN &&
+    c !== CHAR_LINE_FEED
 }
 
 // [127]  ns-plain-safe(c) ::= c = flow-out  ⇒ ns-plain-safe-out
@@ -16710,91 +13207,96 @@ function isNsCharOrWhitespace(c) {
 // [130]  ns-plain-char(c) ::=  ( ns-plain-safe(c) - “:” - “#” )
 //                            | ( /* An ns-char preceding */ “#” )
 //                            | ( “:” /* Followed by an ns-plain-safe(c) */ )
-function isPlainSafe(c, prev, inblock) {
-  var cIsNsCharOrWhitespace = isNsCharOrWhitespace(c);
-  var cIsNsChar = cIsNsCharOrWhitespace && !isWhitespace(c);
+function isPlainSafe (c, prev, inblock) {
+  const cIsNsCharOrWhitespace = isNsCharOrWhitespace(c)
+  const cIsNsChar = cIsNsCharOrWhitespace && !isWhitespace(c)
   return (
-    // ns-plain-safe
-    inblock ? // c = flow-in
-      cIsNsCharOrWhitespace
-      : cIsNsCharOrWhitespace
-        // - c-flow-indicator
-        && c !== CHAR_COMMA
-        && c !== CHAR_LEFT_SQUARE_BRACKET
-        && c !== CHAR_RIGHT_SQUARE_BRACKET
-        && c !== CHAR_LEFT_CURLY_BRACKET
-        && c !== CHAR_RIGHT_CURLY_BRACKET
-  )
+    (
+      // ns-plain-safe
+      inblock // c = flow-in
+        ? cIsNsCharOrWhitespace
+        : cIsNsCharOrWhitespace &&
+          // - c-flow-indicator
+          c !== CHAR_COMMA &&
+          c !== CHAR_LEFT_SQUARE_BRACKET &&
+          c !== CHAR_RIGHT_SQUARE_BRACKET &&
+          c !== CHAR_LEFT_CURLY_BRACKET &&
+          c !== CHAR_RIGHT_CURLY_BRACKET
+    ) &&
     // ns-plain-char
-    && c !== CHAR_SHARP // false on '#'
-    && !(prev === CHAR_COLON && !cIsNsChar) // false on ': '
-    || (isNsCharOrWhitespace(prev) && !isWhitespace(prev) && c === CHAR_SHARP) // change to true on '[^ ]#'
-    || (prev === CHAR_COLON && cIsNsChar); // change to true on ':[^ ]'
+    c !== CHAR_SHARP && // false on '#'
+    !(prev === CHAR_COLON && !cIsNsChar)
+  ) || // false on ': '
+  (isNsCharOrWhitespace(prev) && !isWhitespace(prev) && c === CHAR_SHARP) || // change to true on '[^ ]#'
+  (prev === CHAR_COLON && cIsNsChar) // change to true on ':[^ ]'
 }
 
 // Simplified test for values allowed as the first character in plain style.
-function isPlainSafeFirst(c) {
+function isPlainSafeFirst (c) {
   // Uses a subset of ns-char - c-indicator
   // where ns-char = nb-char - s-white.
   // No support of ( ( “?” | “:” | “-” ) /* Followed by an ns-plain-safe(c)) */ ) part
-  return isPrintable(c) && c !== CHAR_BOM
-    && !isWhitespace(c) // - s-white
+  return isPrintable(c) &&
+    c !== CHAR_BOM &&
+    !isWhitespace(c) && // - s-white
     // - (c-indicator ::=
     // “-” | “?” | “:” | “,” | “[” | “]” | “{” | “}”
-    && c !== CHAR_MINUS
-    && c !== CHAR_QUESTION
-    && c !== CHAR_COLON
-    && c !== CHAR_COMMA
-    && c !== CHAR_LEFT_SQUARE_BRACKET
-    && c !== CHAR_RIGHT_SQUARE_BRACKET
-    && c !== CHAR_LEFT_CURLY_BRACKET
-    && c !== CHAR_RIGHT_CURLY_BRACKET
+    c !== CHAR_MINUS &&
+    c !== CHAR_QUESTION &&
+    c !== CHAR_COLON &&
+    c !== CHAR_COMMA &&
+    c !== CHAR_LEFT_SQUARE_BRACKET &&
+    c !== CHAR_RIGHT_SQUARE_BRACKET &&
+    c !== CHAR_LEFT_CURLY_BRACKET &&
+    c !== CHAR_RIGHT_CURLY_BRACKET &&
     // | “#” | “&” | “*” | “!” | “|” | “=” | “>” | “'” | “"”
-    && c !== CHAR_SHARP
-    && c !== CHAR_AMPERSAND
-    && c !== CHAR_ASTERISK
-    && c !== CHAR_EXCLAMATION
-    && c !== CHAR_VERTICAL_LINE
-    && c !== CHAR_EQUALS
-    && c !== CHAR_GREATER_THAN
-    && c !== CHAR_SINGLE_QUOTE
-    && c !== CHAR_DOUBLE_QUOTE
+    c !== CHAR_SHARP &&
+    c !== CHAR_AMPERSAND &&
+    c !== CHAR_ASTERISK &&
+    c !== CHAR_EXCLAMATION &&
+    c !== CHAR_VERTICAL_LINE &&
+    c !== CHAR_EQUALS &&
+    c !== CHAR_GREATER_THAN &&
+    c !== CHAR_SINGLE_QUOTE &&
+    c !== CHAR_DOUBLE_QUOTE &&
     // | “%” | “@” | “`”)
-    && c !== CHAR_PERCENT
-    && c !== CHAR_COMMERCIAL_AT
-    && c !== CHAR_GRAVE_ACCENT;
+    c !== CHAR_PERCENT &&
+    c !== CHAR_COMMERCIAL_AT &&
+    c !== CHAR_GRAVE_ACCENT
 }
 
 // Simplified test for values allowed as the last character in plain style.
-function isPlainSafeLast(c) {
+function isPlainSafeLast (c) {
   // just not whitespace or colon, it will be checked to be plain character later
-  return !isWhitespace(c) && c !== CHAR_COLON;
+  return !isWhitespace(c) && c !== CHAR_COLON
 }
 
 // Same as 'string'.codePointAt(pos), but works in older browsers.
-function codePointAt(string, pos) {
-  var first = string.charCodeAt(pos), second;
+function codePointAt (string, pos) {
+  const first = string.charCodeAt(pos)
+  let second
+
   if (first >= 0xD800 && first <= 0xDBFF && pos + 1 < string.length) {
-    second = string.charCodeAt(pos + 1);
+    second = string.charCodeAt(pos + 1)
     if (second >= 0xDC00 && second <= 0xDFFF) {
       // https://mathiasbynens.be/notes/javascript-encoding#surrogate-formulae
-      return (first - 0xD800) * 0x400 + second - 0xDC00 + 0x10000;
+      return (first - 0xD800) * 0x400 + second - 0xDC00 + 0x10000
     }
   }
-  return first;
+  return first
 }
 
 // Determines whether block indentation indicator is required.
-function needIndentIndicator(string) {
-  var leadingSpaceRe = /^\n* /;
-  return leadingSpaceRe.test(string);
+function needIndentIndicator (string) {
+  const leadingSpaceRe = /^\n* /
+  return leadingSpaceRe.test(string)
 }
 
-var STYLE_PLAIN   = 1,
-    STYLE_SINGLE  = 2,
-    STYLE_LITERAL = 3,
-    STYLE_FOLDED  = 4,
-    STYLE_DOUBLE  = 5;
+const STYLE_PLAIN = 1
+const STYLE_SINGLE = 2
+const STYLE_LITERAL = 3
+const STYLE_FOLDED = 4
+const STYLE_DOUBLE = 5
 
 // Determines which scalar styles are possible and returns the preferred style.
 // lineWidth = -1 => no limit.
@@ -16803,54 +13305,53 @@ var STYLE_PLAIN   = 1,
 //    STYLE_PLAIN or STYLE_SINGLE => no \n are in the string.
 //    STYLE_LITERAL => no lines are suitable for folding (or lineWidth is -1).
 //    STYLE_FOLDED => a line > lineWidth and can be folded (and lineWidth != -1).
-function chooseScalarStyle(string, singleLineOnly, indentPerLevel, lineWidth,
+function chooseScalarStyle (string, singleLineOnly, indentPerLevel, lineWidth,
   testAmbiguousType, quotingType, forceQuotes, inblock) {
-
-  var i;
-  var char = 0;
-  var prevChar = null;
-  var hasLineBreak = false;
-  var hasFoldableLine = false; // only checked if shouldTrackWidth
-  var shouldTrackWidth = lineWidth !== -1;
-  var previousLineBreak = -1; // count the first line correctly
-  var plain = isPlainSafeFirst(codePointAt(string, 0))
-          && isPlainSafeLast(codePointAt(string, string.length - 1));
+  let i
+  let char = 0
+  let prevChar = null
+  let hasLineBreak = false
+  let hasFoldableLine = false // only checked if shouldTrackWidth
+  const shouldTrackWidth = lineWidth !== -1
+  let previousLineBreak = -1 // count the first line correctly
+  let plain = isPlainSafeFirst(codePointAt(string, 0)) &&
+    isPlainSafeLast(codePointAt(string, string.length - 1))
 
   if (singleLineOnly || forceQuotes) {
     // Case: no block styles.
     // Check for disallowed characters to rule out plain and single.
     for (i = 0; i < string.length; char >= 0x10000 ? i += 2 : i++) {
-      char = codePointAt(string, i);
+      char = codePointAt(string, i)
       if (!isPrintable(char)) {
-        return STYLE_DOUBLE;
+        return STYLE_DOUBLE
       }
-      plain = plain && isPlainSafe(char, prevChar, inblock);
-      prevChar = char;
+      plain = plain && isPlainSafe(char, prevChar, inblock)
+      prevChar = char
     }
   } else {
     // Case: block styles permitted.
     for (i = 0; i < string.length; char >= 0x10000 ? i += 2 : i++) {
-      char = codePointAt(string, i);
+      char = codePointAt(string, i)
       if (char === CHAR_LINE_FEED) {
-        hasLineBreak = true;
+        hasLineBreak = true
         // Check if any line can be folded.
         if (shouldTrackWidth) {
           hasFoldableLine = hasFoldableLine ||
             // Foldable line = too long, and not more-indented.
             (i - previousLineBreak - 1 > lineWidth &&
-             string[previousLineBreak + 1] !== ' ');
-          previousLineBreak = i;
+             string[previousLineBreak + 1] !== ' ')
+          previousLineBreak = i
         }
       } else if (!isPrintable(char)) {
-        return STYLE_DOUBLE;
+        return STYLE_DOUBLE
       }
-      plain = plain && isPlainSafe(char, prevChar, inblock);
-      prevChar = char;
+      plain = plain && isPlainSafe(char, prevChar, inblock)
+      prevChar = char
     }
     // in case the end is missing a \n
     hasFoldableLine = hasFoldableLine || (shouldTrackWidth &&
       (i - previousLineBreak - 1 > lineWidth &&
-       string[previousLineBreak + 1] !== ' '));
+       string[previousLineBreak + 1] !== ' '))
   }
   // Although every style can represent \n without escaping, prefer block styles
   // for multiline, since they're more readable and they don't add empty lines.
@@ -16859,20 +13360,20 @@ function chooseScalarStyle(string, singleLineOnly, indentPerLevel, lineWidth,
     // Strings interpretable as another type have to be quoted;
     // e.g. the string 'true' vs. the boolean true.
     if (plain && !forceQuotes && !testAmbiguousType(string)) {
-      return STYLE_PLAIN;
+      return STYLE_PLAIN
     }
-    return quotingType === QUOTING_TYPE_DOUBLE ? STYLE_DOUBLE : STYLE_SINGLE;
+    return quotingType === QUOTING_TYPE_DOUBLE ? STYLE_DOUBLE : STYLE_SINGLE
   }
   // Edge case: block indentation indicator can only have one digit.
   if (indentPerLevel > 9 && needIndentIndicator(string)) {
-    return STYLE_DOUBLE;
+    return STYLE_DOUBLE
   }
   // At this point we know block styles are valid.
   // Prefer literal style unless we want to fold.
   if (!forceQuotes) {
-    return hasFoldableLine ? STYLE_FOLDED : STYLE_LITERAL;
+    return hasFoldableLine ? STYLE_FOLDED : STYLE_LITERAL
   }
-  return quotingType === QUOTING_TYPE_DOUBLE ? STYLE_DOUBLE : STYLE_SINGLE;
+  return quotingType === QUOTING_TYPE_DOUBLE ? STYLE_DOUBLE : STYLE_SINGLE
 }
 
 // Note: line breaking/folding is implemented for only the folded style.
@@ -16881,18 +13382,18 @@ function chooseScalarStyle(string, singleLineOnly, indentPerLevel, lineWidth,
 //    • No ending newline => unaffected; already using strip "-" chomping.
 //    • Ending newline    => removed then restored.
 //  Importantly, this keeps the "+" chomp indicator from gaining an extra line.
-function writeScalar(state, string, level, iskey, inblock) {
+function writeScalar (state, string, level, iskey, inblock) {
   state.dump = (function () {
     if (string.length === 0) {
-      return state.quotingType === QUOTING_TYPE_DOUBLE ? '""' : "''";
+      return state.quotingType === QUOTING_TYPE_DOUBLE ? '""' : "''"
     }
     if (!state.noCompatMode) {
       if (DEPRECATED_BOOLEANS_SYNTAX.indexOf(string) !== -1 || DEPRECATED_BASE60_SYNTAX.test(string)) {
-        return state.quotingType === QUOTING_TYPE_DOUBLE ? ('"' + string + '"') : ("'" + string + "'");
+        return state.quotingType === QUOTING_TYPE_DOUBLE ? ('"' + string + '"') : ("'" + string + "'")
       }
     }
 
-    var indent = state.indent * Math.max(1, level); // no 0-indent scalars
+    const indent = state.indent * Math.max(1, level) // no 0-indent scalars
     // As indentation gets deeper, let the width decrease monotonically
     // to the lower bound min(state.lineWidth, 40).
     // Note that this implies
@@ -16900,461 +13401,441 @@ function writeScalar(state, string, level, iskey, inblock) {
     //  state.lineWidth > 40 + state.indent: width decreases until the lower bound.
     // This behaves better than a constant minimum width which disallows narrower options,
     // or an indent threshold which causes the width to suddenly increase.
-    var lineWidth = state.lineWidth === -1
-      ? -1 : Math.max(Math.min(state.lineWidth, 40), state.lineWidth - indent);
+    const lineWidth = (state.lineWidth === -1)
+      ? -1
+      : Math.max(Math.min(state.lineWidth, 40), state.lineWidth - indent)
 
     // Without knowing if keys are implicit/explicit, assume implicit for safety.
-    var singleLineOnly = iskey
+    const singleLineOnly = iskey ||
       // No block styles in flow mode.
-      || (state.flowLevel > -1 && level >= state.flowLevel);
-    function testAmbiguity(string) {
-      return testImplicitResolving(state, string);
+      (state.flowLevel > -1 && level >= state.flowLevel)
+    function testAmbiguity (string) {
+      return testImplicitResolving(state, string)
     }
 
     switch (chooseScalarStyle(string, singleLineOnly, state.indent, lineWidth,
       testAmbiguity, state.quotingType, state.forceQuotes && !iskey, inblock)) {
-
       case STYLE_PLAIN:
-        return string;
+        return string
       case STYLE_SINGLE:
-        return "'" + string.replace(/'/g, "''") + "'";
+        return "'" + string.replace(/'/g, "''") + "'"
       case STYLE_LITERAL:
-        return '|' + blockHeader(string, state.indent)
-          + dropEndingNewline(indentString(string, indent));
+        return '|' + blockHeader(string, state.indent) +
+          dropEndingNewline(indentString(string, indent))
       case STYLE_FOLDED:
-        return '>' + blockHeader(string, state.indent)
-          + dropEndingNewline(indentString(foldString(string, lineWidth), indent));
+        return '>' + blockHeader(string, state.indent) +
+          dropEndingNewline(indentString(foldString(string, lineWidth), indent))
       case STYLE_DOUBLE:
-        return '"' + escapeString(string, lineWidth) + '"';
+        return '"' + escapeString(string, lineWidth) + '"'
       default:
-        throw new YAMLException('impossible error: invalid scalar style');
+        throw new YAMLException('impossible error: invalid scalar style')
     }
-  }());
+  }())
 }
 
 // Pre-conditions: string is valid for a block scalar, 1 <= indentPerLevel <= 9.
-function blockHeader(string, indentPerLevel) {
-  var indentIndicator = needIndentIndicator(string) ? String(indentPerLevel) : '';
+function blockHeader (string, indentPerLevel) {
+  const indentIndicator = needIndentIndicator(string) ? String(indentPerLevel) : ''
 
   // note the special case: the string '\n' counts as a "trailing" empty line.
-  var clip =          string[string.length - 1] === '\n';
-  var keep = clip && (string[string.length - 2] === '\n' || string === '\n');
-  var chomp = keep ? '+' : (clip ? '' : '-');
+  const clip = string[string.length - 1] === '\n'
+  const keep = clip && (string[string.length - 2] === '\n' || string === '\n')
+  const chomp = keep ? '+' : (clip ? '' : '-')
 
-  return indentIndicator + chomp + '\n';
+  return indentIndicator + chomp + '\n'
 }
 
 // (See the note for writeScalar.)
-function dropEndingNewline(string) {
-  return string[string.length - 1] === '\n' ? string.slice(0, -1) : string;
+function dropEndingNewline (string) {
+  return string[string.length - 1] === '\n' ? string.slice(0, -1) : string
 }
 
 // Note: a long line without a suitable break point will exceed the width limit.
 // Pre-conditions: every char in str isPrintable, str.length > 0, width > 0.
-function foldString(string, width) {
+function foldString (string, width) {
   // In folded style, $k$ consecutive newlines output as $k+1$ newlines—
   // unless they're before or after a more-indented line, or at the very
   // beginning or end, in which case $k$ maps to $k$.
   // Therefore, parse each chunk as newline(s) followed by a content line.
-  var lineRe = /(\n+)([^\n]*)/g;
+  const lineRe = /(\n+)([^\n]*)/g
 
   // first line (possibly an empty line)
-  var result = (function () {
-    var nextLF = string.indexOf('\n');
-    nextLF = nextLF !== -1 ? nextLF : string.length;
-    lineRe.lastIndex = nextLF;
-    return foldLine(string.slice(0, nextLF), width);
-  }());
+  let result = (function () {
+    let nextLF = string.indexOf('\n')
+    nextLF = nextLF !== -1 ? nextLF : string.length
+    lineRe.lastIndex = nextLF
+    return foldLine(string.slice(0, nextLF), width)
+  }())
   // If we haven't reached the first content line yet, don't add an extra \n.
-  var prevMoreIndented = string[0] === '\n' || string[0] === ' ';
-  var moreIndented;
+  let prevMoreIndented = string[0] === '\n' || string[0] === ' '
+  let moreIndented
 
   // rest of the lines
-  var match;
+  let match
   while ((match = lineRe.exec(string))) {
-    var prefix = match[1], line = match[2];
-    moreIndented = (line[0] === ' ');
-    result += prefix
-      + (!prevMoreIndented && !moreIndented && line !== ''
-        ? '\n' : '')
-      + foldLine(line, width);
-    prevMoreIndented = moreIndented;
+    const prefix = match[1]
+    const line = match[2]
+
+    moreIndented = (line[0] === ' ')
+    result += prefix +
+      ((!prevMoreIndented && !moreIndented && line !== '') ? '\n' : '') +
+      foldLine(line, width)
+    prevMoreIndented = moreIndented
   }
 
-  return result;
+  return result
 }
 
 // Greedy line breaking.
 // Picks the longest line under the limit each time,
 // otherwise settles for the shortest line over the limit.
 // NB. More-indented lines *cannot* be folded, as that would add an extra \n.
-function foldLine(line, width) {
-  if (line === '' || line[0] === ' ') return line;
+function foldLine (line, width) {
+  if (line === '' || line[0] === ' ') return line
 
   // Since a more-indented line adds a \n, breaks can't be followed by a space.
-  var breakRe = / [^ ]/g; // note: the match index will always be <= length-2.
-  var match;
+  const breakRe = / [^ ]/g // note: the match index will always be <= length-2.
+  let match
   // start is an inclusive index. end, curr, and next are exclusive.
-  var start = 0, end, curr = 0, next = 0;
-  var result = '';
+  let start = 0
+  let end
+  let curr = 0
+  let next = 0
+  let result = ''
 
   // Invariants: 0 <= start <= length-1.
   //   0 <= curr <= next <= max(0, length-2). curr - start <= width.
   // Inside the loop:
   //   A match implies length >= 2, so curr and next are <= length-2.
   while ((match = breakRe.exec(line))) {
-    next = match.index;
+    next = match.index
     // maintain invariant: curr - start <= width
     if (next - start > width) {
-      end = (curr > start) ? curr : next; // derive end <= length-2
-      result += '\n' + line.slice(start, end);
+      end = (curr > start) ? curr : next // derive end <= length-2
+      result += '\n' + line.slice(start, end)
       // skip the space that was output as \n
-      start = end + 1;                    // derive start <= length-1
+      start = end + 1                    // derive start <= length-1
     }
-    curr = next;
+    curr = next
   }
 
   // By the invariants, start <= length-1, so there is something left over.
   // It is either the whole string or a part starting from non-whitespace.
-  result += '\n';
+  result += '\n'
   // Insert a break if the remainder is too long and there is a break available.
   if (line.length - start > width && curr > start) {
-    result += line.slice(start, curr) + '\n' + line.slice(curr + 1);
+    result += line.slice(start, curr) + '\n' + line.slice(curr + 1)
   } else {
-    result += line.slice(start);
+    result += line.slice(start)
   }
 
-  return result.slice(1); // drop extra \n joiner
+  return result.slice(1) // drop extra \n joiner
 }
 
 // Escapes a double-quoted string.
-function escapeString(string) {
-  var result = '';
-  var char = 0;
-  var escapeSeq;
+function escapeString (string) {
+  let result = ''
+  let char = 0
 
-  for (var i = 0; i < string.length; char >= 0x10000 ? i += 2 : i++) {
-    char = codePointAt(string, i);
-    escapeSeq = ESCAPE_SEQUENCES[char];
+  for (let i = 0; i < string.length; char >= 0x10000 ? i += 2 : i++) {
+    char = codePointAt(string, i)
+    const escapeSeq = ESCAPE_SEQUENCES[char]
 
     if (!escapeSeq && isPrintable(char)) {
-      result += string[i];
-      if (char >= 0x10000) result += string[i + 1];
+      result += string[i]
+      if (char >= 0x10000) result += string[i + 1]
     } else {
-      result += escapeSeq || encodeHex(char);
+      result += escapeSeq || encodeHex(char)
     }
   }
 
-  return result;
+  return result
 }
 
-function writeFlowSequence(state, level, object) {
-  var _result = '',
-      _tag    = state.tag,
-      index,
-      length,
-      value;
+function writeFlowSequence (state, level, object) {
+  let _result = ''
+  const _tag = state.tag
 
-  for (index = 0, length = object.length; index < length; index += 1) {
-    value = object[index];
+  for (let index = 0, length = object.length; index < length; index += 1) {
+    let value = object[index]
 
     if (state.replacer) {
-      value = state.replacer.call(object, String(index), value);
+      value = state.replacer.call(object, String(index), value)
     }
 
     // Write only valid elements, put null instead of invalid elements.
     if (writeNode(state, level, value, false, false) ||
         (typeof value === 'undefined' &&
          writeNode(state, level, null, false, false))) {
-
-      if (_result !== '') _result += ',' + (!state.condenseFlow ? ' ' : '');
-      _result += state.dump;
+      if (_result !== '') _result += ',' + (!state.condenseFlow ? ' ' : '')
+      _result += state.dump
     }
   }
 
-  state.tag = _tag;
-  state.dump = '[' + _result + ']';
+  state.tag = _tag
+  state.dump = '[' + _result + ']'
 }
 
-function writeBlockSequence(state, level, object, compact) {
-  var _result = '',
-      _tag    = state.tag,
-      index,
-      length,
-      value;
+function writeBlockSequence (state, level, object, compact) {
+  let _result = ''
+  const _tag = state.tag
 
-  for (index = 0, length = object.length; index < length; index += 1) {
-    value = object[index];
+  for (let index = 0, length = object.length; index < length; index += 1) {
+    let value = object[index]
 
     if (state.replacer) {
-      value = state.replacer.call(object, String(index), value);
+      value = state.replacer.call(object, String(index), value)
     }
 
     // Write only valid elements, put null instead of invalid elements.
     if (writeNode(state, level + 1, value, true, true, false, true) ||
         (typeof value === 'undefined' &&
          writeNode(state, level + 1, null, true, true, false, true))) {
-
       if (!compact || _result !== '') {
-        _result += generateNextLine(state, level);
+        _result += generateNextLine(state, level)
       }
 
       if (state.dump && CHAR_LINE_FEED === state.dump.charCodeAt(0)) {
-        _result += '-';
+        _result += '-'
       } else {
-        _result += '- ';
+        _result += '- '
       }
 
-      _result += state.dump;
+      _result += state.dump
     }
   }
 
-  state.tag = _tag;
-  state.dump = _result || '[]'; // Empty sequence if no valid values.
+  state.tag = _tag
+  state.dump = _result || '[]' // Empty sequence if no valid values.
 }
 
-function writeFlowMapping(state, level, object) {
-  var _result       = '',
-      _tag          = state.tag,
-      objectKeyList = Object.keys(object),
-      index,
-      length,
-      objectKey,
-      objectValue,
-      pairBuffer;
+function writeFlowMapping (state, level, object) {
+  let _result = ''
+  const _tag = state.tag
+  const objectKeyList = Object.keys(object)
 
-  for (index = 0, length = objectKeyList.length; index < length; index += 1) {
+  for (let index = 0, length = objectKeyList.length; index < length; index += 1) {
+    let pairBuffer = ''
+    if (_result !== '') pairBuffer += ', '
 
-    pairBuffer = '';
-    if (_result !== '') pairBuffer += ', ';
+    if (state.condenseFlow) pairBuffer += '"'
 
-    if (state.condenseFlow) pairBuffer += '"';
-
-    objectKey = objectKeyList[index];
-    objectValue = object[objectKey];
+    const objectKey = objectKeyList[index]
+    let objectValue = object[objectKey]
 
     if (state.replacer) {
-      objectValue = state.replacer.call(object, objectKey, objectValue);
+      objectValue = state.replacer.call(object, objectKey, objectValue)
     }
 
     if (!writeNode(state, level, objectKey, false, false)) {
-      continue; // Skip this pair because of invalid key;
+      continue // Skip this pair because of invalid key;
     }
 
-    if (state.dump.length > 1024) pairBuffer += '? ';
+    if (state.dump.length > 1024) pairBuffer += '? '
 
-    pairBuffer += state.dump + (state.condenseFlow ? '"' : '') + ':' + (state.condenseFlow ? '' : ' ');
+    pairBuffer += state.dump + (state.condenseFlow ? '"' : '') + ':' + (state.condenseFlow ? '' : ' ')
 
     if (!writeNode(state, level, objectValue, false, false)) {
-      continue; // Skip this pair because of invalid value.
+      continue // Skip this pair because of invalid value.
     }
 
-    pairBuffer += state.dump;
+    pairBuffer += state.dump
 
     // Both key and value are valid.
-    _result += pairBuffer;
+    _result += pairBuffer
   }
 
-  state.tag = _tag;
-  state.dump = '{' + _result + '}';
+  state.tag = _tag
+  state.dump = '{' + _result + '}'
 }
 
-function writeBlockMapping(state, level, object, compact) {
-  var _result       = '',
-      _tag          = state.tag,
-      objectKeyList = Object.keys(object),
-      index,
-      length,
-      objectKey,
-      objectValue,
-      explicitPair,
-      pairBuffer;
+function writeBlockMapping (state, level, object, compact) {
+  let _result = ''
+  const _tag = state.tag
+  const objectKeyList = Object.keys(object)
 
   // Allow sorting keys so that the output file is deterministic
   if (state.sortKeys === true) {
     // Default sorting
-    objectKeyList.sort();
+    objectKeyList.sort()
   } else if (typeof state.sortKeys === 'function') {
     // Custom sort function
-    objectKeyList.sort(state.sortKeys);
+    objectKeyList.sort(state.sortKeys)
   } else if (state.sortKeys) {
     // Something is wrong
-    throw new YAMLException('sortKeys must be a boolean or a function');
+    throw new YAMLException('sortKeys must be a boolean or a function')
   }
 
-  for (index = 0, length = objectKeyList.length; index < length; index += 1) {
-    pairBuffer = '';
+  for (let index = 0, length = objectKeyList.length; index < length; index += 1) {
+    let pairBuffer = ''
 
     if (!compact || _result !== '') {
-      pairBuffer += generateNextLine(state, level);
+      pairBuffer += generateNextLine(state, level)
     }
 
-    objectKey = objectKeyList[index];
-    objectValue = object[objectKey];
+    const objectKey = objectKeyList[index]
+    let objectValue = object[objectKey]
 
     if (state.replacer) {
-      objectValue = state.replacer.call(object, objectKey, objectValue);
+      objectValue = state.replacer.call(object, objectKey, objectValue)
     }
 
     if (!writeNode(state, level + 1, objectKey, true, true, true)) {
-      continue; // Skip this pair because of invalid key.
+      continue // Skip this pair because of invalid key.
     }
 
-    explicitPair = (state.tag !== null && state.tag !== '?') ||
-                   (state.dump && state.dump.length > 1024);
+    const explicitPair = (state.tag !== null && state.tag !== '?') ||
+                   (state.dump && state.dump.length > 1024)
 
     if (explicitPair) {
       if (state.dump && CHAR_LINE_FEED === state.dump.charCodeAt(0)) {
-        pairBuffer += '?';
+        pairBuffer += '?'
       } else {
-        pairBuffer += '? ';
+        pairBuffer += '? '
       }
     }
 
-    pairBuffer += state.dump;
+    pairBuffer += state.dump
 
     if (explicitPair) {
-      pairBuffer += generateNextLine(state, level);
+      pairBuffer += generateNextLine(state, level)
     }
 
     if (!writeNode(state, level + 1, objectValue, true, explicitPair)) {
-      continue; // Skip this pair because of invalid value.
+      continue // Skip this pair because of invalid value.
     }
 
     if (state.dump && CHAR_LINE_FEED === state.dump.charCodeAt(0)) {
-      pairBuffer += ':';
+      pairBuffer += ':'
     } else {
-      pairBuffer += ': ';
+      pairBuffer += ': '
     }
 
-    pairBuffer += state.dump;
+    pairBuffer += state.dump
 
     // Both key and value are valid.
-    _result += pairBuffer;
+    _result += pairBuffer
   }
 
-  state.tag = _tag;
-  state.dump = _result || '{}'; // Empty mapping if no valid pairs.
+  state.tag = _tag
+  state.dump = _result || '{}' // Empty mapping if no valid pairs.
 }
 
-function detectType(state, object, explicit) {
-  var _result, typeList, index, length, type, style;
+function detectType (state, object, explicit) {
+  const typeList = explicit ? state.explicitTypes : state.implicitTypes
 
-  typeList = explicit ? state.explicitTypes : state.implicitTypes;
+  for (let index = 0, length = typeList.length; index < length; index += 1) {
+    const type = typeList[index]
 
-  for (index = 0, length = typeList.length; index < length; index += 1) {
-    type = typeList[index];
-
-    if ((type.instanceOf  || type.predicate) &&
+    if ((type.instanceOf || type.predicate) &&
         (!type.instanceOf || ((typeof object === 'object') && (object instanceof type.instanceOf))) &&
-        (!type.predicate  || type.predicate(object))) {
-
+        (!type.predicate || type.predicate(object))) {
       if (explicit) {
         if (type.multi && type.representName) {
-          state.tag = type.representName(object);
+          state.tag = type.representName(object)
         } else {
-          state.tag = type.tag;
+          state.tag = type.tag
         }
       } else {
-        state.tag = '?';
+        state.tag = '?'
       }
 
       if (type.represent) {
-        style = state.styleMap[type.tag] || type.defaultStyle;
+        const style = state.styleMap[type.tag] || type.defaultStyle
 
+        let _result
         if (_toString.call(type.represent) === '[object Function]') {
-          _result = type.represent(object, style);
+          _result = type.represent(object, style)
         } else if (_hasOwnProperty.call(type.represent, style)) {
-          _result = type.represent[style](object, style);
+          _result = type.represent[style](object, style)
         } else {
-          throw new YAMLException('!<' + type.tag + '> tag resolver accepts not "' + style + '" style');
+          throw new YAMLException('!<' + type.tag + '> tag resolver accepts not "' + style + '" style')
         }
 
-        state.dump = _result;
+        state.dump = _result
       }
 
-      return true;
+      return true
     }
   }
 
-  return false;
+  return false
 }
 
 // Serializes `object` and writes it to global `result`.
 // Returns true on success, or false on invalid object.
 //
-function writeNode(state, level, object, block, compact, iskey, isblockseq) {
-  state.tag = null;
-  state.dump = object;
+function writeNode (state, level, object, block, compact, iskey, isblockseq) {
+  state.tag = null
+  state.dump = object
 
   if (!detectType(state, object, false)) {
-    detectType(state, object, true);
+    detectType(state, object, true)
   }
 
-  var type = _toString.call(state.dump);
-  var inblock = block;
-  var tagStr;
+  const type = _toString.call(state.dump)
+  const inblock = block
 
   if (block) {
-    block = (state.flowLevel < 0 || state.flowLevel > level);
+    block = (state.flowLevel < 0 || state.flowLevel > level)
   }
 
-  var objectOrArray = type === '[object Object]' || type === '[object Array]',
-      duplicateIndex,
-      duplicate;
+  const objectOrArray = type === '[object Object]' || type === '[object Array]'
+  let duplicateIndex
+  let duplicate
 
   if (objectOrArray) {
-    duplicateIndex = state.duplicates.indexOf(object);
-    duplicate = duplicateIndex !== -1;
+    duplicateIndex = state.duplicates.indexOf(object)
+    duplicate = duplicateIndex !== -1
   }
 
   if ((state.tag !== null && state.tag !== '?') || duplicate || (state.indent !== 2 && level > 0)) {
-    compact = false;
+    compact = false
   }
 
   if (duplicate && state.usedDuplicates[duplicateIndex]) {
-    state.dump = '*ref_' + duplicateIndex;
+    state.dump = '*ref_' + duplicateIndex
   } else {
     if (objectOrArray && duplicate && !state.usedDuplicates[duplicateIndex]) {
-      state.usedDuplicates[duplicateIndex] = true;
+      state.usedDuplicates[duplicateIndex] = true
     }
     if (type === '[object Object]') {
       if (block && (Object.keys(state.dump).length !== 0)) {
-        writeBlockMapping(state, level, state.dump, compact);
+        writeBlockMapping(state, level, state.dump, compact)
         if (duplicate) {
-          state.dump = '&ref_' + duplicateIndex + state.dump;
+          state.dump = '&ref_' + duplicateIndex + state.dump
         }
       } else {
-        writeFlowMapping(state, level, state.dump);
+        writeFlowMapping(state, level, state.dump)
         if (duplicate) {
-          state.dump = '&ref_' + duplicateIndex + ' ' + state.dump;
+          state.dump = '&ref_' + duplicateIndex + ' ' + state.dump
         }
       }
     } else if (type === '[object Array]') {
       if (block && (state.dump.length !== 0)) {
         if (state.noArrayIndent && !isblockseq && level > 0) {
-          writeBlockSequence(state, level - 1, state.dump, compact);
+          writeBlockSequence(state, level - 1, state.dump, compact)
         } else {
-          writeBlockSequence(state, level, state.dump, compact);
+          writeBlockSequence(state, level, state.dump, compact)
         }
         if (duplicate) {
-          state.dump = '&ref_' + duplicateIndex + state.dump;
+          state.dump = '&ref_' + duplicateIndex + state.dump
         }
       } else {
-        writeFlowSequence(state, level, state.dump);
+        writeFlowSequence(state, level, state.dump)
         if (duplicate) {
-          state.dump = '&ref_' + duplicateIndex + ' ' + state.dump;
+          state.dump = '&ref_' + duplicateIndex + ' ' + state.dump
         }
       }
     } else if (type === '[object String]') {
       if (state.tag !== '?') {
-        writeScalar(state, state.dump, level, iskey, inblock);
+        writeScalar(state, state.dump, level, iskey, inblock)
       }
     } else if (type === '[object Undefined]') {
-      return false;
+      return false
     } else {
-      if (state.skipInvalid) return false;
-      throw new YAMLException('unacceptable kind of an object to dump ' + type);
+      if (state.skipInvalid) return false
+      throw new YAMLException('unacceptable kind of an object to dump ' + type)
     }
 
     if (state.tag !== null && state.tag !== '?') {
@@ -17371,87 +13852,82 @@ function writeNode(state, level, object, block, compact, iskey, isblockseq) {
       //
       // Also need to encode '!' because it has special meaning (end of tag prefix).
       //
-      tagStr = encodeURI(
+      let tagStr = encodeURI(
         state.tag[0] === '!' ? state.tag.slice(1) : state.tag
-      ).replace(/!/g, '%21');
+      ).replace(/!/g, '%21')
 
       if (state.tag[0] === '!') {
-        tagStr = '!' + tagStr;
+        tagStr = '!' + tagStr
       } else if (tagStr.slice(0, 18) === 'tag:yaml.org,2002:') {
-        tagStr = '!!' + tagStr.slice(18);
+        tagStr = '!!' + tagStr.slice(18)
       } else {
-        tagStr = '!<' + tagStr + '>';
+        tagStr = '!<' + tagStr + '>'
       }
 
-      state.dump = tagStr + ' ' + state.dump;
+      state.dump = tagStr + ' ' + state.dump
     }
   }
 
-  return true;
+  return true
 }
 
-function getDuplicateReferences(object, state) {
-  var objects = [],
-      duplicatesIndexes = [],
-      index,
-      length;
+function getDuplicateReferences (object, state) {
+  const objects = []
+  const duplicatesIndexes = []
 
-  inspectNode(object, objects, duplicatesIndexes);
+  inspectNode(object, objects, duplicatesIndexes)
 
-  for (index = 0, length = duplicatesIndexes.length; index < length; index += 1) {
-    state.duplicates.push(objects[duplicatesIndexes[index]]);
+  const length = duplicatesIndexes.length
+  for (let index = 0; index < length; index += 1) {
+    state.duplicates.push(objects[duplicatesIndexes[index]])
   }
-  state.usedDuplicates = new Array(length);
+  state.usedDuplicates = new Array(length)
 }
 
-function inspectNode(object, objects, duplicatesIndexes) {
-  var objectKeyList,
-      index,
-      length;
-
+function inspectNode (object, objects, duplicatesIndexes) {
   if (object !== null && typeof object === 'object') {
-    index = objects.indexOf(object);
+    const index = objects.indexOf(object)
     if (index !== -1) {
       if (duplicatesIndexes.indexOf(index) === -1) {
-        duplicatesIndexes.push(index);
+        duplicatesIndexes.push(index)
       }
     } else {
-      objects.push(object);
+      objects.push(object)
 
       if (Array.isArray(object)) {
-        for (index = 0, length = object.length; index < length; index += 1) {
-          inspectNode(object[index], objects, duplicatesIndexes);
+        for (let i = 0, length = object.length; i < length; i += 1) {
+          inspectNode(object[i], objects, duplicatesIndexes)
         }
       } else {
-        objectKeyList = Object.keys(object);
+        const objectKeyList = Object.keys(object)
 
-        for (index = 0, length = objectKeyList.length; index < length; index += 1) {
-          inspectNode(object[objectKeyList[index]], objects, duplicatesIndexes);
+        for (let i = 0, length = objectKeyList.length; i < length; i += 1) {
+          inspectNode(object[objectKeyList[i]], objects, duplicatesIndexes)
         }
       }
     }
   }
 }
 
-function dump(input, options) {
-  options = options || {};
+function dump (input, options) {
+  options = options || {}
 
-  var state = new State(options);
+  const state = new State(options)
 
-  if (!state.noRefs) getDuplicateReferences(input, state);
+  if (!state.noRefs) getDuplicateReferences(input, state)
 
-  var value = input;
+  let value = input
 
   if (state.replacer) {
-    value = state.replacer.call({ '': value }, '', value);
+    value = state.replacer.call({ '': value }, '', value)
   }
 
-  if (writeNode(state, 0, value, true, true)) return state.dump + '\n';
+  if (writeNode(state, 0, value, true, true)) return state.dump + '\n'
 
-  return '';
+  return ''
 }
 
-module.exports.dump = dump;
+module.exports.dump = dump
 
 
 /***/ }),
@@ -17464,190 +13940,182 @@ module.exports.dump = dump;
 //
 
 
+function formatError (exception, compact) {
+  let where = ''
+  const message = exception.reason || '(unknown reason)'
 
-function formatError(exception, compact) {
-  var where = '', message = exception.reason || '(unknown reason)';
-
-  if (!exception.mark) return message;
+  if (!exception.mark) return message
 
   if (exception.mark.name) {
-    where += 'in "' + exception.mark.name + '" ';
+    where += 'in "' + exception.mark.name + '" '
   }
 
-  where += '(' + (exception.mark.line + 1) + ':' + (exception.mark.column + 1) + ')';
+  where += '(' + (exception.mark.line + 1) + ':' + (exception.mark.column + 1) + ')'
 
   if (!compact && exception.mark.snippet) {
-    where += '\n\n' + exception.mark.snippet;
+    where += '\n\n' + exception.mark.snippet
   }
 
-  return message + ' ' + where;
+  return message + ' ' + where
 }
 
-
-function YAMLException(reason, mark) {
+function YAMLException (reason, mark) {
   // Super constructor
-  Error.call(this);
+  Error.call(this)
 
-  this.name = 'YAMLException';
-  this.reason = reason;
-  this.mark = mark;
-  this.message = formatError(this, false);
+  this.name = 'YAMLException'
+  this.reason = reason
+  this.mark = mark
+  this.message = formatError(this, false)
 
   // Include stack trace in error object
   if (Error.captureStackTrace) {
     // Chrome and NodeJS
-    Error.captureStackTrace(this, this.constructor);
+    Error.captureStackTrace(this, this.constructor)
   } else {
     // FF, IE 10+ and Safari 6+. Fallback for others
-    this.stack = (new Error()).stack || '';
+    this.stack = (new Error()).stack || ''
   }
 }
 
-
 // Inherit from Error
-YAMLException.prototype = Object.create(Error.prototype);
-YAMLException.prototype.constructor = YAMLException;
+YAMLException.prototype = Object.create(Error.prototype)
+YAMLException.prototype.constructor = YAMLException
 
+YAMLException.prototype.toString = function toString (compact) {
+  return this.name + ': ' + formatError(this, compact)
+}
 
-YAMLException.prototype.toString = function toString(compact) {
-  return this.name + ': ' + formatError(this, compact);
-};
-
-
-module.exports = YAMLException;
+module.exports = YAMLException
 
 
 /***/ }),
 
 /***/ 1950:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-/*eslint-disable max-len,no-use-before-define*/
+const common = __nccwpck_require__(9816)
+const YAMLException = __nccwpck_require__(1248)
+const makeSnippet = __nccwpck_require__(9440)
+const DEFAULT_SCHEMA = __nccwpck_require__(7336)
 
-var common              = __nccwpck_require2_(9816);
-var YAMLException       = __nccwpck_require2_(1248);
-var makeSnippet         = __nccwpck_require2_(9440);
-var DEFAULT_SCHEMA      = __nccwpck_require2_(7336);
+const _hasOwnProperty = Object.prototype.hasOwnProperty
 
+const CONTEXT_FLOW_IN = 1
+const CONTEXT_FLOW_OUT = 2
+const CONTEXT_BLOCK_IN = 3
+const CONTEXT_BLOCK_OUT = 4
 
-var _hasOwnProperty = Object.prototype.hasOwnProperty;
+const CHOMPING_CLIP = 1
+const CHOMPING_STRIP = 2
+const CHOMPING_KEEP = 3
 
+// eslint-disable-next-line no-control-regex
+const PATTERN_NON_PRINTABLE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x84\x86-\x9F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/
+const PATTERN_NON_ASCII_LINE_BREAKS = /[\x85\u2028\u2029]/
+// eslint-disable-next-line no-useless-escape
+const PATTERN_FLOW_INDICATORS = /[,\[\]{}]/
+// eslint-disable-next-line no-useless-escape
+const PATTERN_TAG_HANDLE = /^(?:!|!!|![0-9A-Za-z-]+!)$/
+// eslint-disable-next-line no-useless-escape
+const PATTERN_TAG_URI = /^(?:!|[^,\[\]{}])(?:%[0-9a-f]{2}|[0-9a-z\-#;/?:@&=+$,_.!~*'()\[\]])*$/i
 
-var CONTEXT_FLOW_IN   = 1;
-var CONTEXT_FLOW_OUT  = 2;
-var CONTEXT_BLOCK_IN  = 3;
-var CONTEXT_BLOCK_OUT = 4;
+function _class (obj) { return Object.prototype.toString.call(obj) }
 
-
-var CHOMPING_CLIP  = 1;
-var CHOMPING_STRIP = 2;
-var CHOMPING_KEEP  = 3;
-
-
-var PATTERN_NON_PRINTABLE         = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x84\x86-\x9F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/;
-var PATTERN_NON_ASCII_LINE_BREAKS = /[\x85\u2028\u2029]/;
-var PATTERN_FLOW_INDICATORS       = /[,\[\]\{\}]/;
-var PATTERN_TAG_HANDLE            = /^(?:!|!!|![a-z\-]+!)$/i;
-var PATTERN_TAG_URI               = /^(?:!|[^,\[\]\{\}])(?:%[0-9a-f]{2}|[0-9a-z\-#;\/\?:@&=\+\$,_\.!~\*'\(\)\[\]])*$/i;
-
-
-function _class(obj) { return Object.prototype.toString.call(obj); }
-
-function is_EOL(c) {
-  return (c === 0x0A/* LF */) || (c === 0x0D/* CR */);
+function isEol (c) {
+  return (c === 0x0A/* LF */) || (c === 0x0D/* CR */)
 }
 
-function is_WHITE_SPACE(c) {
-  return (c === 0x09/* Tab */) || (c === 0x20/* Space */);
+function isWhiteSpace (c) {
+  return (c === 0x09/* Tab */) || (c === 0x20/* Space */)
 }
 
-function is_WS_OR_EOL(c) {
+function isWsOrEol (c) {
   return (c === 0x09/* Tab */) ||
          (c === 0x20/* Space */) ||
          (c === 0x0A/* LF */) ||
-         (c === 0x0D/* CR */);
+         (c === 0x0D/* CR */)
 }
 
-function is_FLOW_INDICATOR(c) {
+function isFlowIndicator (c) {
   return c === 0x2C/* , */ ||
          c === 0x5B/* [ */ ||
          c === 0x5D/* ] */ ||
          c === 0x7B/* { */ ||
-         c === 0x7D/* } */;
+         c === 0x7D/* } */
 }
 
-function fromHexCode(c) {
-  var lc;
-
-  if ((0x30/* 0 */ <= c) && (c <= 0x39/* 9 */)) {
-    return c - 0x30;
+function fromHexCode (c) {
+  if ((c >= 0x30/* 0 */) && (c <= 0x39/* 9 */)) {
+    return c - 0x30
   }
 
-  /*eslint-disable no-bitwise*/
-  lc = c | 0x20;
+  const lc = c | 0x20
 
-  if ((0x61/* a */ <= lc) && (lc <= 0x66/* f */)) {
-    return lc - 0x61 + 10;
+  if ((lc >= 0x61/* a */) && (lc <= 0x66/* f */)) {
+    return lc - 0x61 + 10
   }
 
-  return -1;
+  return -1
 }
 
-function escapedHexLen(c) {
-  if (c === 0x78/* x */) { return 2; }
-  if (c === 0x75/* u */) { return 4; }
-  if (c === 0x55/* U */) { return 8; }
-  return 0;
+function escapedHexLen (c) {
+  if (c === 0x78/* x */) { return 2 }
+  if (c === 0x75/* u */) { return 4 }
+  if (c === 0x55/* U */) { return 8 }
+  return 0
 }
 
-function fromDecimalCode(c) {
-  if ((0x30/* 0 */ <= c) && (c <= 0x39/* 9 */)) {
-    return c - 0x30;
+function fromDecimalCode (c) {
+  if ((c >= 0x30/* 0 */) && (c <= 0x39/* 9 */)) {
+    return c - 0x30
   }
 
-  return -1;
+  return -1
 }
 
-function simpleEscapeSequence(c) {
-  /* eslint-disable indent */
-  return (c === 0x30/* 0 */) ? '\x00' :
-        (c === 0x61/* a */) ? '\x07' :
-        (c === 0x62/* b */) ? '\x08' :
-        (c === 0x74/* t */) ? '\x09' :
-        (c === 0x09/* Tab */) ? '\x09' :
-        (c === 0x6E/* n */) ? '\x0A' :
-        (c === 0x76/* v */) ? '\x0B' :
-        (c === 0x66/* f */) ? '\x0C' :
-        (c === 0x72/* r */) ? '\x0D' :
-        (c === 0x65/* e */) ? '\x1B' :
-        (c === 0x20/* Space */) ? ' ' :
-        (c === 0x22/* " */) ? '\x22' :
-        (c === 0x2F/* / */) ? '/' :
-        (c === 0x5C/* \ */) ? '\x5C' :
-        (c === 0x4E/* N */) ? '\x85' :
-        (c === 0x5F/* _ */) ? '\xA0' :
-        (c === 0x4C/* L */) ? '\u2028' :
-        (c === 0x50/* P */) ? '\u2029' : '';
+function simpleEscapeSequence (c) {
+  switch (c) {
+    case 0x30/* 0 */: return '\x00'
+    case 0x61/* a */: return '\x07'
+    case 0x62/* b */: return '\x08'
+    case 0x74/* t */: return '\x09'
+    case 0x09/* Tab */: return '\x09'
+    case 0x6E/* n */: return '\x0A'
+    case 0x76/* v */: return '\x0B'
+    case 0x66/* f */: return '\x0C'
+    case 0x72/* r */: return '\x0D'
+    case 0x65/* e */: return '\x1B'
+    case 0x20/* Space */: return ' '
+    case 0x22/* " */: return '\x22'
+    case 0x2F/* / */: return '/'
+    case 0x5C/* \ */: return '\x5C'
+    case 0x4E/* N */: return '\x85'
+    case 0x5F/* _ */: return '\xA0'
+    case 0x4C/* L */: return '\u2028'
+    case 0x50/* P */: return '\u2029'
+    default: return ''
+  }
 }
 
-function charFromCodepoint(c) {
+function charFromCodepoint (c) {
   if (c <= 0xFFFF) {
-    return String.fromCharCode(c);
+    return String.fromCharCode(c)
   }
   // Encode UTF-16 surrogate pair
   // https://en.wikipedia.org/wiki/UTF-16#Code_points_U.2B010000_to_U.2B10FFFF
   return String.fromCharCode(
     ((c - 0x010000) >> 10) + 0xD800,
     ((c - 0x010000) & 0x03FF) + 0xDC00
-  );
+  )
 }
 
 // set a property of a literal object, while protecting against prototype pollution,
 // see https://github.com/nodeca/js-yaml/issues/164 for more details
-function setProperty(object, key, value) {
+function setProperty (object, key, value) {
   // used for this specific key only because Object.defineProperty is slow
   if (key === '__proto__') {
     Object.defineProperty(object, key, {
@@ -17655,47 +14123,51 @@ function setProperty(object, key, value) {
       enumerable: true,
       writable: true,
       value: value
-    });
+    })
   } else {
-    object[key] = value;
+    object[key] = value
   }
 }
 
-var simpleEscapeCheck = new Array(256); // integer, for fast access
-var simpleEscapeMap = new Array(256);
-for (var i = 0; i < 256; i++) {
-  simpleEscapeCheck[i] = simpleEscapeSequence(i) ? 1 : 0;
-  simpleEscapeMap[i] = simpleEscapeSequence(i);
+const simpleEscapeCheck = new Array(256) // integer, for fast access
+const simpleEscapeMap = new Array(256)
+for (let i = 0; i < 256; i++) {
+  simpleEscapeCheck[i] = simpleEscapeSequence(i) ? 1 : 0
+  simpleEscapeMap[i] = simpleEscapeSequence(i)
 }
 
+function State (input, options) {
+  this.input = input
 
-function State(input, options) {
-  this.input = input;
-
-  this.filename  = options['filename']  || null;
-  this.schema    = options['schema']    || DEFAULT_SCHEMA;
-  this.onWarning = options['onWarning'] || null;
+  this.filename = options['filename'] || null
+  this.schema = options['schema'] || DEFAULT_SCHEMA
+  this.onWarning = options['onWarning'] || null
   // (Hidden) Remove? makes the loader to expect YAML 1.1 documents
   // if such documents have no explicit %YAML directive
-  this.legacy    = options['legacy']    || false;
+  this.legacy = options['legacy'] || false
 
-  this.json      = options['json']      || false;
-  this.listener  = options['listener']  || null;
+  this.json = options['json'] || false
+  this.listener = options['listener'] || null
+  this.maxDepth = typeof options['maxDepth'] === 'number' ? options['maxDepth'] : 100
+  this.maxTotalMergeKeys = typeof options['maxTotalMergeKeys'] === 'number' ? options['maxTotalMergeKeys'] : 10000
 
-  this.implicitTypes = this.schema.compiledImplicit;
-  this.typeMap       = this.schema.compiledTypeMap;
+  this.implicitTypes = this.schema.compiledImplicit
+  this.typeMap = this.schema.compiledTypeMap
 
-  this.length     = input.length;
-  this.position   = 0;
-  this.line       = 0;
-  this.lineStart  = 0;
-  this.lineIndent = 0;
+  this.length = input.length
+  this.position = 0
+  this.line = 0
+  this.lineStart = 0
+  this.lineIndent = 0
+  this.depth = 0
+  this.totalMergeKeys = 0
 
   // position of first leading tab in the current line,
   // used to make sure there are no tabs in the indentation
-  this.firstTabInLine = -1;
+  this.firstTabInLine = -1
 
-  this.documents = [];
+  this.documents = []
+  this.anchorMapTransactions = []
 
   /*
   this.version;
@@ -17705,164 +14177,242 @@ function State(input, options) {
   this.tag;
   this.anchor;
   this.kind;
-  this.result;*/
-
+  this.result; */
 }
 
-
-function generateError(state, message) {
-  var mark = {
-    name:     state.filename,
-    buffer:   state.input.slice(0, -1), // omit trailing \0
+function generateError (state, message) {
+  const mark = {
+    name: state.filename,
+    buffer: state.input.slice(0, -1), // omit trailing \0
     position: state.position,
-    line:     state.line,
-    column:   state.position - state.lineStart
-  };
+    line: state.line,
+    column: state.position - state.lineStart
+  }
 
-  mark.snippet = makeSnippet(mark);
+  mark.snippet = makeSnippet(mark)
 
-  return new YAMLException(message, mark);
+  return new YAMLException(message, mark)
 }
 
-function throwError(state, message) {
-  throw generateError(state, message);
+function throwError (state, message) {
+  throw generateError(state, message)
 }
 
-function throwWarning(state, message) {
+function throwWarning (state, message) {
   if (state.onWarning) {
-    state.onWarning.call(null, generateError(state, message));
+    state.onWarning.call(null, generateError(state, message))
   }
 }
 
+function storeAnchor (state, name, value) {
+  const transactions = state.anchorMapTransactions
 
-var directiveHandlers = {
+  if (transactions.length !== 0) {
+    const transaction = transactions[transactions.length - 1]
 
-  YAML: function handleYamlDirective(state, name, args) {
+    if (!_hasOwnProperty.call(transaction, name)) {
+      transaction[name] = {
+        existed: _hasOwnProperty.call(state.anchorMap, name),
+        value: state.anchorMap[name]
+      }
+    }
+  }
 
-    var match, major, minor;
+  state.anchorMap[name] = value
+}
 
+function beginAnchorTransaction (state) {
+  state.anchorMapTransactions.push(Object.create(null))
+}
+
+function commitAnchorTransaction (state) {
+  const transaction = state.anchorMapTransactions.pop()
+  const transactions = state.anchorMapTransactions
+
+  if (transactions.length === 0) return
+
+  const parent = transactions[transactions.length - 1]
+  const names = Object.keys(transaction)
+
+  for (let index = 0, length = names.length; index < length; index += 1) {
+    const name = names[index]
+
+    if (!_hasOwnProperty.call(parent, name)) {
+      parent[name] = transaction[name]
+    }
+  }
+}
+
+function rollbackAnchorTransaction (state) {
+  const transaction = state.anchorMapTransactions.pop()
+  const names = Object.keys(transaction)
+
+  for (let index = names.length - 1; index >= 0; index -= 1) {
+    const entry = transaction[names[index]]
+
+    if (entry.existed) {
+      state.anchorMap[names[index]] = entry.value
+    } else {
+      delete state.anchorMap[names[index]]
+    }
+  }
+}
+
+function snapshotState (state) {
+  return {
+    position: state.position,
+    line: state.line,
+    lineStart: state.lineStart,
+    lineIndent: state.lineIndent,
+    firstTabInLine: state.firstTabInLine,
+    tag: state.tag,
+    anchor: state.anchor,
+    kind: state.kind,
+    result: state.result
+  }
+}
+
+function restoreState (state, snapshot) {
+  state.position = snapshot.position
+  state.line = snapshot.line
+  state.lineStart = snapshot.lineStart
+  state.lineIndent = snapshot.lineIndent
+  state.firstTabInLine = snapshot.firstTabInLine
+  state.tag = snapshot.tag
+  state.anchor = snapshot.anchor
+  state.kind = snapshot.kind
+  state.result = snapshot.result
+}
+
+const directiveHandlers = {
+
+  YAML: function handleYamlDirective (state, name, args) {
     if (state.version !== null) {
-      throwError(state, 'duplication of %YAML directive');
+      throwError(state, 'duplication of %YAML directive')
     }
 
     if (args.length !== 1) {
-      throwError(state, 'YAML directive accepts exactly one argument');
+      throwError(state, 'YAML directive accepts exactly one argument')
     }
 
-    match = /^([0-9]+)\.([0-9]+)$/.exec(args[0]);
+    const match = /^([0-9]+)\.([0-9]+)$/.exec(args[0])
 
     if (match === null) {
-      throwError(state, 'ill-formed argument of the YAML directive');
+      throwError(state, 'ill-formed argument of the YAML directive')
     }
 
-    major = parseInt(match[1], 10);
-    minor = parseInt(match[2], 10);
+    const major = parseInt(match[1], 10)
+    const minor = parseInt(match[2], 10)
 
     if (major !== 1) {
-      throwError(state, 'unacceptable YAML version of the document');
+      throwError(state, 'unacceptable YAML version of the document')
     }
 
-    state.version = args[0];
-    state.checkLineBreaks = (minor < 2);
+    state.version = args[0]
+    state.checkLineBreaks = (minor < 2)
 
     if (minor !== 1 && minor !== 2) {
-      throwWarning(state, 'unsupported YAML version of the document');
+      throwWarning(state, 'unsupported YAML version of the document')
     }
   },
 
-  TAG: function handleTagDirective(state, name, args) {
-
-    var handle, prefix;
+  TAG: function handleTagDirective (state, name, args) {
+    let prefix
 
     if (args.length !== 2) {
-      throwError(state, 'TAG directive accepts exactly two arguments');
+      throwError(state, 'TAG directive accepts exactly two arguments')
     }
 
-    handle = args[0];
-    prefix = args[1];
+    const handle = args[0]
+    prefix = args[1]
 
     if (!PATTERN_TAG_HANDLE.test(handle)) {
-      throwError(state, 'ill-formed tag handle (first argument) of the TAG directive');
+      throwError(state, 'ill-formed tag handle (first argument) of the TAG directive')
     }
 
     if (_hasOwnProperty.call(state.tagMap, handle)) {
-      throwError(state, 'there is a previously declared suffix for "' + handle + '" tag handle');
+      throwError(state, 'there is a previously declared suffix for "' + handle + '" tag handle')
     }
 
     if (!PATTERN_TAG_URI.test(prefix)) {
-      throwError(state, 'ill-formed tag prefix (second argument) of the TAG directive');
+      throwError(state, 'ill-formed tag prefix (second argument) of the TAG directive')
     }
 
     try {
-      prefix = decodeURIComponent(prefix);
+      prefix = decodeURIComponent(prefix)
     } catch (err) {
-      throwError(state, 'tag prefix is malformed: ' + prefix);
+      throwError(state, 'tag prefix is malformed: ' + prefix)
     }
 
-    state.tagMap[handle] = prefix;
+    state.tagMap[handle] = prefix
   }
-};
+}
 
-
-function captureSegment(state, start, end, checkJson) {
-  var _position, _length, _character, _result;
-
+function captureSegment (state, start, end, checkJson) {
   if (start < end) {
-    _result = state.input.slice(start, end);
+    const _result = state.input.slice(start, end)
 
     if (checkJson) {
-      for (_position = 0, _length = _result.length; _position < _length; _position += 1) {
-        _character = _result.charCodeAt(_position);
+      for (let _position = 0, _length = _result.length; _position < _length; _position += 1) {
+        const _character = _result.charCodeAt(_position)
         if (!(_character === 0x09 ||
-              (0x20 <= _character && _character <= 0x10FFFF))) {
-          throwError(state, 'expected valid JSON character');
+              (_character >= 0x20 && _character <= 0x10FFFF))) {
+          throwError(state, 'expected valid JSON character')
         }
       }
     } else if (PATTERN_NON_PRINTABLE.test(_result)) {
-      throwError(state, 'the stream contains non-printable characters');
+      throwError(state, 'the stream contains non-printable characters')
     }
 
-    state.result += _result;
+    state.result += _result
   }
 }
 
-function mergeMappings(state, destination, source, overridableKeys) {
-  var sourceKeys, key, index, quantity;
+function chargeMergeWork (state) {
+  state.totalMergeKeys++
 
+  if (state.maxTotalMergeKeys !== -1 && state.totalMergeKeys > state.maxTotalMergeKeys) {
+    throwError(state, 'merge keys exceeded maxTotalMergeKeys (' + state.maxTotalMergeKeys + ')')
+  }
+}
+
+function mergeMappings (state, destination, source, overridableKeys) {
   if (!common.isObject(source)) {
-    throwError(state, 'cannot merge mappings; the provided source object is unacceptable');
+    throwError(state, 'cannot merge mappings; the provided source object is unacceptable')
   }
 
-  sourceKeys = Object.keys(source);
+  // Count the source mapping itself to bound sequences of empty mappings.
+  chargeMergeWork(state)
 
-  for (index = 0, quantity = sourceKeys.length; index < quantity; index += 1) {
-    key = sourceKeys[index];
+  const sourceKeys = Object.keys(source)
+
+  for (let index = 0, quantity = sourceKeys.length; index < quantity; index += 1) {
+    const key = sourceKeys[index]
+
+    chargeMergeWork(state)
 
     if (!_hasOwnProperty.call(destination, key)) {
-      setProperty(destination, key, source[key]);
-      overridableKeys[key] = true;
+      setProperty(destination, key, source[key])
+      overridableKeys[key] = true
     }
   }
 }
 
-function storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode,
+function storeMappingPair (state, _result, overridableKeys, keyTag, keyNode, valueNode,
   startLine, startLineStart, startPos) {
-
-  var index, quantity;
-
   // The output is a plain object here, so keys can only be strings.
   // We need to convert keyNode to a string, but doing so can hang the process
   // (deeply nested arrays that explode exponentially using aliases).
   if (Array.isArray(keyNode)) {
-    keyNode = Array.prototype.slice.call(keyNode);
+    keyNode = Array.prototype.slice.call(keyNode)
 
-    for (index = 0, quantity = keyNode.length; index < quantity; index += 1) {
+    for (let index = 0, quantity = keyNode.length; index < quantity; index += 1) {
       if (Array.isArray(keyNode[index])) {
-        throwError(state, 'nested arrays are not supported inside keys');
+        throwError(state, 'nested arrays are not supported inside keys')
       }
 
       if (typeof keyNode === 'object' && _class(keyNode[index]) === '[object Object]') {
-        keyNode[index] = '[object Object]';
+        keyNode[index] = '[object Object]'
       }
     }
   }
@@ -17871,814 +14421,780 @@ function storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valu
   // (still use its own toString for arrays, timestamps,
   // and whatever user schema extensions happen to have @@toStringTag)
   if (typeof keyNode === 'object' && _class(keyNode) === '[object Object]') {
-    keyNode = '[object Object]';
+    keyNode = '[object Object]'
   }
 
-
-  keyNode = String(keyNode);
+  keyNode = String(keyNode)
 
   if (_result === null) {
-    _result = {};
+    _result = {}
   }
 
   if (keyTag === 'tag:yaml.org,2002:merge') {
     if (Array.isArray(valueNode)) {
-      for (index = 0, quantity = valueNode.length; index < quantity; index += 1) {
-        mergeMappings(state, _result, valueNode[index], overridableKeys);
+      if (valueNode.length > 100) {
+        throwError(state, 'abnormal merge sequence size')
+      }
+
+      for (let index = 0, quantity = valueNode.length; index < quantity; index += 1) {
+        mergeMappings(state, _result, valueNode[index], overridableKeys)
       }
     } else {
-      mergeMappings(state, _result, valueNode, overridableKeys);
+      mergeMappings(state, _result, valueNode, overridableKeys)
     }
   } else {
     if (!state.json &&
         !_hasOwnProperty.call(overridableKeys, keyNode) &&
         _hasOwnProperty.call(_result, keyNode)) {
-      state.line = startLine || state.line;
-      state.lineStart = startLineStart || state.lineStart;
-      state.position = startPos || state.position;
-      throwError(state, 'duplicated mapping key');
+      state.line = startLine || state.line
+      state.lineStart = startLineStart || state.lineStart
+      state.position = startPos || state.position
+      throwError(state, 'duplicated mapping key')
     }
 
-    setProperty(_result, keyNode, valueNode);
-    delete overridableKeys[keyNode];
+    setProperty(_result, keyNode, valueNode)
+    delete overridableKeys[keyNode]
   }
 
-  return _result;
+  return _result
 }
 
-function readLineBreak(state) {
-  var ch;
-
-  ch = state.input.charCodeAt(state.position);
+function readLineBreak (state) {
+  const ch = state.input.charCodeAt(state.position)
 
   if (ch === 0x0A/* LF */) {
-    state.position++;
+    state.position++
   } else if (ch === 0x0D/* CR */) {
-    state.position++;
+    state.position++
     if (state.input.charCodeAt(state.position) === 0x0A/* LF */) {
-      state.position++;
+      state.position++
     }
   } else {
-    throwError(state, 'a line break is expected');
+    throwError(state, 'a line break is expected')
   }
 
-  state.line += 1;
-  state.lineStart = state.position;
-  state.firstTabInLine = -1;
+  state.line += 1
+  state.lineStart = state.position
+  state.firstTabInLine = -1
 }
 
-function skipSeparationSpace(state, allowComments, checkIndent) {
-  var lineBreaks = 0,
-      ch = state.input.charCodeAt(state.position);
+function skipSeparationSpace (state, allowComments, checkIndent) {
+  let lineBreaks = 0
+  let ch = state.input.charCodeAt(state.position)
 
   while (ch !== 0) {
-    while (is_WHITE_SPACE(ch)) {
+    while (isWhiteSpace(ch)) {
       if (ch === 0x09/* Tab */ && state.firstTabInLine === -1) {
-        state.firstTabInLine = state.position;
+        state.firstTabInLine = state.position
       }
-      ch = state.input.charCodeAt(++state.position);
+      ch = state.input.charCodeAt(++state.position)
     }
 
     if (allowComments && ch === 0x23/* # */) {
       do {
-        ch = state.input.charCodeAt(++state.position);
-      } while (ch !== 0x0A/* LF */ && ch !== 0x0D/* CR */ && ch !== 0);
+        ch = state.input.charCodeAt(++state.position)
+      } while (ch !== 0x0A/* LF */ && ch !== 0x0D/* CR */ && ch !== 0)
     }
 
-    if (is_EOL(ch)) {
-      readLineBreak(state);
+    if (isEol(ch)) {
+      readLineBreak(state)
 
-      ch = state.input.charCodeAt(state.position);
-      lineBreaks++;
-      state.lineIndent = 0;
+      ch = state.input.charCodeAt(state.position)
+      lineBreaks++
+      state.lineIndent = 0
 
       while (ch === 0x20/* Space */) {
-        state.lineIndent++;
-        ch = state.input.charCodeAt(++state.position);
+        state.lineIndent++
+        ch = state.input.charCodeAt(++state.position)
       }
     } else {
-      break;
+      break
     }
   }
 
   if (checkIndent !== -1 && lineBreaks !== 0 && state.lineIndent < checkIndent) {
-    throwWarning(state, 'deficient indentation');
+    throwWarning(state, 'deficient indentation')
   }
 
-  return lineBreaks;
+  return lineBreaks
 }
 
-function testDocumentSeparator(state) {
-  var _position = state.position,
-      ch;
-
-  ch = state.input.charCodeAt(_position);
+function testDocumentSeparator (state) {
+  let _position = state.position
+  let ch = state.input.charCodeAt(_position)
 
   // Condition state.position === state.lineStart is tested
   // in parent on each call, for efficiency. No needs to test here again.
   if ((ch === 0x2D/* - */ || ch === 0x2E/* . */) &&
       ch === state.input.charCodeAt(_position + 1) &&
       ch === state.input.charCodeAt(_position + 2)) {
+    _position += 3
 
-    _position += 3;
+    ch = state.input.charCodeAt(_position)
 
-    ch = state.input.charCodeAt(_position);
-
-    if (ch === 0 || is_WS_OR_EOL(ch)) {
-      return true;
+    if (ch === 0 || isWsOrEol(ch)) {
+      return true
     }
   }
 
-  return false;
+  return false
 }
 
-function writeFoldedLines(state, count) {
+function writeFoldedLines (state, count) {
   if (count === 1) {
-    state.result += ' ';
+    state.result += ' '
   } else if (count > 1) {
-    state.result += common.repeat('\n', count - 1);
+    state.result += common.repeat('\n', count - 1)
   }
 }
 
+function readPlainScalar (state, nodeIndent, withinFlowCollection) {
+  let captureStart
+  let captureEnd
+  let hasPendingContent
+  let _line
+  let _lineStart
+  let _lineIndent
+  const _kind = state.kind
+  const _result = state.result
 
-function readPlainScalar(state, nodeIndent, withinFlowCollection) {
-  var preceding,
-      following,
-      captureStart,
-      captureEnd,
-      hasPendingContent,
-      _line,
-      _lineStart,
-      _lineIndent,
-      _kind = state.kind,
-      _result = state.result,
-      ch;
+  let ch = state.input.charCodeAt(state.position)
 
-  ch = state.input.charCodeAt(state.position);
-
-  if (is_WS_OR_EOL(ch)      ||
-      is_FLOW_INDICATOR(ch) ||
-      ch === 0x23/* # */    ||
-      ch === 0x26/* & */    ||
-      ch === 0x2A/* * */    ||
-      ch === 0x21/* ! */    ||
-      ch === 0x7C/* | */    ||
-      ch === 0x3E/* > */    ||
-      ch === 0x27/* ' */    ||
-      ch === 0x22/* " */    ||
-      ch === 0x25/* % */    ||
-      ch === 0x40/* @ */    ||
+  if (isWsOrEol(ch) ||
+      isFlowIndicator(ch) ||
+      ch === 0x23/* # */ ||
+      ch === 0x26/* & */ ||
+      ch === 0x2A/* * */ ||
+      ch === 0x21/* ! */ ||
+      ch === 0x7C/* | */ ||
+      ch === 0x3E/* > */ ||
+      ch === 0x27/* ' */ ||
+      ch === 0x22/* " */ ||
+      ch === 0x25/* % */ ||
+      ch === 0x40/* @ */ ||
       ch === 0x60/* ` */) {
-    return false;
+    return false
   }
 
   if (ch === 0x3F/* ? */ || ch === 0x2D/* - */) {
-    following = state.input.charCodeAt(state.position + 1);
+    const following = state.input.charCodeAt(state.position + 1)
 
-    if (is_WS_OR_EOL(following) ||
-        withinFlowCollection && is_FLOW_INDICATOR(following)) {
-      return false;
+    if (isWsOrEol(following) ||
+        (withinFlowCollection && isFlowIndicator(following))) {
+      return false
     }
   }
 
-  state.kind = 'scalar';
-  state.result = '';
-  captureStart = captureEnd = state.position;
-  hasPendingContent = false;
+  state.kind = 'scalar'
+  state.result = ''
+  captureStart = captureEnd = state.position
+  hasPendingContent = false
 
   while (ch !== 0) {
     if (ch === 0x3A/* : */) {
-      following = state.input.charCodeAt(state.position + 1);
+      const following = state.input.charCodeAt(state.position + 1)
 
-      if (is_WS_OR_EOL(following) ||
-          withinFlowCollection && is_FLOW_INDICATOR(following)) {
-        break;
+      if (isWsOrEol(following) ||
+          (withinFlowCollection && isFlowIndicator(following))) {
+        break
       }
-
     } else if (ch === 0x23/* # */) {
-      preceding = state.input.charCodeAt(state.position - 1);
+      const preceding = state.input.charCodeAt(state.position - 1)
 
-      if (is_WS_OR_EOL(preceding)) {
-        break;
+      if (isWsOrEol(preceding)) {
+        break
       }
-
     } else if ((state.position === state.lineStart && testDocumentSeparator(state)) ||
-               withinFlowCollection && is_FLOW_INDICATOR(ch)) {
-      break;
-
-    } else if (is_EOL(ch)) {
-      _line = state.line;
-      _lineStart = state.lineStart;
-      _lineIndent = state.lineIndent;
-      skipSeparationSpace(state, false, -1);
+               (withinFlowCollection && isFlowIndicator(ch))) {
+      break
+    } else if (isEol(ch)) {
+      _line = state.line
+      _lineStart = state.lineStart
+      _lineIndent = state.lineIndent
+      skipSeparationSpace(state, false, -1)
 
       if (state.lineIndent >= nodeIndent) {
-        hasPendingContent = true;
-        ch = state.input.charCodeAt(state.position);
-        continue;
+        hasPendingContent = true
+        ch = state.input.charCodeAt(state.position)
+        continue
       } else {
-        state.position = captureEnd;
-        state.line = _line;
-        state.lineStart = _lineStart;
-        state.lineIndent = _lineIndent;
-        break;
+        state.position = captureEnd
+        state.line = _line
+        state.lineStart = _lineStart
+        state.lineIndent = _lineIndent
+        break
       }
     }
 
     if (hasPendingContent) {
-      captureSegment(state, captureStart, captureEnd, false);
-      writeFoldedLines(state, state.line - _line);
-      captureStart = captureEnd = state.position;
-      hasPendingContent = false;
+      captureSegment(state, captureStart, captureEnd, false)
+      writeFoldedLines(state, state.line - _line)
+      captureStart = captureEnd = state.position
+      hasPendingContent = false
     }
 
-    if (!is_WHITE_SPACE(ch)) {
-      captureEnd = state.position + 1;
+    if (!isWhiteSpace(ch)) {
+      captureEnd = state.position + 1
     }
 
-    ch = state.input.charCodeAt(++state.position);
+    ch = state.input.charCodeAt(++state.position)
   }
 
-  captureSegment(state, captureStart, captureEnd, false);
+  captureSegment(state, captureStart, captureEnd, false)
 
   if (state.result) {
-    return true;
+    return true
   }
 
-  state.kind = _kind;
-  state.result = _result;
-  return false;
+  state.kind = _kind
+  state.result = _result
+  return false
 }
 
-function readSingleQuotedScalar(state, nodeIndent) {
-  var ch,
-      captureStart, captureEnd;
+function readSingleQuotedScalar (state, nodeIndent) {
+  let captureStart
+  let captureEnd
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   if (ch !== 0x27/* ' */) {
-    return false;
+    return false
   }
 
-  state.kind = 'scalar';
-  state.result = '';
-  state.position++;
-  captureStart = captureEnd = state.position;
+  state.kind = 'scalar'
+  state.result = ''
+  state.position++
+  captureStart = captureEnd = state.position
 
   while ((ch = state.input.charCodeAt(state.position)) !== 0) {
     if (ch === 0x27/* ' */) {
-      captureSegment(state, captureStart, state.position, true);
-      ch = state.input.charCodeAt(++state.position);
+      captureSegment(state, captureStart, state.position, true)
+      ch = state.input.charCodeAt(++state.position)
 
       if (ch === 0x27/* ' */) {
-        captureStart = state.position;
-        state.position++;
-        captureEnd = state.position;
+        captureStart = state.position
+        state.position++
+        captureEnd = state.position
       } else {
-        return true;
+        return true
       }
-
-    } else if (is_EOL(ch)) {
-      captureSegment(state, captureStart, captureEnd, true);
-      writeFoldedLines(state, skipSeparationSpace(state, false, nodeIndent));
-      captureStart = captureEnd = state.position;
-
+    } else if (isEol(ch)) {
+      captureSegment(state, captureStart, captureEnd, true)
+      writeFoldedLines(state, skipSeparationSpace(state, false, nodeIndent))
+      captureStart = captureEnd = state.position
     } else if (state.position === state.lineStart && testDocumentSeparator(state)) {
-      throwError(state, 'unexpected end of the document within a single quoted scalar');
-
+      throwError(state, 'unexpected end of the document within a single quoted scalar')
     } else {
-      state.position++;
-      captureEnd = state.position;
+      state.position++
+      if (!isWhiteSpace(ch)) {
+        captureEnd = state.position
+      }
     }
   }
 
-  throwError(state, 'unexpected end of the stream within a single quoted scalar');
+  throwError(state, 'unexpected end of the stream within a single quoted scalar')
 }
 
-function readDoubleQuotedScalar(state, nodeIndent) {
-  var captureStart,
-      captureEnd,
-      hexLength,
-      hexResult,
-      tmp,
-      ch;
+function readDoubleQuotedScalar (state, nodeIndent) {
+  let captureStart
+  let captureEnd
+  let tmp
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   if (ch !== 0x22/* " */) {
-    return false;
+    return false
   }
 
-  state.kind = 'scalar';
-  state.result = '';
-  state.position++;
-  captureStart = captureEnd = state.position;
+  state.kind = 'scalar'
+  state.result = ''
+  state.position++
+  captureStart = captureEnd = state.position
 
   while ((ch = state.input.charCodeAt(state.position)) !== 0) {
     if (ch === 0x22/* " */) {
-      captureSegment(state, captureStart, state.position, true);
-      state.position++;
-      return true;
-
+      captureSegment(state, captureStart, state.position, true)
+      state.position++
+      return true
     } else if (ch === 0x5C/* \ */) {
-      captureSegment(state, captureStart, state.position, true);
-      ch = state.input.charCodeAt(++state.position);
+      captureSegment(state, captureStart, state.position, true)
+      ch = state.input.charCodeAt(++state.position)
 
-      if (is_EOL(ch)) {
-        skipSeparationSpace(state, false, nodeIndent);
+      if (isEol(ch)) {
+        skipSeparationSpace(state, false, nodeIndent)
 
         // TODO: rework to inline fn with no type cast?
       } else if (ch < 256 && simpleEscapeCheck[ch]) {
-        state.result += simpleEscapeMap[ch];
-        state.position++;
-
+        state.result += simpleEscapeMap[ch]
+        state.position++
       } else if ((tmp = escapedHexLen(ch)) > 0) {
-        hexLength = tmp;
-        hexResult = 0;
+        let hexLength = tmp
+        let hexResult = 0
 
         for (; hexLength > 0; hexLength--) {
-          ch = state.input.charCodeAt(++state.position);
+          ch = state.input.charCodeAt(++state.position)
 
           if ((tmp = fromHexCode(ch)) >= 0) {
-            hexResult = (hexResult << 4) + tmp;
-
+            hexResult = (hexResult << 4) + tmp
           } else {
-            throwError(state, 'expected hexadecimal character');
+            throwError(state, 'expected hexadecimal character')
           }
         }
 
-        state.result += charFromCodepoint(hexResult);
+        state.result += charFromCodepoint(hexResult)
 
-        state.position++;
-
+        state.position++
       } else {
-        throwError(state, 'unknown escape sequence');
+        throwError(state, 'unknown escape sequence')
       }
 
-      captureStart = captureEnd = state.position;
-
-    } else if (is_EOL(ch)) {
-      captureSegment(state, captureStart, captureEnd, true);
-      writeFoldedLines(state, skipSeparationSpace(state, false, nodeIndent));
-      captureStart = captureEnd = state.position;
-
+      captureStart = captureEnd = state.position
+    } else if (isEol(ch)) {
+      captureSegment(state, captureStart, captureEnd, true)
+      writeFoldedLines(state, skipSeparationSpace(state, false, nodeIndent))
+      captureStart = captureEnd = state.position
     } else if (state.position === state.lineStart && testDocumentSeparator(state)) {
-      throwError(state, 'unexpected end of the document within a double quoted scalar');
-
+      throwError(state, 'unexpected end of the document within a double quoted scalar')
     } else {
-      state.position++;
-      captureEnd = state.position;
+      state.position++
+      if (!isWhiteSpace(ch)) {
+        captureEnd = state.position
+      }
     }
   }
 
-  throwError(state, 'unexpected end of the stream within a double quoted scalar');
+  throwError(state, 'unexpected end of the stream within a double quoted scalar')
 }
 
-function readFlowCollection(state, nodeIndent) {
-  var readNext = true,
-      _line,
-      _lineStart,
-      _pos,
-      _tag     = state.tag,
-      _result,
-      _anchor  = state.anchor,
-      following,
-      terminator,
-      isPair,
-      isExplicitPair,
-      isMapping,
-      overridableKeys = Object.create(null),
-      keyNode,
-      keyTag,
-      valueNode,
-      ch;
+function readFlowCollection (state, nodeIndent) {
+  let readNext = true
+  let _line
+  let _lineStart
+  let _pos
+  const _tag = state.tag
+  let _result
+  const _anchor = state.anchor
+  let terminator
+  let isPair
+  let isExplicitPair
+  let isMapping
+  const overridableKeys = Object.create(null)
+  let keyNode
+  let keyTag
+  let valueNode
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   if (ch === 0x5B/* [ */) {
-    terminator = 0x5D;/* ] */
-    isMapping = false;
-    _result = [];
+    terminator = 0x5D/* ] */
+    isMapping = false
+    _result = []
   } else if (ch === 0x7B/* { */) {
-    terminator = 0x7D;/* } */
-    isMapping = true;
-    _result = {};
+    terminator = 0x7D/* } */
+    isMapping = true
+    _result = {}
   } else {
-    return false;
+    return false
   }
 
   if (state.anchor !== null) {
-    state.anchorMap[state.anchor] = _result;
+    storeAnchor(state, state.anchor, _result)
   }
 
-  ch = state.input.charCodeAt(++state.position);
+  ch = state.input.charCodeAt(++state.position)
 
   while (ch !== 0) {
-    skipSeparationSpace(state, true, nodeIndent);
+    skipSeparationSpace(state, true, nodeIndent)
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
     if (ch === terminator) {
-      state.position++;
-      state.tag = _tag;
-      state.anchor = _anchor;
-      state.kind = isMapping ? 'mapping' : 'sequence';
-      state.result = _result;
-      return true;
+      state.position++
+      state.tag = _tag
+      state.anchor = _anchor
+      state.kind = isMapping ? 'mapping' : 'sequence'
+      state.result = _result
+      return true
     } else if (!readNext) {
-      throwError(state, 'missed comma between flow collection entries');
+      throwError(state, 'missed comma between flow collection entries')
     } else if (ch === 0x2C/* , */) {
       // "flow collection entries can never be completely empty", as per YAML 1.2, section 7.4
-      throwError(state, "expected the node content, but found ','");
+      throwError(state, "expected the node content, but found ','")
     }
 
-    keyTag = keyNode = valueNode = null;
-    isPair = isExplicitPair = false;
+    keyTag = keyNode = valueNode = null
+    isPair = isExplicitPair = false
 
     if (ch === 0x3F/* ? */) {
-      following = state.input.charCodeAt(state.position + 1);
+      const following = state.input.charCodeAt(state.position + 1)
 
-      if (is_WS_OR_EOL(following)) {
-        isPair = isExplicitPair = true;
-        state.position++;
-        skipSeparationSpace(state, true, nodeIndent);
+      if (isWsOrEol(following)) {
+        isPair = isExplicitPair = true
+        state.position++
+        skipSeparationSpace(state, true, nodeIndent)
       }
     }
 
-    _line = state.line; // Save the current line.
-    _lineStart = state.lineStart;
-    _pos = state.position;
-    composeNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true);
-    keyTag = state.tag;
-    keyNode = state.result;
-    skipSeparationSpace(state, true, nodeIndent);
+    _line = state.line // Save the current line.
+    _lineStart = state.lineStart
+    _pos = state.position
+    composeNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true)
+    keyTag = state.tag
+    keyNode = state.result
+    skipSeparationSpace(state, true, nodeIndent)
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
     if ((isExplicitPair || state.line === _line) && ch === 0x3A/* : */) {
-      isPair = true;
-      ch = state.input.charCodeAt(++state.position);
-      skipSeparationSpace(state, true, nodeIndent);
-      composeNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true);
-      valueNode = state.result;
+      isPair = true
+      ch = state.input.charCodeAt(++state.position)
+      skipSeparationSpace(state, true, nodeIndent)
+      composeNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true)
+      valueNode = state.result
     }
 
     if (isMapping) {
-      storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, _line, _lineStart, _pos);
+      storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, _line, _lineStart, _pos)
     } else if (isPair) {
-      _result.push(storeMappingPair(state, null, overridableKeys, keyTag, keyNode, valueNode, _line, _lineStart, _pos));
+      _result.push(storeMappingPair(state, null, overridableKeys, keyTag, keyNode, valueNode, _line, _lineStart, _pos))
     } else {
-      _result.push(keyNode);
+      _result.push(keyNode)
     }
 
-    skipSeparationSpace(state, true, nodeIndent);
+    skipSeparationSpace(state, true, nodeIndent)
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
     if (ch === 0x2C/* , */) {
-      readNext = true;
-      ch = state.input.charCodeAt(++state.position);
+      readNext = true
+      ch = state.input.charCodeAt(++state.position)
     } else {
-      readNext = false;
+      readNext = false
     }
   }
 
-  throwError(state, 'unexpected end of the stream within a flow collection');
+  throwError(state, 'unexpected end of the stream within a flow collection')
 }
 
-function readBlockScalar(state, nodeIndent) {
-  var captureStart,
-      folding,
-      chomping       = CHOMPING_CLIP,
-      didReadContent = false,
-      detectedIndent = false,
-      textIndent     = nodeIndent,
-      emptyLines     = 0,
-      atMoreIndented = false,
-      tmp,
-      ch;
+function readBlockScalar (state, nodeIndent) {
+  let folding
+  let chomping = CHOMPING_CLIP
+  let didReadContent = false
+  let detectedIndent = false
+  let textIndent = nodeIndent
+  let emptyLines = 0
+  let atMoreIndented = false
+  let tmp
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   if (ch === 0x7C/* | */) {
-    folding = false;
+    folding = false
   } else if (ch === 0x3E/* > */) {
-    folding = true;
+    folding = true
   } else {
-    return false;
+    return false
   }
 
-  state.kind = 'scalar';
-  state.result = '';
+  state.kind = 'scalar'
+  state.result = ''
 
   while (ch !== 0) {
-    ch = state.input.charCodeAt(++state.position);
+    ch = state.input.charCodeAt(++state.position)
 
     if (ch === 0x2B/* + */ || ch === 0x2D/* - */) {
       if (CHOMPING_CLIP === chomping) {
-        chomping = (ch === 0x2B/* + */) ? CHOMPING_KEEP : CHOMPING_STRIP;
+        chomping = (ch === 0x2B/* + */) ? CHOMPING_KEEP : CHOMPING_STRIP
       } else {
-        throwError(state, 'repeat of a chomping mode identifier');
+        throwError(state, 'repeat of a chomping mode identifier')
       }
-
     } else if ((tmp = fromDecimalCode(ch)) >= 0) {
       if (tmp === 0) {
-        throwError(state, 'bad explicit indentation width of a block scalar; it cannot be less than one');
+        throwError(state, 'bad explicit indentation width of a block scalar; it cannot be less than one')
       } else if (!detectedIndent) {
-        textIndent = nodeIndent + tmp - 1;
-        detectedIndent = true;
+        textIndent = nodeIndent + tmp - 1
+        detectedIndent = true
       } else {
-        throwError(state, 'repeat of an indentation width identifier');
+        throwError(state, 'repeat of an indentation width identifier')
       }
-
     } else {
-      break;
+      break
     }
   }
 
-  if (is_WHITE_SPACE(ch)) {
-    do { ch = state.input.charCodeAt(++state.position); }
-    while (is_WHITE_SPACE(ch));
+  if (isWhiteSpace(ch)) {
+    do { ch = state.input.charCodeAt(++state.position) }
+    while (isWhiteSpace(ch))
 
     if (ch === 0x23/* # */) {
-      do { ch = state.input.charCodeAt(++state.position); }
-      while (!is_EOL(ch) && (ch !== 0));
+      do { ch = state.input.charCodeAt(++state.position) }
+      while (!isEol(ch) && (ch !== 0))
     }
   }
 
   while (ch !== 0) {
-    readLineBreak(state);
-    state.lineIndent = 0;
+    readLineBreak(state)
+    state.lineIndent = 0
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
+    // eslint-disable-next-line no-unmodified-loop-condition
     while ((!detectedIndent || state.lineIndent < textIndent) &&
            (ch === 0x20/* Space */)) {
-      state.lineIndent++;
-      ch = state.input.charCodeAt(++state.position);
+      state.lineIndent++
+      ch = state.input.charCodeAt(++state.position)
     }
 
     if (!detectedIndent && state.lineIndent > textIndent) {
-      textIndent = state.lineIndent;
+      textIndent = state.lineIndent
     }
 
-    if (is_EOL(ch)) {
-      emptyLines++;
-      continue;
+    if (isEol(ch)) {
+      emptyLines++
+      continue
+    }
+
+    if (!detectedIndent && textIndent === 0) {
+      throwError(state, 'missing indentation for block scalar')
     }
 
     // End of the scalar.
     if (state.lineIndent < textIndent) {
-
       // Perform the chomping.
       if (chomping === CHOMPING_KEEP) {
-        state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines);
+        state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines)
       } else if (chomping === CHOMPING_CLIP) {
         if (didReadContent) { // i.e. only if the scalar is not empty.
-          state.result += '\n';
+          state.result += '\n'
         }
       }
 
       // Break this `while` cycle and go to the funciton's epilogue.
-      break;
+      break
     }
 
     // Folded style: use fancy rules to handle line breaks.
     if (folding) {
-
       // Lines starting with white space characters (more-indented lines) are not folded.
-      if (is_WHITE_SPACE(ch)) {
-        atMoreIndented = true;
+      if (isWhiteSpace(ch)) {
+        atMoreIndented = true
         // except for the first content line (cf. Example 8.1)
-        state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines);
+        state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines)
 
       // End of more-indented block.
       } else if (atMoreIndented) {
-        atMoreIndented = false;
-        state.result += common.repeat('\n', emptyLines + 1);
+        atMoreIndented = false
+        state.result += common.repeat('\n', emptyLines + 1)
 
       // Just one line break - perceive as the same line.
       } else if (emptyLines === 0) {
         if (didReadContent) { // i.e. only if we have already read some scalar content.
-          state.result += ' ';
+          state.result += ' '
         }
 
       // Several line breaks - perceive as different lines.
       } else {
-        state.result += common.repeat('\n', emptyLines);
+        state.result += common.repeat('\n', emptyLines)
       }
 
     // Literal style: just add exact number of line breaks between content lines.
     } else {
       // Keep all line breaks except the header line break.
-      state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines);
+      state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines)
     }
 
-    didReadContent = true;
-    detectedIndent = true;
-    emptyLines = 0;
-    captureStart = state.position;
+    didReadContent = true
+    detectedIndent = true
+    emptyLines = 0
+    const captureStart = state.position
 
-    while (!is_EOL(ch) && (ch !== 0)) {
-      ch = state.input.charCodeAt(++state.position);
+    while (!isEol(ch) && (ch !== 0)) {
+      ch = state.input.charCodeAt(++state.position)
     }
 
-    captureSegment(state, captureStart, state.position, false);
+    captureSegment(state, captureStart, state.position, false)
   }
 
-  return true;
+  return true
 }
 
-function readBlockSequence(state, nodeIndent) {
-  var _line,
-      _tag      = state.tag,
-      _anchor   = state.anchor,
-      _result   = [],
-      following,
-      detected  = false,
-      ch;
+function readBlockSequence (state, nodeIndent) {
+  const _tag = state.tag
+  const _anchor = state.anchor
+  const _result = []
+  let detected = false
 
   // there is a leading tab before this token, so it can't be a block sequence/mapping;
   // it can still be flow sequence/mapping or a scalar
-  if (state.firstTabInLine !== -1) return false;
+  if (state.firstTabInLine !== -1) return false
 
   if (state.anchor !== null) {
-    state.anchorMap[state.anchor] = _result;
+    storeAnchor(state, state.anchor, _result)
   }
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   while (ch !== 0) {
     if (state.firstTabInLine !== -1) {
-      state.position = state.firstTabInLine;
-      throwError(state, 'tab characters must not be used in indentation');
+      state.position = state.firstTabInLine
+      throwError(state, 'tab characters must not be used in indentation')
     }
 
     if (ch !== 0x2D/* - */) {
-      break;
+      break
     }
 
-    following = state.input.charCodeAt(state.position + 1);
+    const following = state.input.charCodeAt(state.position + 1)
 
-    if (!is_WS_OR_EOL(following)) {
-      break;
+    if (!isWsOrEol(following)) {
+      break
     }
 
-    detected = true;
-    state.position++;
+    detected = true
+    state.position++
 
     if (skipSeparationSpace(state, true, -1)) {
       if (state.lineIndent <= nodeIndent) {
-        _result.push(null);
-        ch = state.input.charCodeAt(state.position);
-        continue;
+        _result.push(null)
+        ch = state.input.charCodeAt(state.position)
+        continue
       }
     }
 
-    _line = state.line;
-    composeNode(state, nodeIndent, CONTEXT_BLOCK_IN, false, true);
-    _result.push(state.result);
-    skipSeparationSpace(state, true, -1);
+    const _line = state.line
+    composeNode(state, nodeIndent, CONTEXT_BLOCK_IN, false, true)
+    _result.push(state.result)
+    skipSeparationSpace(state, true, -1)
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
     if ((state.line === _line || state.lineIndent > nodeIndent) && (ch !== 0)) {
-      throwError(state, 'bad indentation of a sequence entry');
+      throwError(state, 'bad indentation of a sequence entry')
     } else if (state.lineIndent < nodeIndent) {
-      break;
+      break
     }
   }
 
   if (detected) {
-    state.tag = _tag;
-    state.anchor = _anchor;
-    state.kind = 'sequence';
-    state.result = _result;
-    return true;
+    state.tag = _tag
+    state.anchor = _anchor
+    state.kind = 'sequence'
+    state.result = _result
+    return true
   }
-  return false;
+  return false
 }
 
-function readBlockMapping(state, nodeIndent, flowIndent) {
-  var following,
-      allowCompact,
-      _line,
-      _keyLine,
-      _keyLineStart,
-      _keyPos,
-      _tag          = state.tag,
-      _anchor       = state.anchor,
-      _result       = {},
-      overridableKeys = Object.create(null),
-      keyTag        = null,
-      keyNode       = null,
-      valueNode     = null,
-      atExplicitKey = false,
-      detected      = false,
-      ch;
+function readBlockMapping (state, nodeIndent, flowIndent) {
+  let allowCompact
+  let _keyLine
+  let _keyLineStart
+  let _keyPos
+  const _tag = state.tag
+  const _anchor = state.anchor
+  const _result = {}
+  const overridableKeys = Object.create(null)
+  let keyTag = null
+  let keyNode = null
+  let valueNode = null
+  let atExplicitKey = false
+  let detected = false
 
   // there is a leading tab before this token, so it can't be a block sequence/mapping;
   // it can still be flow sequence/mapping or a scalar
-  if (state.firstTabInLine !== -1) return false;
+  if (state.firstTabInLine !== -1) return false
 
   if (state.anchor !== null) {
-    state.anchorMap[state.anchor] = _result;
+    storeAnchor(state, state.anchor, _result)
   }
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   while (ch !== 0) {
     if (!atExplicitKey && state.firstTabInLine !== -1) {
-      state.position = state.firstTabInLine;
-      throwError(state, 'tab characters must not be used in indentation');
+      state.position = state.firstTabInLine
+      throwError(state, 'tab characters must not be used in indentation')
     }
 
-    following = state.input.charCodeAt(state.position + 1);
-    _line = state.line; // Save the current line.
+    const following = state.input.charCodeAt(state.position + 1)
+    const _line = state.line // Save the current line.
 
     //
     // Explicit notation case. There are two separate blocks:
     // first for the key (denoted by "?") and second for the value (denoted by ":")
     //
-    if ((ch === 0x3F/* ? */ || ch === 0x3A/* : */) && is_WS_OR_EOL(following)) {
-
+    if ((ch === 0x3F/* ? */ || ch === 0x3A/* : */) && isWsOrEol(following)) {
       if (ch === 0x3F/* ? */) {
         if (atExplicitKey) {
-          storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos);
-          keyTag = keyNode = valueNode = null;
+          storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos)
+          keyTag = keyNode = valueNode = null
         }
 
-        detected = true;
-        atExplicitKey = true;
-        allowCompact = true;
-
+        detected = true
+        atExplicitKey = true
+        allowCompact = true
       } else if (atExplicitKey) {
         // i.e. 0x3A/* : */ === character after the explicit key.
-        atExplicitKey = false;
-        allowCompact = true;
-
+        atExplicitKey = false
+        allowCompact = true
       } else {
-        throwError(state, 'incomplete explicit mapping pair; a key node is missed; or followed by a non-tabulated empty line');
+        throwError(state, 'incomplete explicit mapping pair; a key node is missed; or followed by a non-tabulated empty line')
       }
 
-      state.position += 1;
-      ch = following;
+      state.position += 1
+      ch = following
 
     //
     // Implicit notation case. Flow-style node as the key first, then ":", and the value.
     //
     } else {
-      _keyLine = state.line;
-      _keyLineStart = state.lineStart;
-      _keyPos = state.position;
+      _keyLine = state.line
+      _keyLineStart = state.lineStart
+      _keyPos = state.position
 
       if (!composeNode(state, flowIndent, CONTEXT_FLOW_OUT, false, true)) {
         // Neither implicit nor explicit notation.
         // Reading is done. Go to the epilogue.
-        break;
+        break
       }
 
       if (state.line === _line) {
-        ch = state.input.charCodeAt(state.position);
+        ch = state.input.charCodeAt(state.position)
 
-        while (is_WHITE_SPACE(ch)) {
-          ch = state.input.charCodeAt(++state.position);
+        while (isWhiteSpace(ch)) {
+          ch = state.input.charCodeAt(++state.position)
         }
 
         if (ch === 0x3A/* : */) {
-          ch = state.input.charCodeAt(++state.position);
+          ch = state.input.charCodeAt(++state.position)
 
-          if (!is_WS_OR_EOL(ch)) {
-            throwError(state, 'a whitespace character is expected after the key-value separator within a block mapping');
+          if (!isWsOrEol(ch)) {
+            throwError(state, 'a whitespace character is expected after the key-value separator within a block mapping')
           }
 
           if (atExplicitKey) {
-            storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos);
-            keyTag = keyNode = valueNode = null;
+            storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos)
+            keyTag = keyNode = valueNode = null
           }
 
-          detected = true;
-          atExplicitKey = false;
-          allowCompact = false;
-          keyTag = state.tag;
-          keyNode = state.result;
-
+          detected = true
+          atExplicitKey = false
+          allowCompact = false
+          keyTag = state.tag
+          keyNode = state.result
         } else if (detected) {
-          throwError(state, 'can not read an implicit mapping pair; a colon is missed');
-
+          throwError(state, 'can not read an implicit mapping pair; a colon is missed')
         } else {
-          state.tag = _tag;
-          state.anchor = _anchor;
-          return true; // Keep the result of `composeNode`.
+          state.tag = _tag
+          state.anchor = _anchor
+          return true // Keep the result of `composeNode`.
         }
-
       } else if (detected) {
-        throwError(state, 'can not read a block mapping entry; a multiline key may not be an implicit key');
-
+        throwError(state, 'can not read a block mapping entry; a multiline key may not be an implicit key')
       } else {
-        state.tag = _tag;
-        state.anchor = _anchor;
-        return true; // Keep the result of `composeNode`.
+        state.tag = _tag
+        state.anchor = _anchor
+        return true // Keep the result of `composeNode`.
       }
     }
 
@@ -18687,32 +15203,32 @@ function readBlockMapping(state, nodeIndent, flowIndent) {
     //
     if (state.line === _line || state.lineIndent > nodeIndent) {
       if (atExplicitKey) {
-        _keyLine = state.line;
-        _keyLineStart = state.lineStart;
-        _keyPos = state.position;
+        _keyLine = state.line
+        _keyLineStart = state.lineStart
+        _keyPos = state.position
       }
 
       if (composeNode(state, nodeIndent, CONTEXT_BLOCK_OUT, true, allowCompact)) {
         if (atExplicitKey) {
-          keyNode = state.result;
+          keyNode = state.result
         } else {
-          valueNode = state.result;
+          valueNode = state.result
         }
       }
 
       if (!atExplicitKey) {
-        storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, _keyLine, _keyLineStart, _keyPos);
-        keyTag = keyNode = valueNode = null;
+        storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, _keyLine, _keyLineStart, _keyPos)
+        keyTag = keyNode = valueNode = null
       }
 
-      skipSeparationSpace(state, true, -1);
-      ch = state.input.charCodeAt(state.position);
+      skipSeparationSpace(state, true, -1)
+      ch = state.input.charCodeAt(state.position)
     }
 
     if ((state.line === _line || state.lineIndent > nodeIndent) && (ch !== 0)) {
-      throwError(state, 'bad indentation of a mapping entry');
+      throwError(state, 'bad indentation of a mapping entry')
     } else if (state.lineIndent < nodeIndent) {
-      break;
+      break
     }
   }
 
@@ -18722,293 +15238,330 @@ function readBlockMapping(state, nodeIndent, flowIndent) {
 
   // Special case: last mapping's node contains only the key in explicit notation.
   if (atExplicitKey) {
-    storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos);
+    storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos)
   }
 
   // Expose the resulting mapping.
   if (detected) {
-    state.tag = _tag;
-    state.anchor = _anchor;
-    state.kind = 'mapping';
-    state.result = _result;
+    state.tag = _tag
+    state.anchor = _anchor
+    state.kind = 'mapping'
+    state.result = _result
   }
 
-  return detected;
+  return detected
 }
 
-function readTagProperty(state) {
-  var _position,
-      isVerbatim = false,
-      isNamed    = false,
-      tagHandle,
-      tagName,
-      ch;
+function readTagProperty (state) {
+  let isVerbatim = false
+  let isNamed = false
+  let tagHandle
+  let tagName
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
-  if (ch !== 0x21/* ! */) return false;
+  if (ch !== 0x21/* ! */) return false
 
   if (state.tag !== null) {
-    throwError(state, 'duplication of a tag property');
+    throwError(state, 'duplication of a tag property')
   }
 
-  ch = state.input.charCodeAt(++state.position);
+  ch = state.input.charCodeAt(++state.position)
 
   if (ch === 0x3C/* < */) {
-    isVerbatim = true;
-    ch = state.input.charCodeAt(++state.position);
-
+    isVerbatim = true
+    ch = state.input.charCodeAt(++state.position)
   } else if (ch === 0x21/* ! */) {
-    isNamed = true;
-    tagHandle = '!!';
-    ch = state.input.charCodeAt(++state.position);
-
+    isNamed = true
+    tagHandle = '!!'
+    ch = state.input.charCodeAt(++state.position)
   } else {
-    tagHandle = '!';
+    tagHandle = '!'
   }
 
-  _position = state.position;
+  let _position = state.position
 
   if (isVerbatim) {
-    do { ch = state.input.charCodeAt(++state.position); }
-    while (ch !== 0 && ch !== 0x3E/* > */);
+    do { ch = state.input.charCodeAt(++state.position) }
+    while (ch !== 0 && ch !== 0x3E/* > */)
 
     if (state.position < state.length) {
-      tagName = state.input.slice(_position, state.position);
-      ch = state.input.charCodeAt(++state.position);
+      tagName = state.input.slice(_position, state.position)
+      ch = state.input.charCodeAt(++state.position)
     } else {
-      throwError(state, 'unexpected end of the stream within a verbatim tag');
+      throwError(state, 'unexpected end of the stream within a verbatim tag')
     }
   } else {
-    while (ch !== 0 && !is_WS_OR_EOL(ch)) {
-
+    while (ch !== 0 && !isWsOrEol(ch)) {
       if (ch === 0x21/* ! */) {
         if (!isNamed) {
-          tagHandle = state.input.slice(_position - 1, state.position + 1);
+          tagHandle = state.input.slice(_position - 1, state.position + 1)
 
           if (!PATTERN_TAG_HANDLE.test(tagHandle)) {
-            throwError(state, 'named tag handle cannot contain such characters');
+            throwError(state, 'named tag handle cannot contain such characters')
           }
 
-          isNamed = true;
-          _position = state.position + 1;
+          isNamed = true
+          _position = state.position + 1
         } else {
-          throwError(state, 'tag suffix cannot contain exclamation marks');
+          throwError(state, 'tag suffix cannot contain exclamation marks')
         }
       }
 
-      ch = state.input.charCodeAt(++state.position);
+      ch = state.input.charCodeAt(++state.position)
     }
 
-    tagName = state.input.slice(_position, state.position);
+    tagName = state.input.slice(_position, state.position)
 
     if (PATTERN_FLOW_INDICATORS.test(tagName)) {
-      throwError(state, 'tag suffix cannot contain flow indicator characters');
+      throwError(state, 'tag suffix cannot contain flow indicator characters')
     }
   }
 
   if (tagName && !PATTERN_TAG_URI.test(tagName)) {
-    throwError(state, 'tag name cannot contain such characters: ' + tagName);
+    throwError(state, 'tag name cannot contain such characters: ' + tagName)
   }
 
   try {
-    tagName = decodeURIComponent(tagName);
+    tagName = decodeURIComponent(tagName)
   } catch (err) {
-    throwError(state, 'tag name is malformed: ' + tagName);
+    throwError(state, 'tag name is malformed: ' + tagName)
   }
 
   if (isVerbatim) {
-    state.tag = tagName;
-
+    state.tag = tagName
   } else if (_hasOwnProperty.call(state.tagMap, tagHandle)) {
-    state.tag = state.tagMap[tagHandle] + tagName;
-
+    state.tag = state.tagMap[tagHandle] + tagName
   } else if (tagHandle === '!') {
-    state.tag = '!' + tagName;
-
+    state.tag = '!' + tagName
   } else if (tagHandle === '!!') {
-    state.tag = 'tag:yaml.org,2002:' + tagName;
-
+    state.tag = 'tag:yaml.org,2002:' + tagName
   } else {
-    throwError(state, 'undeclared tag handle "' + tagHandle + '"');
+    throwError(state, 'undeclared tag handle "' + tagHandle + '"')
   }
 
-  return true;
+  return true
 }
 
-function readAnchorProperty(state) {
-  var _position,
-      ch;
+function readAnchorProperty (state) {
+  let ch = state.input.charCodeAt(state.position)
 
-  ch = state.input.charCodeAt(state.position);
-
-  if (ch !== 0x26/* & */) return false;
+  if (ch !== 0x26/* & */) return false
 
   if (state.anchor !== null) {
-    throwError(state, 'duplication of an anchor property');
+    throwError(state, 'duplication of an anchor property')
   }
 
-  ch = state.input.charCodeAt(++state.position);
-  _position = state.position;
+  ch = state.input.charCodeAt(++state.position)
+  const _position = state.position
 
-  while (ch !== 0 && !is_WS_OR_EOL(ch) && !is_FLOW_INDICATOR(ch)) {
-    ch = state.input.charCodeAt(++state.position);
+  while (ch !== 0 && !isWsOrEol(ch) && !isFlowIndicator(ch)) {
+    ch = state.input.charCodeAt(++state.position)
   }
 
   if (state.position === _position) {
-    throwError(state, 'name of an anchor node must contain at least one character');
+    throwError(state, 'name of an anchor node must contain at least one character')
   }
 
-  state.anchor = state.input.slice(_position, state.position);
-  return true;
+  state.anchor = state.input.slice(_position, state.position)
+  return true
 }
 
-function readAlias(state) {
-  var _position, alias,
-      ch;
+function readAlias (state) {
+  let ch = state.input.charCodeAt(state.position)
 
-  ch = state.input.charCodeAt(state.position);
+  if (ch !== 0x2A/* * */) return false
 
-  if (ch !== 0x2A/* * */) return false;
+  ch = state.input.charCodeAt(++state.position)
+  const _position = state.position
 
-  ch = state.input.charCodeAt(++state.position);
-  _position = state.position;
-
-  while (ch !== 0 && !is_WS_OR_EOL(ch) && !is_FLOW_INDICATOR(ch)) {
-    ch = state.input.charCodeAt(++state.position);
+  while (ch !== 0 && !isWsOrEol(ch) && !isFlowIndicator(ch)) {
+    ch = state.input.charCodeAt(++state.position)
   }
 
   if (state.position === _position) {
-    throwError(state, 'name of an alias node must contain at least one character');
+    throwError(state, 'name of an alias node must contain at least one character')
   }
 
-  alias = state.input.slice(_position, state.position);
+  const alias = state.input.slice(_position, state.position)
 
   if (!_hasOwnProperty.call(state.anchorMap, alias)) {
-    throwError(state, 'unidentified alias "' + alias + '"');
+    throwError(state, 'unidentified alias "' + alias + '"')
   }
 
-  state.result = state.anchorMap[alias];
-  skipSeparationSpace(state, true, -1);
-  return true;
+  state.result = state.anchorMap[alias]
+  skipSeparationSpace(state, true, -1)
+  return true
 }
 
-function composeNode(state, parentIndent, nodeContext, allowToSeek, allowCompact) {
-  var allowBlockStyles,
-      allowBlockScalars,
-      allowBlockCollections,
-      indentStatus = 1, // 1: this>parent, 0: this=parent, -1: this<parent
-      atNewLine  = false,
-      hasContent = false,
-      typeIndex,
-      typeQuantity,
-      typeList,
-      type,
-      flowIndent,
-      blockIndent;
+function tryReadBlockMappingFromProperty (state, propertyStart, nodeIndent, flowIndent) {
+  const fallbackState = snapshotState(state)
 
-  if (state.listener !== null) {
-    state.listener('open', state);
+  beginAnchorTransaction(state)
+  restoreState(state, propertyStart)
+
+  // Re-read the leading properties as part of the first implicit key, not as
+  // properties of the current node.
+  state.tag = null
+  state.anchor = null
+  state.kind = null
+  state.result = null
+
+  if (readBlockMapping(state, nodeIndent, flowIndent) && state.kind === 'mapping') {
+    commitAnchorTransaction(state)
+    return true
   }
 
-  state.tag    = null;
-  state.anchor = null;
-  state.kind   = null;
-  state.result = null;
+  rollbackAnchorTransaction(state)
+  restoreState(state, fallbackState)
+  return false
+}
 
-  allowBlockStyles = allowBlockScalars = allowBlockCollections =
+function composeNode (state, parentIndent, nodeContext, allowToSeek, allowCompact) {
+  let allowBlockScalars
+  let allowBlockCollections
+  let indentStatus = 1 // 1: this>parent, 0: this=parent, -1: this<parent
+  let atNewLine = false
+  let hasContent = false
+  let propertyStart = null
+  let type
+  let flowIndent
+  let blockIndent
+
+  if (state.depth >= state.maxDepth) {
+    throwError(state, 'nesting exceeded maxDepth (' + state.maxDepth + ')')
+  }
+
+  state.depth += 1
+
+  if (state.listener !== null) {
+    state.listener('open', state)
+  }
+
+  state.tag = null
+  state.anchor = null
+  state.kind = null
+  state.result = null
+
+  const allowBlockStyles = allowBlockScalars = allowBlockCollections =
     CONTEXT_BLOCK_OUT === nodeContext ||
-    CONTEXT_BLOCK_IN  === nodeContext;
+    CONTEXT_BLOCK_IN === nodeContext
 
   if (allowToSeek) {
     if (skipSeparationSpace(state, true, -1)) {
-      atNewLine = true;
+      atNewLine = true
 
       if (state.lineIndent > parentIndent) {
-        indentStatus = 1;
+        indentStatus = 1
       } else if (state.lineIndent === parentIndent) {
-        indentStatus = 0;
+        indentStatus = 0
       } else if (state.lineIndent < parentIndent) {
-        indentStatus = -1;
+        indentStatus = -1
       }
     }
   }
 
   if (indentStatus === 1) {
-    while (readTagProperty(state) || readAnchorProperty(state)) {
+    while (true) {
+      const ch = state.input.charCodeAt(state.position)
+      const propertyState = snapshotState(state)
+
+      // A duplicate property token after a line break can be the first key of
+      // a nested block mapping, e.g. `!!map\n  !!str key: value`.
+      if (atNewLine &&
+          ((ch === 0x21/* ! */ && state.tag !== null) ||
+           (ch === 0x26/* & */ && state.anchor !== null))) {
+        break
+      }
+
+      if (!readTagProperty(state) && !readAnchorProperty(state)) {
+        break
+      }
+
+      if (propertyStart === null) {
+        propertyStart = propertyState
+      }
+
       if (skipSeparationSpace(state, true, -1)) {
-        atNewLine = true;
-        allowBlockCollections = allowBlockStyles;
+        atNewLine = true
+        allowBlockCollections = allowBlockStyles
 
         if (state.lineIndent > parentIndent) {
-          indentStatus = 1;
+          indentStatus = 1
         } else if (state.lineIndent === parentIndent) {
-          indentStatus = 0;
+          indentStatus = 0
         } else if (state.lineIndent < parentIndent) {
-          indentStatus = -1;
+          indentStatus = -1
         }
       } else {
-        allowBlockCollections = false;
+        allowBlockCollections = false
       }
     }
   }
 
   if (allowBlockCollections) {
-    allowBlockCollections = atNewLine || allowCompact;
+    allowBlockCollections = atNewLine || allowCompact
   }
 
   if (indentStatus === 1 || CONTEXT_BLOCK_OUT === nodeContext) {
     if (CONTEXT_FLOW_IN === nodeContext || CONTEXT_FLOW_OUT === nodeContext) {
-      flowIndent = parentIndent;
+      flowIndent = parentIndent
     } else {
-      flowIndent = parentIndent + 1;
+      flowIndent = parentIndent + 1
     }
 
-    blockIndent = state.position - state.lineStart;
+    blockIndent = state.position - state.lineStart
 
     if (indentStatus === 1) {
-      if (allowBlockCollections &&
-          (readBlockSequence(state, blockIndent) ||
-           readBlockMapping(state, blockIndent, flowIndent)) ||
+      if ((allowBlockCollections &&
+          (readBlockSequence(state, blockIndent) || readBlockMapping(state, blockIndent, flowIndent))) ||
           readFlowCollection(state, flowIndent)) {
-        hasContent = true;
+        hasContent = true
       } else {
-        if ((allowBlockScalars && readBlockScalar(state, flowIndent)) ||
+        const ch = state.input.charCodeAt(state.position)
+
+        if (propertyStart !== null && allowBlockStyles && !allowBlockCollections &&
+            ch !== 0x7C/* | */ && ch !== 0x3E/* > */ &&
+            tryReadBlockMappingFromProperty(
+              state,
+              propertyStart,
+              propertyStart.position - propertyStart.lineStart,
+              flowIndent
+            )) {
+          hasContent = true
+        } else if ((allowBlockScalars && readBlockScalar(state, flowIndent)) ||
             readSingleQuotedScalar(state, flowIndent) ||
             readDoubleQuotedScalar(state, flowIndent)) {
-          hasContent = true;
-
+          hasContent = true
         } else if (readAlias(state)) {
-          hasContent = true;
+          hasContent = true
 
           if (state.tag !== null || state.anchor !== null) {
-            throwError(state, 'alias node should not have any properties');
+            throwError(state, 'alias node should not have any properties')
           }
-
         } else if (readPlainScalar(state, flowIndent, CONTEXT_FLOW_IN === nodeContext)) {
-          hasContent = true;
+          hasContent = true
 
           if (state.tag === null) {
-            state.tag = '?';
+            state.tag = '?'
           }
         }
 
         if (state.anchor !== null) {
-          state.anchorMap[state.anchor] = state.result;
+          storeAnchor(state, state.anchor, state.result)
         }
       }
     } else if (indentStatus === 0) {
       // Special case: block sequences are allowed to have same indentation level as the parent.
       // http://www.yaml.org/spec/1.2/spec.html#id2799784
-      hasContent = allowBlockCollections && readBlockSequence(state, blockIndent);
+      hasContent = allowBlockCollections && readBlockSequence(state, blockIndent)
     }
   }
 
   if (state.tag === null) {
     if (state.anchor !== null) {
-      state.anchorMap[state.anchor] = state.result;
+      storeAnchor(state, state.anchor, state.result)
     }
-
   } else if (state.tag === '?') {
     // Implicit resolving is not allowed for non-scalar types, and '?'
     // non-specific tag is only automatically assigned to plain scalars.
@@ -19017,380 +15570,357 @@ function composeNode(state, parentIndent, nodeContext, allowToSeek, allowCompact
     // tag, for example like this: "!<?> [0]"
     //
     if (state.result !== null && state.kind !== 'scalar') {
-      throwError(state, 'unacceptable node kind for !<?> tag; it should be "scalar", not "' + state.kind + '"');
+      throwError(state, 'unacceptable node kind for !<?> tag; it should be "scalar", not "' + state.kind + '"')
     }
 
-    for (typeIndex = 0, typeQuantity = state.implicitTypes.length; typeIndex < typeQuantity; typeIndex += 1) {
-      type = state.implicitTypes[typeIndex];
+    for (let typeIndex = 0, typeQuantity = state.implicitTypes.length; typeIndex < typeQuantity; typeIndex += 1) {
+      type = state.implicitTypes[typeIndex]
 
       if (type.resolve(state.result)) { // `state.result` updated in resolver if matched
-        state.result = type.construct(state.result);
-        state.tag = type.tag;
+        state.result = type.construct(state.result)
+        state.tag = type.tag
         if (state.anchor !== null) {
-          state.anchorMap[state.anchor] = state.result;
+          storeAnchor(state, state.anchor, state.result)
         }
-        break;
+        break
       }
     }
   } else if (state.tag !== '!') {
     if (_hasOwnProperty.call(state.typeMap[state.kind || 'fallback'], state.tag)) {
-      type = state.typeMap[state.kind || 'fallback'][state.tag];
+      type = state.typeMap[state.kind || 'fallback'][state.tag]
     } else {
       // looking for multi type
-      type = null;
-      typeList = state.typeMap.multi[state.kind || 'fallback'];
+      type = null
+      const typeList = state.typeMap.multi[state.kind || 'fallback']
 
-      for (typeIndex = 0, typeQuantity = typeList.length; typeIndex < typeQuantity; typeIndex += 1) {
+      for (let typeIndex = 0, typeQuantity = typeList.length; typeIndex < typeQuantity; typeIndex += 1) {
         if (state.tag.slice(0, typeList[typeIndex].tag.length) === typeList[typeIndex].tag) {
-          type = typeList[typeIndex];
-          break;
+          type = typeList[typeIndex]
+          break
         }
       }
     }
 
     if (!type) {
-      throwError(state, 'unknown tag !<' + state.tag + '>');
+      throwError(state, 'unknown tag !<' + state.tag + '>')
     }
 
     if (state.result !== null && type.kind !== state.kind) {
-      throwError(state, 'unacceptable node kind for !<' + state.tag + '> tag; it should be "' + type.kind + '", not "' + state.kind + '"');
+      throwError(state, 'unacceptable node kind for !<' + state.tag + '> tag; it should be "' + type.kind + '", not "' + state.kind + '"')
     }
 
     if (!type.resolve(state.result, state.tag)) { // `state.result` updated in resolver if matched
-      throwError(state, 'cannot resolve a node with !<' + state.tag + '> explicit tag');
+      throwError(state, 'cannot resolve a node with !<' + state.tag + '> explicit tag')
     } else {
-      state.result = type.construct(state.result, state.tag);
+      state.result = type.construct(state.result, state.tag)
       if (state.anchor !== null) {
-        state.anchorMap[state.anchor] = state.result;
+        storeAnchor(state, state.anchor, state.result)
       }
     }
   }
 
   if (state.listener !== null) {
-    state.listener('close', state);
+    state.listener('close', state)
   }
-  return state.tag !== null ||  state.anchor !== null || hasContent;
+
+  state.depth -= 1
+  return state.tag !== null || state.anchor !== null || hasContent
 }
 
-function readDocument(state) {
-  var documentStart = state.position,
-      _position,
-      directiveName,
-      directiveArgs,
-      hasDirectives = false,
-      ch;
+function readDocument (state) {
+  const documentStart = state.position
+  let hasDirectives = false
+  let ch
 
-  state.version = null;
-  state.checkLineBreaks = state.legacy;
-  state.tagMap = Object.create(null);
-  state.anchorMap = Object.create(null);
+  state.version = null
+  state.checkLineBreaks = state.legacy
+  state.tagMap = Object.create(null)
+  state.anchorMap = Object.create(null)
 
   while ((ch = state.input.charCodeAt(state.position)) !== 0) {
-    skipSeparationSpace(state, true, -1);
+    skipSeparationSpace(state, true, -1)
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
     if (state.lineIndent > 0 || ch !== 0x25/* % */) {
-      break;
+      break
     }
 
-    hasDirectives = true;
-    ch = state.input.charCodeAt(++state.position);
-    _position = state.position;
+    hasDirectives = true
+    ch = state.input.charCodeAt(++state.position)
+    let _position = state.position
 
-    while (ch !== 0 && !is_WS_OR_EOL(ch)) {
-      ch = state.input.charCodeAt(++state.position);
+    while (ch !== 0 && !isWsOrEol(ch)) {
+      ch = state.input.charCodeAt(++state.position)
     }
 
-    directiveName = state.input.slice(_position, state.position);
-    directiveArgs = [];
+    const directiveName = state.input.slice(_position, state.position)
+    const directiveArgs = []
 
     if (directiveName.length < 1) {
-      throwError(state, 'directive name must not be less than one character in length');
+      throwError(state, 'directive name must not be less than one character in length')
     }
 
     while (ch !== 0) {
-      while (is_WHITE_SPACE(ch)) {
-        ch = state.input.charCodeAt(++state.position);
+      while (isWhiteSpace(ch)) {
+        ch = state.input.charCodeAt(++state.position)
       }
 
       if (ch === 0x23/* # */) {
-        do { ch = state.input.charCodeAt(++state.position); }
-        while (ch !== 0 && !is_EOL(ch));
-        break;
+        do { ch = state.input.charCodeAt(++state.position) }
+        while (ch !== 0 && !isEol(ch))
+        break
       }
 
-      if (is_EOL(ch)) break;
+      if (isEol(ch)) break
 
-      _position = state.position;
+      _position = state.position
 
-      while (ch !== 0 && !is_WS_OR_EOL(ch)) {
-        ch = state.input.charCodeAt(++state.position);
+      while (ch !== 0 && !isWsOrEol(ch)) {
+        ch = state.input.charCodeAt(++state.position)
       }
 
-      directiveArgs.push(state.input.slice(_position, state.position));
+      directiveArgs.push(state.input.slice(_position, state.position))
     }
 
-    if (ch !== 0) readLineBreak(state);
+    if (ch !== 0) readLineBreak(state)
 
     if (_hasOwnProperty.call(directiveHandlers, directiveName)) {
-      directiveHandlers[directiveName](state, directiveName, directiveArgs);
+      directiveHandlers[directiveName](state, directiveName, directiveArgs)
     } else {
-      throwWarning(state, 'unknown document directive "' + directiveName + '"');
+      throwWarning(state, 'unknown document directive "' + directiveName + '"')
     }
   }
 
-  skipSeparationSpace(state, true, -1);
+  skipSeparationSpace(state, true, -1)
 
   if (state.lineIndent === 0 &&
-      state.input.charCodeAt(state.position)     === 0x2D/* - */ &&
+      state.input.charCodeAt(state.position) === 0x2D/* - */ &&
       state.input.charCodeAt(state.position + 1) === 0x2D/* - */ &&
       state.input.charCodeAt(state.position + 2) === 0x2D/* - */) {
-    state.position += 3;
-    skipSeparationSpace(state, true, -1);
-
+    state.position += 3
+    skipSeparationSpace(state, true, -1)
   } else if (hasDirectives) {
-    throwError(state, 'directives end mark is expected');
+    throwError(state, 'directives end mark is expected')
   }
 
-  composeNode(state, state.lineIndent - 1, CONTEXT_BLOCK_OUT, false, true);
-  skipSeparationSpace(state, true, -1);
+  composeNode(state, state.lineIndent - 1, CONTEXT_BLOCK_OUT, false, true)
+  skipSeparationSpace(state, true, -1)
 
   if (state.checkLineBreaks &&
       PATTERN_NON_ASCII_LINE_BREAKS.test(state.input.slice(documentStart, state.position))) {
-    throwWarning(state, 'non-ASCII line breaks are interpreted as content');
+    throwWarning(state, 'non-ASCII line breaks are interpreted as content')
   }
 
-  state.documents.push(state.result);
+  state.documents.push(state.result)
 
   if (state.position === state.lineStart && testDocumentSeparator(state)) {
-
     if (state.input.charCodeAt(state.position) === 0x2E/* . */) {
-      state.position += 3;
-      skipSeparationSpace(state, true, -1);
+      state.position += 3
+      skipSeparationSpace(state, true, -1)
     }
-    return;
+    return
   }
 
   if (state.position < (state.length - 1)) {
-    throwError(state, 'end of the stream or a document separator is expected');
-  } else {
-    return;
+    throwError(state, 'end of the stream or a document separator is expected')
   }
 }
 
-
-function loadDocuments(input, options) {
-  input = String(input);
-  options = options || {};
+function loadDocuments (input, options) {
+  input = String(input)
+  options = options || {}
 
   if (input.length !== 0) {
-
     // Add tailing `\n` if not exists
     if (input.charCodeAt(input.length - 1) !== 0x0A/* LF */ &&
         input.charCodeAt(input.length - 1) !== 0x0D/* CR */) {
-      input += '\n';
+      input += '\n'
     }
 
     // Strip BOM
     if (input.charCodeAt(0) === 0xFEFF) {
-      input = input.slice(1);
+      input = input.slice(1)
     }
   }
 
-  var state = new State(input, options);
+  const state = new State(input, options)
 
-  var nullpos = input.indexOf('\0');
+  const nullpos = input.indexOf('\0')
 
   if (nullpos !== -1) {
-    state.position = nullpos;
-    throwError(state, 'null byte is not allowed in input');
+    state.position = nullpos
+    throwError(state, 'null byte is not allowed in input')
   }
 
   // Use 0 as string terminator. That significantly simplifies bounds check.
-  state.input += '\0';
+  state.input += '\0'
 
   while (state.input.charCodeAt(state.position) === 0x20/* Space */) {
-    state.lineIndent += 1;
-    state.position += 1;
+    state.lineIndent += 1
+    state.position += 1
   }
 
   while (state.position < (state.length - 1)) {
-    readDocument(state);
+    readDocument(state)
   }
 
-  return state.documents;
+  return state.documents
 }
 
-
-function loadAll(input, iterator, options) {
+function loadAll (input, iterator, options) {
   if (iterator !== null && typeof iterator === 'object' && typeof options === 'undefined') {
-    options = iterator;
-    iterator = null;
+    options = iterator
+    iterator = null
   }
 
-  var documents = loadDocuments(input, options);
+  const documents = loadDocuments(input, options)
 
   if (typeof iterator !== 'function') {
-    return documents;
+    return documents
   }
 
-  for (var index = 0, length = documents.length; index < length; index += 1) {
-    iterator(documents[index]);
+  for (let index = 0, length = documents.length; index < length; index += 1) {
+    iterator(documents[index])
   }
 }
 
-
-function load(input, options) {
-  var documents = loadDocuments(input, options);
+function load (input, options) {
+  const documents = loadDocuments(input, options)
 
   if (documents.length === 0) {
-    /*eslint-disable no-undefined*/
-    return undefined;
+    return undefined
   } else if (documents.length === 1) {
-    return documents[0];
+    return documents[0]
   }
-  throw new YAMLException('expected a single document in the stream, but found more');
+  throw new YAMLException('expected a single document in the stream, but found more')
 }
 
-
-module.exports.loadAll = loadAll;
-module.exports.load    = load;
+module.exports.loadAll = loadAll
+module.exports.load = load
 
 
 /***/ }),
 
 /***/ 2046:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-/*eslint-disable max-len*/
+const YAMLException = __nccwpck_require__(1248)
+const Type = __nccwpck_require__(9557)
 
-var YAMLException = __nccwpck_require2_(1248);
-var Type          = __nccwpck_require2_(9557);
-
-
-function compileList(schema, name) {
-  var result = [];
+function compileList (schema, name) {
+  const result = []
 
   schema[name].forEach(function (currentType) {
-    var newIndex = result.length;
+    let newIndex = result.length
 
     result.forEach(function (previousType, previousIndex) {
       if (previousType.tag === currentType.tag &&
           previousType.kind === currentType.kind &&
           previousType.multi === currentType.multi) {
-
-        newIndex = previousIndex;
+        newIndex = previousIndex
       }
-    });
+    })
 
-    result[newIndex] = currentType;
-  });
+    result[newIndex] = currentType
+  })
 
-  return result;
+  return result
 }
 
-
-function compileMap(/* lists... */) {
-  var result = {
-        scalar: {},
-        sequence: {},
-        mapping: {},
-        fallback: {},
-        multi: {
-          scalar: [],
-          sequence: [],
-          mapping: [],
-          fallback: []
-        }
-      }, index, length;
-
-  function collectType(type) {
+function compileMap (/* lists... */) {
+  const result = {
+    scalar: {},
+    sequence: {},
+    mapping: {},
+    fallback: {},
+    multi: {
+      scalar: [],
+      sequence: [],
+      mapping: [],
+      fallback: []
+    }
+  }
+  function collectType (type) {
     if (type.multi) {
-      result.multi[type.kind].push(type);
-      result.multi['fallback'].push(type);
+      result.multi[type.kind].push(type)
+      result.multi['fallback'].push(type)
     } else {
-      result[type.kind][type.tag] = result['fallback'][type.tag] = type;
+      result[type.kind][type.tag] = result['fallback'][type.tag] = type
     }
   }
 
-  for (index = 0, length = arguments.length; index < length; index += 1) {
-    arguments[index].forEach(collectType);
+  for (let index = 0, length = arguments.length; index < length; index += 1) {
+    arguments[index].forEach(collectType)
   }
-  return result;
+  return result
 }
 
-
-function Schema(definition) {
-  return this.extend(definition);
+function Schema (definition) {
+  return this.extend(definition)
 }
 
-
-Schema.prototype.extend = function extend(definition) {
-  var implicit = [];
-  var explicit = [];
+Schema.prototype.extend = function extend (definition) {
+  let implicit = []
+  let explicit = []
 
   if (definition instanceof Type) {
     // Schema.extend(type)
-    explicit.push(definition);
-
+    explicit.push(definition)
   } else if (Array.isArray(definition)) {
     // Schema.extend([ type1, type2, ... ])
-    explicit = explicit.concat(definition);
-
+    explicit = explicit.concat(definition)
   } else if (definition && (Array.isArray(definition.implicit) || Array.isArray(definition.explicit))) {
     // Schema.extend({ explicit: [ type1, type2, ... ], implicit: [ type1, type2, ... ] })
-    if (definition.implicit) implicit = implicit.concat(definition.implicit);
-    if (definition.explicit) explicit = explicit.concat(definition.explicit);
-
+    if (definition.implicit) implicit = implicit.concat(definition.implicit)
+    if (definition.explicit) explicit = explicit.concat(definition.explicit)
   } else {
     throw new YAMLException('Schema.extend argument should be a Type, [ Type ], ' +
-      'or a schema definition ({ implicit: [...], explicit: [...] })');
+      'or a schema definition ({ implicit: [...], explicit: [...] })')
   }
 
   implicit.forEach(function (type) {
     if (!(type instanceof Type)) {
-      throw new YAMLException('Specified list of YAML types (or a single Type object) contains a non-Type object.');
+      throw new YAMLException('Specified list of YAML types (or a single Type object) contains a non-Type object.')
     }
 
     if (type.loadKind && type.loadKind !== 'scalar') {
-      throw new YAMLException('There is a non-scalar type in the implicit list of a schema. Implicit resolving of such types is not supported.');
+      throw new YAMLException('There is a non-scalar type in the implicit list of a schema. Implicit resolving of such types is not supported.')
     }
 
     if (type.multi) {
-      throw new YAMLException('There is a multi type in the implicit list of a schema. Multi tags can only be listed as explicit.');
+      throw new YAMLException('There is a multi type in the implicit list of a schema. Multi tags can only be listed as explicit.')
     }
-  });
+  })
 
   explicit.forEach(function (type) {
     if (!(type instanceof Type)) {
-      throw new YAMLException('Specified list of YAML types (or a single Type object) contains a non-Type object.');
+      throw new YAMLException('Specified list of YAML types (or a single Type object) contains a non-Type object.')
     }
-  });
+  })
 
-  var result = Object.create(Schema.prototype);
+  const result = Object.create(Schema.prototype)
 
-  result.implicit = (this.implicit || []).concat(implicit);
-  result.explicit = (this.explicit || []).concat(explicit);
+  result.implicit = (this.implicit || []).concat(implicit)
+  result.explicit = (this.explicit || []).concat(explicit)
 
-  result.compiledImplicit = compileList(result, 'implicit');
-  result.compiledExplicit = compileList(result, 'explicit');
-  result.compiledTypeMap  = compileMap(result.compiledImplicit, result.compiledExplicit);
+  result.compiledImplicit = compileList(result, 'implicit')
+  result.compiledExplicit = compileList(result, 'explicit')
+  result.compiledTypeMap = compileMap(result.compiledImplicit, result.compiledExplicit)
 
-  return result;
-};
+  return result
+}
 
-
-module.exports = Schema;
+module.exports = Schema
 
 
 /***/ }),
 
 /***/ 5746:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Standard YAML's Core schema.
@@ -19401,15 +15931,13 @@ module.exports = Schema;
 
 
 
-
-
-module.exports = __nccwpck_require2_(8927);
+module.exports = __nccwpck_require__(8927)
 
 
 /***/ }),
 
 /***/ 7336:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // JS-YAML's default schema for `safeLoad` function.
@@ -19420,26 +15948,24 @@ module.exports = __nccwpck_require2_(8927);
 
 
 
-
-
-module.exports = (__nccwpck_require2_(5746).extend)({
+module.exports = (__nccwpck_require__(5746).extend)({
   implicit: [
-    __nccwpck_require2_(8966),
-    __nccwpck_require2_(6854)
+    __nccwpck_require__(8966),
+    __nccwpck_require__(6854)
   ],
   explicit: [
-    __nccwpck_require2_(8149),
-    __nccwpck_require2_(8649),
-    __nccwpck_require2_(6267),
-    __nccwpck_require2_(8758)
+    __nccwpck_require__(8149),
+    __nccwpck_require__(8649),
+    __nccwpck_require__(6267),
+    __nccwpck_require__(8758)
   ]
-});
+})
 
 
 /***/ }),
 
 /***/ 9832:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Standard YAML's Failsafe schema.
@@ -19447,24 +15973,21 @@ module.exports = (__nccwpck_require2_(5746).extend)({
 
 
 
-
-
-var Schema = __nccwpck_require2_(2046);
-
+const Schema = __nccwpck_require__(2046)
 
 module.exports = new Schema({
   explicit: [
-    __nccwpck_require2_(3929),
-    __nccwpck_require2_(7161),
-    __nccwpck_require2_(7316)
+    __nccwpck_require__(3929),
+    __nccwpck_require__(7161),
+    __nccwpck_require__(7316)
   ]
-});
+})
 
 
 /***/ }),
 
 /***/ 8927:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Standard YAML's JSON schema.
@@ -19476,138 +15999,131 @@ module.exports = new Schema({
 
 
 
-
-
-module.exports = (__nccwpck_require2_(9832).extend)({
+module.exports = (__nccwpck_require__(9832).extend)({
   implicit: [
-    __nccwpck_require2_(4333),
-    __nccwpck_require2_(7296),
-    __nccwpck_require2_(4652),
-    __nccwpck_require2_(7584)
+    __nccwpck_require__(4333),
+    __nccwpck_require__(7296),
+    __nccwpck_require__(4652),
+    __nccwpck_require__(7584)
   ]
-});
+})
 
 
 /***/ }),
 
 /***/ 9440:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-
-var common = __nccwpck_require2_(9816);
-
+const common = __nccwpck_require__(9816)
 
 // get snippet for a single line, respecting maxLength
-function getLine(buffer, lineStart, lineEnd, position, maxLineLength) {
-  var head = '';
-  var tail = '';
-  var maxHalfLength = Math.floor(maxLineLength / 2) - 1;
+function getLine (buffer, lineStart, lineEnd, position, maxLineLength) {
+  let head = ''
+  let tail = ''
+  const maxHalfLength = Math.floor(maxLineLength / 2) - 1
 
   if (position - lineStart > maxHalfLength) {
-    head = ' ... ';
-    lineStart = position - maxHalfLength + head.length;
+    head = ' ... '
+    lineStart = position - maxHalfLength + head.length
   }
 
   if (lineEnd - position > maxHalfLength) {
-    tail = ' ...';
-    lineEnd = position + maxHalfLength - tail.length;
+    tail = ' ...'
+    lineEnd = position + maxHalfLength - tail.length
   }
 
   return {
     str: head + buffer.slice(lineStart, lineEnd).replace(/\t/g, '→') + tail,
     pos: position - lineStart + head.length // relative position
-  };
+  }
 }
 
-
-function padStart(string, max) {
-  return common.repeat(' ', max - string.length) + string;
+function padStart (string, max) {
+  return common.repeat(' ', max - string.length) + string
 }
 
+function makeSnippet (mark, options) {
+  options = Object.create(options || null)
 
-function makeSnippet(mark, options) {
-  options = Object.create(options || null);
+  if (!mark.buffer) return null
 
-  if (!mark.buffer) return null;
+  if (!options.maxLength) options.maxLength = 79
+  if (typeof options.indent !== 'number') options.indent = 1
+  if (typeof options.linesBefore !== 'number') options.linesBefore = 3
+  if (typeof options.linesAfter !== 'number') options.linesAfter = 2
 
-  if (!options.maxLength) options.maxLength = 79;
-  if (typeof options.indent      !== 'number') options.indent      = 1;
-  if (typeof options.linesBefore !== 'number') options.linesBefore = 3;
-  if (typeof options.linesAfter  !== 'number') options.linesAfter  = 2;
-
-  var re = /\r?\n|\r|\0/g;
-  var lineStarts = [ 0 ];
-  var lineEnds = [];
-  var match;
-  var foundLineNo = -1;
+  const re = /\r?\n|\r|\0/g
+  const lineStarts = [0]
+  const lineEnds = []
+  let match
+  let foundLineNo = -1
 
   while ((match = re.exec(mark.buffer))) {
-    lineEnds.push(match.index);
-    lineStarts.push(match.index + match[0].length);
+    lineEnds.push(match.index)
+    lineStarts.push(match.index + match[0].length)
 
     if (mark.position <= match.index && foundLineNo < 0) {
-      foundLineNo = lineStarts.length - 2;
+      foundLineNo = lineStarts.length - 2
     }
   }
 
-  if (foundLineNo < 0) foundLineNo = lineStarts.length - 1;
+  if (foundLineNo < 0) foundLineNo = lineStarts.length - 1
 
-  var result = '', i, line;
-  var lineNoLength = Math.min(mark.line + options.linesAfter, lineEnds.length).toString().length;
-  var maxLineLength = options.maxLength - (options.indent + lineNoLength + 3);
+  let result = ''
+  const lineNoLength = Math.min(mark.line + options.linesAfter, lineEnds.length).toString().length
+  const maxLineLength = options.maxLength - (options.indent + lineNoLength + 3)
 
-  for (i = 1; i <= options.linesBefore; i++) {
-    if (foundLineNo - i < 0) break;
-    line = getLine(
+  for (let i = 1; i <= options.linesBefore; i++) {
+    if (foundLineNo - i < 0) break
+    const line = getLine(
       mark.buffer,
       lineStarts[foundLineNo - i],
       lineEnds[foundLineNo - i],
       mark.position - (lineStarts[foundLineNo] - lineStarts[foundLineNo - i]),
       maxLineLength
-    );
+    )
     result = common.repeat(' ', options.indent) + padStart((mark.line - i + 1).toString(), lineNoLength) +
-      ' | ' + line.str + '\n' + result;
+      ' | ' + line.str + '\n' + result
   }
 
-  line = getLine(mark.buffer, lineStarts[foundLineNo], lineEnds[foundLineNo], mark.position, maxLineLength);
+  const line = getLine(mark.buffer, lineStarts[foundLineNo], lineEnds[foundLineNo], mark.position, maxLineLength)
   result += common.repeat(' ', options.indent) + padStart((mark.line + 1).toString(), lineNoLength) +
-    ' | ' + line.str + '\n';
-  result += common.repeat('-', options.indent + lineNoLength + 3 + line.pos) + '^' + '\n';
+    ' | ' + line.str + '\n'
+  result += common.repeat('-', options.indent + lineNoLength + 3 + line.pos) + '^' + '\n'
 
-  for (i = 1; i <= options.linesAfter; i++) {
-    if (foundLineNo + i >= lineEnds.length) break;
-    line = getLine(
+  for (let i = 1; i <= options.linesAfter; i++) {
+    if (foundLineNo + i >= lineEnds.length) break
+    const line = getLine(
       mark.buffer,
       lineStarts[foundLineNo + i],
       lineEnds[foundLineNo + i],
       mark.position - (lineStarts[foundLineNo] - lineStarts[foundLineNo + i]),
       maxLineLength
-    );
+    )
     result += common.repeat(' ', options.indent) + padStart((mark.line + i + 1).toString(), lineNoLength) +
-      ' | ' + line.str + '\n';
+      ' | ' + line.str + '\n'
   }
 
-  return result.replace(/\n$/, '');
+  return result.replace(/\n$/, '')
 }
 
-
-module.exports = makeSnippet;
+module.exports = makeSnippet
 
 
 /***/ }),
 
 /***/ 9557:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var YAMLException = __nccwpck_require2_(1248);
+const YAMLException = __nccwpck_require__(1248)
 
-var TYPE_CONSTRUCTOR_OPTIONS = [
+const TYPE_CONSTRUCTOR_OPTIONS = [
   'kind',
   'multi',
   'resolve',
@@ -19618,181 +16134,178 @@ var TYPE_CONSTRUCTOR_OPTIONS = [
   'representName',
   'defaultStyle',
   'styleAliases'
-];
+]
 
-var YAML_NODE_KINDS = [
+const YAML_NODE_KINDS = [
   'scalar',
   'sequence',
   'mapping'
-];
+]
 
-function compileStyleAliases(map) {
-  var result = {};
+function compileStyleAliases (map) {
+  const result = {}
 
   if (map !== null) {
     Object.keys(map).forEach(function (style) {
       map[style].forEach(function (alias) {
-        result[String(alias)] = style;
-      });
-    });
+        result[String(alias)] = style
+      })
+    })
   }
 
-  return result;
+  return result
 }
 
-function Type(tag, options) {
-  options = options || {};
+function Type (tag, options) {
+  options = options || {}
 
   Object.keys(options).forEach(function (name) {
     if (TYPE_CONSTRUCTOR_OPTIONS.indexOf(name) === -1) {
-      throw new YAMLException('Unknown option "' + name + '" is met in definition of "' + tag + '" YAML type.');
+      throw new YAMLException('Unknown option "' + name + '" is met in definition of "' + tag + '" YAML type.')
     }
-  });
+  })
 
   // TODO: Add tag format check.
-  this.options       = options; // keep original options in case user wants to extend this type later
-  this.tag           = tag;
-  this.kind          = options['kind']          || null;
-  this.resolve       = options['resolve']       || function () { return true; };
-  this.construct     = options['construct']     || function (data) { return data; };
-  this.instanceOf    = options['instanceOf']    || null;
-  this.predicate     = options['predicate']     || null;
-  this.represent     = options['represent']     || null;
-  this.representName = options['representName'] || null;
-  this.defaultStyle  = options['defaultStyle']  || null;
-  this.multi         = options['multi']         || false;
-  this.styleAliases  = compileStyleAliases(options['styleAliases'] || null);
+  this.options = options // keep original options in case user wants to extend this type later
+  this.tag = tag
+  this.kind = options['kind'] || null
+  this.resolve = options['resolve'] || function () { return true }
+  this.construct = options['construct'] || function (data) { return data }
+  this.instanceOf = options['instanceOf'] || null
+  this.predicate = options['predicate'] || null
+  this.represent = options['represent'] || null
+  this.representName = options['representName'] || null
+  this.defaultStyle = options['defaultStyle'] || null
+  this.multi = options['multi'] || false
+  this.styleAliases = compileStyleAliases(options['styleAliases'] || null)
 
   if (YAML_NODE_KINDS.indexOf(this.kind) === -1) {
-    throw new YAMLException('Unknown kind "' + this.kind + '" is specified for "' + tag + '" YAML type.');
+    throw new YAMLException('Unknown kind "' + this.kind + '" is specified for "' + tag + '" YAML type.')
   }
 }
 
-module.exports = Type;
+module.exports = Type
 
 
 /***/ }),
 
 /***/ 8149:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-/*eslint-disable no-bitwise*/
-
-
-var Type = __nccwpck_require2_(9557);
-
+const Type = __nccwpck_require__(9557)
 
 // [ 64, 65, 66 ] -> [ padding, CR, LF ]
-var BASE64_MAP = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n\r';
+const BASE64_MAP = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n\r'
 
+function resolveYamlBinary (data) {
+  if (data === null) return false
 
-function resolveYamlBinary(data) {
-  if (data === null) return false;
-
-  var code, idx, bitlen = 0, max = data.length, map = BASE64_MAP;
+  let bitlen = 0
+  const max = data.length
+  const map = BASE64_MAP
 
   // Convert one by one.
-  for (idx = 0; idx < max; idx++) {
-    code = map.indexOf(data.charAt(idx));
+  for (let idx = 0; idx < max; idx++) {
+    const code = map.indexOf(data.charAt(idx))
 
     // Skip CR/LF
-    if (code > 64) continue;
+    if (code > 64) continue
 
     // Fail on illegal characters
-    if (code < 0) return false;
+    if (code < 0) return false
 
-    bitlen += 6;
+    bitlen += 6
   }
 
   // If there are any bits left, source was corrupted
-  return (bitlen % 8) === 0;
+  return (bitlen % 8) === 0
 }
 
-function constructYamlBinary(data) {
-  var idx, tailbits,
-      input = data.replace(/[\r\n=]/g, ''), // remove CR/LF & padding to simplify scan
-      max = input.length,
-      map = BASE64_MAP,
-      bits = 0,
-      result = [];
+function constructYamlBinary (data) {
+  const input = data.replace(/[\r\n=]/g, '') // remove CR/LF & padding to simplify scan
+  const max = input.length
+  const map = BASE64_MAP
+  let bits = 0
+  const result = []
 
   // Collect by 6*4 bits (3 bytes)
 
-  for (idx = 0; idx < max; idx++) {
+  for (let idx = 0; idx < max; idx++) {
     if ((idx % 4 === 0) && idx) {
-      result.push((bits >> 16) & 0xFF);
-      result.push((bits >> 8) & 0xFF);
-      result.push(bits & 0xFF);
+      result.push((bits >> 16) & 0xFF)
+      result.push((bits >> 8) & 0xFF)
+      result.push(bits & 0xFF)
     }
 
-    bits = (bits << 6) | map.indexOf(input.charAt(idx));
+    bits = (bits << 6) | map.indexOf(input.charAt(idx))
   }
 
   // Dump tail
 
-  tailbits = (max % 4) * 6;
+  const tailbits = (max % 4) * 6
 
   if (tailbits === 0) {
-    result.push((bits >> 16) & 0xFF);
-    result.push((bits >> 8) & 0xFF);
-    result.push(bits & 0xFF);
+    result.push((bits >> 16) & 0xFF)
+    result.push((bits >> 8) & 0xFF)
+    result.push(bits & 0xFF)
   } else if (tailbits === 18) {
-    result.push((bits >> 10) & 0xFF);
-    result.push((bits >> 2) & 0xFF);
+    result.push((bits >> 10) & 0xFF)
+    result.push((bits >> 2) & 0xFF)
   } else if (tailbits === 12) {
-    result.push((bits >> 4) & 0xFF);
+    result.push((bits >> 4) & 0xFF)
   }
 
-  return new Uint8Array(result);
+  return new Uint8Array(result)
 }
 
-function representYamlBinary(object /*, style*/) {
-  var result = '', bits = 0, idx, tail,
-      max = object.length,
-      map = BASE64_MAP;
+function representYamlBinary (object /*, style */) {
+  let result = ''
+  let bits = 0
+  const max = object.length
+  const map = BASE64_MAP
 
   // Convert every three bytes to 4 ASCII characters.
 
-  for (idx = 0; idx < max; idx++) {
+  for (let idx = 0; idx < max; idx++) {
     if ((idx % 3 === 0) && idx) {
-      result += map[(bits >> 18) & 0x3F];
-      result += map[(bits >> 12) & 0x3F];
-      result += map[(bits >> 6) & 0x3F];
-      result += map[bits & 0x3F];
+      result += map[(bits >> 18) & 0x3F]
+      result += map[(bits >> 12) & 0x3F]
+      result += map[(bits >> 6) & 0x3F]
+      result += map[bits & 0x3F]
     }
 
-    bits = (bits << 8) + object[idx];
+    bits = (bits << 8) + object[idx]
   }
 
   // Dump tail
 
-  tail = max % 3;
+  const tail = max % 3
 
   if (tail === 0) {
-    result += map[(bits >> 18) & 0x3F];
-    result += map[(bits >> 12) & 0x3F];
-    result += map[(bits >> 6) & 0x3F];
-    result += map[bits & 0x3F];
+    result += map[(bits >> 18) & 0x3F]
+    result += map[(bits >> 12) & 0x3F]
+    result += map[(bits >> 6) & 0x3F]
+    result += map[bits & 0x3F]
   } else if (tail === 2) {
-    result += map[(bits >> 10) & 0x3F];
-    result += map[(bits >> 4) & 0x3F];
-    result += map[(bits << 2) & 0x3F];
-    result += map[64];
+    result += map[(bits >> 10) & 0x3F]
+    result += map[(bits >> 4) & 0x3F]
+    result += map[(bits << 2) & 0x3F]
+    result += map[64]
   } else if (tail === 1) {
-    result += map[(bits >> 2) & 0x3F];
-    result += map[(bits << 4) & 0x3F];
-    result += map[64];
-    result += map[64];
+    result += map[(bits >> 2) & 0x3F]
+    result += map[(bits << 4) & 0x3F]
+    result += map[64]
+    result += map[64]
   }
 
-  return result;
+  return result
 }
 
-function isBinary(obj) {
-  return Object.prototype.toString.call(obj) ===  '[object Uint8Array]';
+function isBinary (obj) {
+  return Object.prototype.toString.call(obj) === '[object Uint8Array]'
 }
 
 module.exports = new Type('tag:yaml.org,2002:binary', {
@@ -19801,36 +16314,36 @@ module.exports = new Type('tag:yaml.org,2002:binary', {
   construct: constructYamlBinary,
   predicate: isBinary,
   represent: representYamlBinary
-});
+})
 
 
 /***/ }),
 
 /***/ 7296:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var Type = __nccwpck_require2_(9557);
+const Type = __nccwpck_require__(9557)
 
-function resolveYamlBoolean(data) {
-  if (data === null) return false;
+function resolveYamlBoolean (data) {
+  if (data === null) return false
 
-  var max = data.length;
+  const max = data.length
 
   return (max === 4 && (data === 'true' || data === 'True' || data === 'TRUE')) ||
-         (max === 5 && (data === 'false' || data === 'False' || data === 'FALSE'));
+         (max === 5 && (data === 'false' || data === 'False' || data === 'FALSE'))
 }
 
-function constructYamlBoolean(data) {
+function constructYamlBoolean (data) {
   return data === 'true' ||
          data === 'True' ||
-         data === 'TRUE';
+         data === 'TRUE'
 }
 
-function isBoolean(object) {
-  return Object.prototype.toString.call(object) === '[object Boolean]';
+function isBoolean (object) {
+  return Object.prototype.toString.call(object) === '[object Boolean]'
 }
 
 module.exports = new Type('tag:yaml.org,2002:bool', {
@@ -19839,107 +16352,109 @@ module.exports = new Type('tag:yaml.org,2002:bool', {
   construct: constructYamlBoolean,
   predicate: isBoolean,
   represent: {
-    lowercase: function (object) { return object ? 'true' : 'false'; },
-    uppercase: function (object) { return object ? 'TRUE' : 'FALSE'; },
-    camelcase: function (object) { return object ? 'True' : 'False'; }
+    lowercase: function (object) { return object ? 'true' : 'false' },
+    uppercase: function (object) { return object ? 'TRUE' : 'FALSE' },
+    camelcase: function (object) { return object ? 'True' : 'False' }
   },
   defaultStyle: 'lowercase'
-});
+})
 
 
 /***/ }),
 
 /***/ 7584:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var common = __nccwpck_require2_(9816);
-var Type   = __nccwpck_require2_(9557);
+const common = __nccwpck_require__(9816)
+const Type = __nccwpck_require__(9557)
 
-var YAML_FLOAT_PATTERN = new RegExp(
+const YAML_FLOAT_PATTERN = new RegExp(
   // 2.5e4, 2.5 and integers
-  '^(?:[-+]?(?:[0-9][0-9_]*)(?:\\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?' +
+  '^(?:[-+]?(?:[0-9]+)(?:\\.[0-9]*)?(?:[eE][-+]?[0-9]+)?' +
   // .2e4, .2
   // special case, seems not from spec
-  '|\\.[0-9_]+(?:[eE][-+]?[0-9]+)?' +
+  '|\\.[0-9]+(?:[eE][-+]?[0-9]+)?' +
   // .inf
   '|[-+]?\\.(?:inf|Inf|INF)' +
   // .nan
-  '|\\.(?:nan|NaN|NAN))$');
+  '|\\.(?:nan|NaN|NAN))$')
 
-function resolveYamlFloat(data) {
-  if (data === null) return false;
+const YAML_FLOAT_SPECIAL_PATTERN = new RegExp(
+  '^(?:' +
+  // .inf
+  '[-+]?\\.(?:inf|Inf|INF)' +
+  // .nan
+  '|\\.(?:nan|NaN|NAN))$')
 
-  if (!YAML_FLOAT_PATTERN.test(data) ||
-      // Quick hack to not allow integers end with `_`
-      // Probably should update regexp & check speed
-      data[data.length - 1] === '_') {
-    return false;
+function resolveYamlFloat (data) {
+  if (data === null) return false
+
+  if (!YAML_FLOAT_PATTERN.test(data)) {
+    return false
   }
 
-  return true;
+  if (isFinite(parseFloat(data, 10))) {
+    return true
+  }
+
+  return YAML_FLOAT_SPECIAL_PATTERN.test(data)
 }
 
-function constructYamlFloat(data) {
-  var value, sign;
-
-  value  = data.replace(/_/g, '').toLowerCase();
-  sign   = value[0] === '-' ? -1 : 1;
+function constructYamlFloat (data) {
+  let value = data.toLowerCase()
+  const sign = value[0] === '-' ? -1 : 1
 
   if ('+-'.indexOf(value[0]) >= 0) {
-    value = value.slice(1);
+    value = value.slice(1)
   }
 
   if (value === '.inf') {
-    return (sign === 1) ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
-
+    return (sign === 1) ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY
   } else if (value === '.nan') {
-    return NaN;
+    return NaN
   }
-  return sign * parseFloat(value, 10);
+  return sign * parseFloat(value, 10)
 }
 
+const SCIENTIFIC_WITHOUT_DOT = /^[-+]?[0-9]+e/
 
-var SCIENTIFIC_WITHOUT_DOT = /^[-+]?[0-9]+e/;
-
-function representYamlFloat(object, style) {
-  var res;
-
+function representYamlFloat (object, style) {
   if (isNaN(object)) {
     switch (style) {
-      case 'lowercase': return '.nan';
-      case 'uppercase': return '.NAN';
-      case 'camelcase': return '.NaN';
+      case 'lowercase': return '.nan'
+      case 'uppercase': return '.NAN'
+      case 'camelcase': return '.NaN'
     }
   } else if (Number.POSITIVE_INFINITY === object) {
     switch (style) {
-      case 'lowercase': return '.inf';
-      case 'uppercase': return '.INF';
-      case 'camelcase': return '.Inf';
+      case 'lowercase': return '.inf'
+      case 'uppercase': return '.INF'
+      case 'camelcase': return '.Inf'
     }
   } else if (Number.NEGATIVE_INFINITY === object) {
     switch (style) {
-      case 'lowercase': return '-.inf';
-      case 'uppercase': return '-.INF';
-      case 'camelcase': return '-.Inf';
+      case 'lowercase': return '-.inf'
+      case 'uppercase': return '-.INF'
+      case 'camelcase': return '-.Inf'
     }
   } else if (common.isNegativeZero(object)) {
-    return '-0.0';
+    return '-0.0'
   }
 
-  res = object.toString(10);
+  const res = object.toString(10)
 
   // JS stringifier can build scientific format without dots: 5e-100,
   // while YAML requres dot: 5.e-100. Fix it with simple hack
 
-  return SCIENTIFIC_WITHOUT_DOT.test(res) ? res.replace('e', '.e') : res;
+  return SCIENTIFIC_WITHOUT_DOT.test(res) ? res.replace('e', '.e') : res
 }
 
-function isFloat(object) {
+function isFloat (object) {
   return (Object.prototype.toString.call(object) === '[object Number]') &&
-         (object % 1 !== 0 || common.isNegativeZero(object));
+         (object % 1 !== 0 || common.isNegativeZero(object))
 }
 
 module.exports = new Type('tag:yaml.org,2002:float', {
@@ -19949,149 +16464,136 @@ module.exports = new Type('tag:yaml.org,2002:float', {
   predicate: isFloat,
   represent: representYamlFloat,
   defaultStyle: 'lowercase'
-});
+})
 
 
 /***/ }),
 
 /***/ 4652:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var common = __nccwpck_require2_(9816);
-var Type   = __nccwpck_require2_(9557);
+const common = __nccwpck_require__(9816)
+const Type = __nccwpck_require__(9557)
 
-function isHexCode(c) {
-  return ((0x30/* 0 */ <= c) && (c <= 0x39/* 9 */)) ||
-         ((0x41/* A */ <= c) && (c <= 0x46/* F */)) ||
-         ((0x61/* a */ <= c) && (c <= 0x66/* f */));
+function isHexCode (c) {
+  return ((c >= 0x30/* 0 */) && (c <= 0x39/* 9 */)) ||
+         ((c >= 0x41/* A */) && (c <= 0x46/* F */)) ||
+         ((c >= 0x61/* a */) && (c <= 0x66/* f */))
 }
 
-function isOctCode(c) {
-  return ((0x30/* 0 */ <= c) && (c <= 0x37/* 7 */));
+function isOctCode (c) {
+  return ((c >= 0x30/* 0 */) && (c <= 0x37/* 7 */))
 }
 
-function isDecCode(c) {
-  return ((0x30/* 0 */ <= c) && (c <= 0x39/* 9 */));
+function isDecCode (c) {
+  return ((c >= 0x30/* 0 */) && (c <= 0x39/* 9 */))
 }
 
-function resolveYamlInteger(data) {
-  if (data === null) return false;
+function resolveYamlInteger (data) {
+  if (data === null) return false
 
-  var max = data.length,
-      index = 0,
-      hasDigits = false,
-      ch;
+  const max = data.length
+  let index = 0
+  let hasDigits = false
 
-  if (!max) return false;
+  if (!max) return false
 
-  ch = data[index];
+  let ch = data[index]
 
   // sign
   if (ch === '-' || ch === '+') {
-    ch = data[++index];
+    ch = data[++index]
   }
 
   if (ch === '0') {
     // 0
-    if (index + 1 === max) return true;
-    ch = data[++index];
+    if (index + 1 === max) return true
+    ch = data[++index]
 
     // base 2, base 8, base 16
 
     if (ch === 'b') {
       // base 2
-      index++;
+      index++
 
       for (; index < max; index++) {
-        ch = data[index];
-        if (ch === '_') continue;
-        if (ch !== '0' && ch !== '1') return false;
-        hasDigits = true;
+        ch = data[index]
+        if (ch !== '0' && ch !== '1') return false
+        hasDigits = true
       }
-      return hasDigits && ch !== '_';
+      return hasDigits && isFinite(parseYamlInteger(data))
     }
-
 
     if (ch === 'x') {
       // base 16
-      index++;
+      index++
 
       for (; index < max; index++) {
-        ch = data[index];
-        if (ch === '_') continue;
-        if (!isHexCode(data.charCodeAt(index))) return false;
-        hasDigits = true;
+        if (!isHexCode(data.charCodeAt(index))) return false
+        hasDigits = true
       }
-      return hasDigits && ch !== '_';
+      return hasDigits && isFinite(parseYamlInteger(data))
     }
-
 
     if (ch === 'o') {
       // base 8
-      index++;
+      index++
 
       for (; index < max; index++) {
-        ch = data[index];
-        if (ch === '_') continue;
-        if (!isOctCode(data.charCodeAt(index))) return false;
-        hasDigits = true;
+        if (!isOctCode(data.charCodeAt(index))) return false
+        hasDigits = true
       }
-      return hasDigits && ch !== '_';
+      return hasDigits && isFinite(parseYamlInteger(data))
     }
   }
 
   // base 10 (except 0)
 
-  // value should not start with `_`;
-  if (ch === '_') return false;
-
   for (; index < max; index++) {
-    ch = data[index];
-    if (ch === '_') continue;
     if (!isDecCode(data.charCodeAt(index))) {
-      return false;
+      return false
     }
-    hasDigits = true;
+    hasDigits = true
   }
 
-  // Should have digits and should not end with `_`
-  if (!hasDigits || ch === '_') return false;
+  if (!hasDigits) return false
 
-  return true;
+  return isFinite(parseYamlInteger(data))
 }
 
-function constructYamlInteger(data) {
-  var value = data, sign = 1, ch;
+function parseYamlInteger (data) {
+  let value = data
+  let sign = 1
 
-  if (value.indexOf('_') !== -1) {
-    value = value.replace(/_/g, '');
-  }
-
-  ch = value[0];
+  let ch = value[0]
 
   if (ch === '-' || ch === '+') {
-    if (ch === '-') sign = -1;
-    value = value.slice(1);
-    ch = value[0];
+    if (ch === '-') sign = -1
+    value = value.slice(1)
+    ch = value[0]
   }
 
-  if (value === '0') return 0;
+  if (value === '0') return 0
 
   if (ch === '0') {
-    if (value[1] === 'b') return sign * parseInt(value.slice(2), 2);
-    if (value[1] === 'x') return sign * parseInt(value.slice(2), 16);
-    if (value[1] === 'o') return sign * parseInt(value.slice(2), 8);
+    if (value[1] === 'b') return sign * parseInt(value.slice(2), 2)
+    if (value[1] === 'x') return sign * parseInt(value.slice(2), 16)
+    if (value[1] === 'o') return sign * parseInt(value.slice(2), 8)
   }
 
-  return sign * parseInt(value, 10);
+  return sign * parseInt(value, 10)
 }
 
-function isInteger(object) {
+function constructYamlInteger (data) {
+  return parseYamlInteger(data)
+}
+
+function isInteger (object) {
   return (Object.prototype.toString.call(object)) === '[object Number]' &&
-         (object % 1 === 0 && !common.isNegativeZero(object));
+         (object % 1 === 0 && !common.isNegativeZero(object))
 }
 
 module.exports = new Type('tag:yaml.org,2002:int', {
@@ -20100,83 +16602,82 @@ module.exports = new Type('tag:yaml.org,2002:int', {
   construct: constructYamlInteger,
   predicate: isInteger,
   represent: {
-    binary:      function (obj) { return obj >= 0 ? '0b' + obj.toString(2) : '-0b' + obj.toString(2).slice(1); },
-    octal:       function (obj) { return obj >= 0 ? '0o'  + obj.toString(8) : '-0o'  + obj.toString(8).slice(1); },
-    decimal:     function (obj) { return obj.toString(10); },
-    /* eslint-disable max-len */
-    hexadecimal: function (obj) { return obj >= 0 ? '0x' + obj.toString(16).toUpperCase() :  '-0x' + obj.toString(16).toUpperCase().slice(1); }
+    binary: function (obj) { return obj >= 0 ? '0b' + obj.toString(2) : '-0b' + obj.toString(2).slice(1) },
+    octal: function (obj) { return obj >= 0 ? '0o' + obj.toString(8) : '-0o' + obj.toString(8).slice(1) },
+    decimal: function (obj) { return obj.toString(10) },
+    hexadecimal: function (obj) { return obj >= 0 ? '0x' + obj.toString(16).toUpperCase() : '-0x' + obj.toString(16).toUpperCase().slice(1) }
   },
   defaultStyle: 'decimal',
   styleAliases: {
-    binary:      [ 2,  'bin' ],
-    octal:       [ 8,  'oct' ],
-    decimal:     [ 10, 'dec' ],
-    hexadecimal: [ 16, 'hex' ]
+    binary: [2, 'bin'],
+    octal: [8, 'oct'],
+    decimal: [10, 'dec'],
+    hexadecimal: [16, 'hex']
   }
-});
+})
 
 
 /***/ }),
 
 /***/ 7316:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var Type = __nccwpck_require2_(9557);
+const Type = __nccwpck_require__(9557)
 
 module.exports = new Type('tag:yaml.org,2002:map', {
   kind: 'mapping',
-  construct: function (data) { return data !== null ? data : {}; }
-});
+  construct: function (data) { return data !== null ? data : {} }
+})
 
 
 /***/ }),
 
 /***/ 6854:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var Type = __nccwpck_require2_(9557);
+const Type = __nccwpck_require__(9557)
 
-function resolveYamlMerge(data) {
-  return data === '<<' || data === null;
+function resolveYamlMerge (data) {
+  return data === '<<' || data === null
 }
 
 module.exports = new Type('tag:yaml.org,2002:merge', {
   kind: 'scalar',
   resolve: resolveYamlMerge
-});
+})
 
 
 /***/ }),
 
 /***/ 4333:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var Type = __nccwpck_require2_(9557);
+const Type = __nccwpck_require__(9557)
 
-function resolveYamlNull(data) {
-  if (data === null) return true;
+function resolveYamlNull (data) {
+  if (data === null) return true
 
-  var max = data.length;
+  const max = data.length
 
   return (max === 1 && data === '~') ||
-         (max === 4 && (data === 'null' || data === 'Null' || data === 'NULL'));
+         (max === 4 && (data === 'null' || data === 'Null' || data === 'NULL'))
 }
 
-function constructYamlNull() {
-  return null;
+function constructYamlNull () {
+  return null
 }
 
-function isNull(object) {
-  return object === null;
+function isNull (object) {
+  return object === null
 }
 
 module.exports = new Type('tag:yaml.org,2002:null', {
@@ -20185,283 +16686,281 @@ module.exports = new Type('tag:yaml.org,2002:null', {
   construct: constructYamlNull,
   predicate: isNull,
   represent: {
-    canonical: function () { return '~';    },
-    lowercase: function () { return 'null'; },
-    uppercase: function () { return 'NULL'; },
-    camelcase: function () { return 'Null'; },
-    empty:     function () { return '';     }
+    canonical: function () { return '~' },
+    lowercase: function () { return 'null' },
+    uppercase: function () { return 'NULL' },
+    camelcase: function () { return 'Null' },
+    empty: function () { return '' }
   },
   defaultStyle: 'lowercase'
-});
+})
 
 
 /***/ }),
 
 /***/ 8649:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var Type = __nccwpck_require2_(9557);
+const Type = __nccwpck_require__(9557)
 
-var _hasOwnProperty = Object.prototype.hasOwnProperty;
-var _toString       = Object.prototype.toString;
+const _hasOwnProperty = Object.prototype.hasOwnProperty
+const _toString = Object.prototype.toString
 
-function resolveYamlOmap(data) {
-  if (data === null) return true;
+function resolveYamlOmap (data) {
+  if (data === null) return true
 
-  var objectKeys = [], index, length, pair, pairKey, pairHasKey,
-      object = data;
+  const objectKeys = {}
+  const object = data
 
-  for (index = 0, length = object.length; index < length; index += 1) {
-    pair = object[index];
-    pairHasKey = false;
+  for (let index = 0, length = object.length; index < length; index += 1) {
+    const pair = object[index]
+    let pairHasKey = false
 
-    if (_toString.call(pair) !== '[object Object]') return false;
+    if (_toString.call(pair) !== '[object Object]') return false
 
+    let pairKey
     for (pairKey in pair) {
       if (_hasOwnProperty.call(pair, pairKey)) {
-        if (!pairHasKey) pairHasKey = true;
-        else return false;
+        if (!pairHasKey) pairHasKey = true
+        else return false
       }
     }
 
-    if (!pairHasKey) return false;
+    if (!pairHasKey) return false
 
-    if (objectKeys.indexOf(pairKey) === -1) objectKeys.push(pairKey);
-    else return false;
+    if (_hasOwnProperty.call(objectKeys, pairKey)) return false
+    Object.defineProperty(objectKeys, pairKey, { value: true })
   }
 
-  return true;
+  return true
 }
 
-function constructYamlOmap(data) {
-  return data !== null ? data : [];
+function constructYamlOmap (data) {
+  return data !== null ? data : []
 }
 
 module.exports = new Type('tag:yaml.org,2002:omap', {
   kind: 'sequence',
   resolve: resolveYamlOmap,
   construct: constructYamlOmap
-});
+})
 
 
 /***/ }),
 
 /***/ 6267:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var Type = __nccwpck_require2_(9557);
+const Type = __nccwpck_require__(9557)
 
-var _toString = Object.prototype.toString;
+const _toString = Object.prototype.toString
 
-function resolveYamlPairs(data) {
-  if (data === null) return true;
+function resolveYamlPairs (data) {
+  if (data === null) return true
 
-  var index, length, pair, keys, result,
-      object = data;
+  const object = data
 
-  result = new Array(object.length);
+  const result = new Array(object.length)
 
-  for (index = 0, length = object.length; index < length; index += 1) {
-    pair = object[index];
+  for (let index = 0, length = object.length; index < length; index += 1) {
+    const pair = object[index]
 
-    if (_toString.call(pair) !== '[object Object]') return false;
+    if (_toString.call(pair) !== '[object Object]') return false
 
-    keys = Object.keys(pair);
+    const keys = Object.keys(pair)
 
-    if (keys.length !== 1) return false;
+    if (keys.length !== 1) return false
 
-    result[index] = [ keys[0], pair[keys[0]] ];
+    result[index] = [keys[0], pair[keys[0]]]
   }
 
-  return true;
+  return true
 }
 
-function constructYamlPairs(data) {
-  if (data === null) return [];
+function constructYamlPairs (data) {
+  if (data === null) return []
 
-  var index, length, pair, keys, result,
-      object = data;
+  const object = data
+  const result = new Array(object.length)
 
-  result = new Array(object.length);
+  for (let index = 0, length = object.length; index < length; index += 1) {
+    const pair = object[index]
 
-  for (index = 0, length = object.length; index < length; index += 1) {
-    pair = object[index];
+    const keys = Object.keys(pair)
 
-    keys = Object.keys(pair);
-
-    result[index] = [ keys[0], pair[keys[0]] ];
+    result[index] = [keys[0], pair[keys[0]]]
   }
 
-  return result;
+  return result
 }
 
 module.exports = new Type('tag:yaml.org,2002:pairs', {
   kind: 'sequence',
   resolve: resolveYamlPairs,
   construct: constructYamlPairs
-});
+})
 
 
 /***/ }),
 
 /***/ 7161:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var Type = __nccwpck_require2_(9557);
+const Type = __nccwpck_require__(9557)
 
 module.exports = new Type('tag:yaml.org,2002:seq', {
   kind: 'sequence',
-  construct: function (data) { return data !== null ? data : []; }
-});
+  construct: function (data) { return data !== null ? data : [] }
+})
 
 
 /***/ }),
 
 /***/ 8758:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var Type = __nccwpck_require2_(9557);
+const Type = __nccwpck_require__(9557)
 
-var _hasOwnProperty = Object.prototype.hasOwnProperty;
+const _hasOwnProperty = Object.prototype.hasOwnProperty
 
-function resolveYamlSet(data) {
-  if (data === null) return true;
+function resolveYamlSet (data) {
+  if (data === null) return true
 
-  var key, object = data;
+  const object = data
 
-  for (key in object) {
+  for (const key in object) {
     if (_hasOwnProperty.call(object, key)) {
-      if (object[key] !== null) return false;
+      if (object[key] !== null) return false
     }
   }
 
-  return true;
+  return true
 }
 
-function constructYamlSet(data) {
-  return data !== null ? data : {};
+function constructYamlSet (data) {
+  return data !== null ? data : {}
 }
 
 module.exports = new Type('tag:yaml.org,2002:set', {
   kind: 'mapping',
   resolve: resolveYamlSet,
   construct: constructYamlSet
-});
+})
 
 
 /***/ }),
 
 /***/ 3929:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var Type = __nccwpck_require2_(9557);
+const Type = __nccwpck_require__(9557)
 
 module.exports = new Type('tag:yaml.org,2002:str', {
   kind: 'scalar',
-  construct: function (data) { return data !== null ? data : ''; }
-});
+  construct: function (data) { return data !== null ? data : '' }
+})
 
 
 /***/ }),
 
 /***/ 8966:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var Type = __nccwpck_require2_(9557);
+const Type = __nccwpck_require__(9557)
 
-var YAML_DATE_REGEXP = new RegExp(
-  '^([0-9][0-9][0-9][0-9])'          + // [1] year
-  '-([0-9][0-9])'                    + // [2] month
-  '-([0-9][0-9])$');                   // [3] day
+const YAML_DATE_REGEXP = new RegExp(
+  '^([0-9][0-9][0-9][0-9])' + // [1] year
+  '-([0-9][0-9])' + // [2] month
+  '-([0-9][0-9])$')                   // [3] day
 
-var YAML_TIMESTAMP_REGEXP = new RegExp(
-  '^([0-9][0-9][0-9][0-9])'          + // [1] year
-  '-([0-9][0-9]?)'                   + // [2] month
-  '-([0-9][0-9]?)'                   + // [3] day
-  '(?:[Tt]|[ \\t]+)'                 + // ...
-  '([0-9][0-9]?)'                    + // [4] hour
-  ':([0-9][0-9])'                    + // [5] minute
-  ':([0-9][0-9])'                    + // [6] second
-  '(?:\\.([0-9]*))?'                 + // [7] fraction
-  '(?:[ \\t]*(Z|([-+])([0-9][0-9]?)' + // [8] tz [9] tz_sign [10] tz_hour
-  '(?::([0-9][0-9]))?))?$');           // [11] tz_minute
+const YAML_TIMESTAMP_REGEXP = new RegExp(
+  '^([0-9][0-9][0-9][0-9])' + // [1] year
+  '-([0-9][0-9]?)' + // [2] month
+  '-([0-9][0-9]?)' + // [3] day
+  '(?:[Tt]|[ \\t]+)' + // ...
+  '([0-9][0-9]?)' + // [4] hour
+  ':([0-9][0-9])' + // [5] minute
+  ':([0-9][0-9])' + // [6] second
+  '(?:\\.([0-9]*))?' + // [7] fraction
+  '(?:[ \\t]*(Z|([-+])([0-9][0-9]?)' + // [8] tz [9] tz_sign [10] tzHour
+  '(?::([0-9][0-9]))?))?$')           // [11] tzMinute
 
-function resolveYamlTimestamp(data) {
-  if (data === null) return false;
-  if (YAML_DATE_REGEXP.exec(data) !== null) return true;
-  if (YAML_TIMESTAMP_REGEXP.exec(data) !== null) return true;
-  return false;
+function resolveYamlTimestamp (data) {
+  if (data === null) return false
+  if (YAML_DATE_REGEXP.exec(data) !== null) return true
+  if (YAML_TIMESTAMP_REGEXP.exec(data) !== null) return true
+  return false
 }
 
-function constructYamlTimestamp(data) {
-  var match, year, month, day, hour, minute, second, fraction = 0,
-      delta = null, tz_hour, tz_minute, date;
+function constructYamlTimestamp (data) {
+  let fraction = 0
+  let delta = null
 
-  match = YAML_DATE_REGEXP.exec(data);
-  if (match === null) match = YAML_TIMESTAMP_REGEXP.exec(data);
+  let match = YAML_DATE_REGEXP.exec(data)
+  if (match === null) match = YAML_TIMESTAMP_REGEXP.exec(data)
 
-  if (match === null) throw new Error('Date resolve error');
+  if (match === null) throw new Error('Date resolve error')
 
   // match: [1] year [2] month [3] day
 
-  year = +(match[1]);
-  month = +(match[2]) - 1; // JS month starts with 0
-  day = +(match[3]);
+  const year = +(match[1])
+  const month = +(match[2]) - 1 // JS month starts with 0
+  const day = +(match[3])
 
   if (!match[4]) { // no hour
-    return new Date(Date.UTC(year, month, day));
+    return new Date(Date.UTC(year, month, day))
   }
 
   // match: [4] hour [5] minute [6] second [7] fraction
 
-  hour = +(match[4]);
-  minute = +(match[5]);
-  second = +(match[6]);
+  const hour = +(match[4])
+  const minute = +(match[5])
+  const second = +(match[6])
 
   if (match[7]) {
-    fraction = match[7].slice(0, 3);
+    fraction = match[7].slice(0, 3)
     while (fraction.length < 3) { // milli-seconds
-      fraction += '0';
+      fraction += '0'
     }
-    fraction = +fraction;
+    fraction = +fraction
   }
 
-  // match: [8] tz [9] tz_sign [10] tz_hour [11] tz_minute
+  // match: [8] tz [9] tz_sign [10] tzHour [11] tzMinute
 
   if (match[9]) {
-    tz_hour = +(match[10]);
-    tz_minute = +(match[11] || 0);
-    delta = (tz_hour * 60 + tz_minute) * 60000; // delta in mili-seconds
-    if (match[9] === '-') delta = -delta;
+    const tzHour = +(match[10])
+    const tzMinute = +(match[11] || 0)
+    delta = (tzHour * 60 + tzMinute) * 60000 // delta in mili-seconds
+    if (match[9] === '-') delta = -delta
   }
 
-  date = new Date(Date.UTC(year, month, day, hour, minute, second, fraction));
+  const date = new Date(Date.UTC(year, month, day, hour, minute, second, fraction))
 
-  if (delta) date.setTime(date.getTime() - delta);
+  if (delta) date.setTime(date.getTime() - delta)
 
-  return date;
+  return date
 }
 
-function representYamlTimestamp(object /*, style*/) {
-  return object.toISOString();
+function representYamlTimestamp (object /*, style */) {
+  return object.toISOString()
 }
 
 module.exports = new Type('tag:yaml.org,2002:timestamp', {
@@ -20470,7 +16969,7 @@ module.exports = new Type('tag:yaml.org,2002:timestamp', {
   construct: constructYamlTimestamp,
   instanceOf: Date,
   represent: representYamlTimestamp
-});
+})
 
 
 /***/ }),
@@ -20602,12 +17101,12 @@ module.exports = Kuler;
 /***/ }),
 
 /***/ 8409:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const format = __nccwpck_require2_(9541);
+const format = __nccwpck_require__(9541);
 
 /*
  * function align (info)
@@ -20624,14 +17123,14 @@ module.exports = format(info => {
 /***/ }),
 
 /***/ 6658:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { Colorizer } = __nccwpck_require2_(5085);
-const { Padder } = __nccwpck_require2_(5925);
-const { configs, MESSAGE } = __nccwpck_require2_(8836);
+const { Colorizer } = __nccwpck_require__(5085);
+const { Padder } = __nccwpck_require__(5925);
+const { configs, MESSAGE } = __nccwpck_require__(8836);
 
 
 /**
@@ -20684,13 +17183,13 @@ module.exports.Format = CliFormat;
 /***/ }),
 
 /***/ 5085:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const colors = __nccwpck_require2_(5420);
-const { LEVEL, MESSAGE } = __nccwpck_require2_(8836);
+const colors = __nccwpck_require__(5420);
+const { LEVEL, MESSAGE } = __nccwpck_require__(8836);
 
 //
 // Fix colors not appearing in non-tty environments
@@ -20814,12 +17313,12 @@ module.exports.Colorizer
 /***/ }),
 
 /***/ 8885:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const format = __nccwpck_require2_(9541);
+const format = __nccwpck_require__(9541);
 
 /*
  * function cascade(formats)
@@ -20888,14 +17387,14 @@ module.exports.cascade = cascade;
 /***/ }),
 
 /***/ 5249:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /* eslint no-undefined: 0 */
 
 
-const format = __nccwpck_require2_(9541);
-const { LEVEL, MESSAGE } = __nccwpck_require2_(8836);
+const format = __nccwpck_require__(9541);
+const { LEVEL, MESSAGE } = __nccwpck_require__(8836);
 
 /*
  * function errors (info)
@@ -20997,7 +17496,7 @@ module.exports = formatFn => {
 /***/ }),
 
 /***/ 5440:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -21008,14 +17507,14 @@ module.exports = formatFn => {
  * Both the construction method and set of exposed
  * formats.
  */
-const format = exports.format = __nccwpck_require2_(9541);
+const format = exports.format = __nccwpck_require__(9541);
 
 /*
  * @api public
  * @method {function} levels
  * Registers the specified levels with logform.
  */
-exports.levels = __nccwpck_require2_(4197);
+exports.levels = __nccwpck_require__(4197);
 
 /*
  * @api private
@@ -21035,36 +17534,36 @@ function exposeFormat(name, requireFormat) {
 //
 // Setup all transports as lazy-loaded getters.
 //
-exposeFormat('align', function () { return __nccwpck_require2_(8409); });
-exposeFormat('errors', function () { return __nccwpck_require2_(5249); });
-exposeFormat('cli', function () { return __nccwpck_require2_(6658); });
-exposeFormat('combine', function () { return __nccwpck_require2_(8885); });
-exposeFormat('colorize', function () { return __nccwpck_require2_(5085); });
-exposeFormat('json', function () { return __nccwpck_require2_(7864); });
-exposeFormat('label', function () { return __nccwpck_require2_(654); });
-exposeFormat('logstash', function () { return __nccwpck_require2_(5574); });
-exposeFormat('metadata', function () { return __nccwpck_require2_(7847); });
-exposeFormat('ms', function () { return __nccwpck_require2_(2786); });
-exposeFormat('padLevels', function () { return __nccwpck_require2_(5925); });
-exposeFormat('prettyPrint', function () { return __nccwpck_require2_(1364); });
-exposeFormat('printf', function () { return __nccwpck_require2_(9333); });
-exposeFormat('simple', function () { return __nccwpck_require2_(2740); });
-exposeFormat('splat', function () { return __nccwpck_require2_(520); });
-exposeFormat('timestamp', function () { return __nccwpck_require2_(728); });
-exposeFormat('uncolorize', function () { return __nccwpck_require2_(8054); });
+exposeFormat('align', function () { return __nccwpck_require__(8409); });
+exposeFormat('errors', function () { return __nccwpck_require__(5249); });
+exposeFormat('cli', function () { return __nccwpck_require__(6658); });
+exposeFormat('combine', function () { return __nccwpck_require__(8885); });
+exposeFormat('colorize', function () { return __nccwpck_require__(5085); });
+exposeFormat('json', function () { return __nccwpck_require__(7864); });
+exposeFormat('label', function () { return __nccwpck_require__(654); });
+exposeFormat('logstash', function () { return __nccwpck_require__(5574); });
+exposeFormat('metadata', function () { return __nccwpck_require__(7847); });
+exposeFormat('ms', function () { return __nccwpck_require__(2786); });
+exposeFormat('padLevels', function () { return __nccwpck_require__(5925); });
+exposeFormat('prettyPrint', function () { return __nccwpck_require__(1364); });
+exposeFormat('printf', function () { return __nccwpck_require__(9333); });
+exposeFormat('simple', function () { return __nccwpck_require__(2740); });
+exposeFormat('splat', function () { return __nccwpck_require__(520); });
+exposeFormat('timestamp', function () { return __nccwpck_require__(728); });
+exposeFormat('uncolorize', function () { return __nccwpck_require__(8054); });
 
 
 /***/ }),
 
 /***/ 7864:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const format = __nccwpck_require2_(9541);
-const { MESSAGE } = __nccwpck_require2_(8836);
-const stringify = __nccwpck_require2_(7467);
+const format = __nccwpck_require__(9541);
+const { MESSAGE } = __nccwpck_require__(8836);
+const stringify = __nccwpck_require__(7467);
 
 /*
  * function replacer (key, value)
@@ -21095,12 +17594,12 @@ module.exports = format((info, opts) => {
 /***/ }),
 
 /***/ 654:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const format = __nccwpck_require2_(9541);
+const format = __nccwpck_require__(9541);
 
 /*
  * function label (info)
@@ -21122,12 +17621,12 @@ module.exports = format((info, opts) => {
 /***/ }),
 
 /***/ 4197:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { Colorizer } = __nccwpck_require2_(5085);
+const { Colorizer } = __nccwpck_require__(5085);
 
 /*
  * Simple method to register colors with a simpler require
@@ -21142,14 +17641,14 @@ module.exports = config => {
 /***/ }),
 
 /***/ 5574:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const format = __nccwpck_require2_(9541);
-const { MESSAGE } = __nccwpck_require2_(8836);
-const jsonStringify = __nccwpck_require2_(7467);
+const format = __nccwpck_require__(9541);
+const { MESSAGE } = __nccwpck_require__(8836);
+const jsonStringify = __nccwpck_require__(7467);
 
 /*
  * function logstash (info)
@@ -21179,12 +17678,12 @@ module.exports = format(info => {
 /***/ }),
 
 /***/ 7847:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const format = __nccwpck_require2_(9541);
+const format = __nccwpck_require__(9541);
 
 function fillExcept(info, fillExceptKeys, metadataKey) {
   const savedKeys = fillExceptKeys.reduce((acc, key) => {
@@ -21248,13 +17747,13 @@ module.exports = format((info, opts = {}) => {
 /***/ }),
 
 /***/ 2786:
-/***/ (function(module, __unused_webpack_exports, __nccwpck_require2_) {
+/***/ (function(module, __unused_webpack_exports, __nccwpck_require__) {
 
 "use strict";
 
 
-const format = __nccwpck_require2_(9541);
-const ms = __nccwpck_require2_(744);
+const format = __nccwpck_require__(9541);
+const ms = __nccwpck_require__(744);
 
 /*
  * function ms (info)
@@ -21274,7 +17773,7 @@ module.exports = format(info => {
 /***/ }),
 
 /***/ 3701:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 /*
 
@@ -21311,12 +17810,12 @@ module['exports'] = colors;
 
 colors.themes = {};
 
-var util = __nccwpck_require2_(9023);
-var ansiStyles = colors.styles = __nccwpck_require2_(5331);
+var util = __nccwpck_require__(9023);
+var ansiStyles = colors.styles = __nccwpck_require__(5331);
 var defineProps = Object.defineProperties;
 var newLineRegex = new RegExp(/[\r\n]+/g);
 
-colors.supportsColor = (__nccwpck_require2_(1484).supportsColor);
+colors.supportsColor = (__nccwpck_require__(1484).supportsColor);
 
 if (typeof colors.enabled === 'undefined') {
   colors.enabled = colors.supportsColor() !== false;
@@ -21468,15 +17967,15 @@ var sequencer = function sequencer(map, str) {
 };
 
 // custom formatter methods
-colors.trap = __nccwpck_require2_(4530);
-colors.zalgo = __nccwpck_require2_(7672);
+colors.trap = __nccwpck_require__(4530);
+colors.zalgo = __nccwpck_require__(7672);
 
 // maps
 colors.maps = {};
-colors.maps.america = __nccwpck_require2_(4329)(colors);
-colors.maps.zebra = __nccwpck_require2_(3505)(colors);
-colors.maps.rainbow = __nccwpck_require2_(4228)(colors);
-colors.maps.random = __nccwpck_require2_(1994)(colors);
+colors.maps.america = __nccwpck_require__(4329)(colors);
+colors.maps.zebra = __nccwpck_require__(3505)(colors);
+colors.maps.rainbow = __nccwpck_require__(4228)(colors);
+colors.maps.random = __nccwpck_require__(1994)(colors);
 
 for (var map in colors.maps) {
   (function(map) {
@@ -21873,7 +18372,7 @@ module.exports = function(flag, argv) {
 /***/ }),
 
 /***/ 1484:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /*
@@ -21903,8 +18402,8 @@ THE SOFTWARE.
 
 
 
-var os = __nccwpck_require2_(857);
-var hasFlag = __nccwpck_require2_(3086);
+var os = __nccwpck_require__(857);
+var hasFlag = __nccwpck_require__(3086);
 
 var env = process.env;
 
@@ -22032,7 +18531,7 @@ module.exports = {
 /***/ }),
 
 /***/ 5420:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 //
 // Remark: Requiring this file will use the "safe" colors API,
@@ -22042,20 +18541,20 @@ module.exports = {
 //   colors.red("foo")
 //
 //
-var colors = __nccwpck_require2_(3701);
+var colors = __nccwpck_require__(3701);
 module['exports'] = colors;
 
 
 /***/ }),
 
 /***/ 5925:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /* eslint no-unused-vars: 0 */
 
 
-const { configs, LEVEL, MESSAGE } = __nccwpck_require2_(8836);
+const { configs, LEVEL, MESSAGE } = __nccwpck_require__(8836);
 
 class Padder {
   constructor(opts = { levels: configs.npm.levels }) {
@@ -22140,14 +18639,14 @@ module.exports.Padder
 /***/ }),
 
 /***/ 1364:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const inspect = (__nccwpck_require2_(9023).inspect);
-const format = __nccwpck_require2_(9541);
-const { LEVEL, MESSAGE, SPLAT } = __nccwpck_require2_(8836);
+const inspect = (__nccwpck_require__(9023).inspect);
+const format = __nccwpck_require__(9541);
+const { LEVEL, MESSAGE, SPLAT } = __nccwpck_require__(8836);
 
 /*
  * function prettyPrint (info)
@@ -22177,12 +18676,12 @@ module.exports = format((info, opts = {}) => {
 /***/ }),
 
 /***/ 9333:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { MESSAGE } = __nccwpck_require2_(8836);
+const { MESSAGE } = __nccwpck_require__(8836);
 
 class Printf {
   constructor(templateFn) {
@@ -22211,15 +18710,15 @@ module.exports.Printf
 /***/ }),
 
 /***/ 2740:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /* eslint no-undefined: 0 */
 
 
-const format = __nccwpck_require2_(9541);
-const { MESSAGE } = __nccwpck_require2_(8836);
-const jsonStringify = __nccwpck_require2_(7467);
+const format = __nccwpck_require__(9541);
+const { MESSAGE } = __nccwpck_require__(8836);
+const jsonStringify = __nccwpck_require__(7467);
 
 /*
  * function simple (info)
@@ -22252,13 +18751,13 @@ module.exports = format(info => {
 /***/ }),
 
 /***/ 520:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const util = __nccwpck_require2_(9023);
-const { SPLAT } = __nccwpck_require2_(8836);
+const util = __nccwpck_require__(9023);
+const { SPLAT } = __nccwpck_require__(8836);
 
 /**
  * Captures the number of format (i.e. %s strings) in a given string.
@@ -22392,13 +18891,13 @@ module.exports = opts => new Splatter(opts);
 /***/ }),
 
 /***/ 728:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const fecha = __nccwpck_require2_(1972);
-const format = __nccwpck_require2_(9541);
+const fecha = __nccwpck_require__(1972);
+const format = __nccwpck_require__(9541);
 
 /*
  * function timestamp (info)
@@ -22430,14 +18929,14 @@ module.exports = format((info, opts = {}) => {
 /***/ }),
 
 /***/ 8054:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const colors = __nccwpck_require2_(5420);
-const format = __nccwpck_require2_(9541);
-const { MESSAGE } = __nccwpck_require2_(8836);
+const colors = __nccwpck_require__(5420);
+const format = __nccwpck_require__(9541);
+const { MESSAGE } = __nccwpck_require__(8836);
 
 /*
  * function uncolorize (info)
@@ -22551,12 +19050,12 @@ module.exports = Math.round;
 /***/ }),
 
 /***/ 156:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var $isNaN = __nccwpck_require2_(7044);
+var $isNaN = __nccwpck_require__(7044);
 
 /** @type {import('./sign')} */
 module.exports = function sign(number) {
@@ -22570,7 +19069,7 @@ module.exports = function sign(number) {
 /***/ }),
 
 /***/ 9829:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 /*!
  * mime-db
@@ -22583,13 +19082,13 @@ module.exports = function sign(number) {
  * Module exports.
  */
 
-module.exports = __nccwpck_require2_(1813)
+module.exports = __nccwpck_require__(1813)
 
 
 /***/ }),
 
 /***/ 4096:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 /*!
@@ -22606,8 +19105,8 @@ module.exports = __nccwpck_require2_(1813)
  * @private
  */
 
-var db = __nccwpck_require2_(9829)
-var extname = (__nccwpck_require2_(6928).extname)
+var db = __nccwpck_require__(9829)
+var extname = (__nccwpck_require__(6928).extname)
 
 /**
  * Module variables.
@@ -22954,12 +19453,12 @@ function plural(ms, msAbs, n, name) {
 /***/ }),
 
 /***/ 8186:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var name = __nccwpck_require2_(6057);
+var name = __nccwpck_require__(6057);
 
 /**
  * Wrap callbacks to prevent double execution.
@@ -23128,7 +19627,7 @@ module.exports.F = codes;
 /***/ }),
 
 /***/ 2063:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Copyright Joyent, Inc. and other Node contributors.
@@ -23168,9 +19667,9 @@ var objectKeys = Object.keys || function (obj) {
 /*</replacement>*/
 
 module.exports = Duplex;
-var Readable = __nccwpck_require2_(6893);
-var Writable = __nccwpck_require2_(8797);
-__nccwpck_require2_(9598)(Duplex, Readable);
+var Readable = __nccwpck_require__(6893);
+var Writable = __nccwpck_require__(8797);
+__nccwpck_require__(9598)(Duplex, Readable);
 {
   // Allow the keys array to be GC'ed.
   var keys = objectKeys(Writable.prototype);
@@ -23261,7 +19760,7 @@ Object.defineProperty(Duplex.prototype, 'destroyed', {
 /***/ }),
 
 /***/ 7664:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Copyright Joyent, Inc. and other Node contributors.
@@ -23292,8 +19791,8 @@ Object.defineProperty(Duplex.prototype, 'destroyed', {
 
 
 module.exports = PassThrough;
-var Transform = __nccwpck_require2_(2337);
-__nccwpck_require2_(9598)(PassThrough, Transform);
+var Transform = __nccwpck_require__(2337);
+__nccwpck_require__(9598)(PassThrough, Transform);
 function PassThrough(options) {
   if (!(this instanceof PassThrough)) return new PassThrough(options);
   Transform.call(this, options);
@@ -23305,7 +19804,7 @@ PassThrough.prototype._transform = function (chunk, encoding, cb) {
 /***/ }),
 
 /***/ 6893:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Copyright Joyent, Inc. and other Node contributors.
@@ -23340,17 +19839,17 @@ var Duplex;
 Readable.ReadableState = ReadableState;
 
 /*<replacement>*/
-var EE = (__nccwpck_require2_(4434).EventEmitter);
+var EE = (__nccwpck_require__(4434).EventEmitter);
 var EElistenerCount = function EElistenerCount(emitter, type) {
   return emitter.listeners(type).length;
 };
 /*</replacement>*/
 
 /*<replacement>*/
-var Stream = __nccwpck_require2_(3283);
+var Stream = __nccwpck_require__(3283);
 /*</replacement>*/
 
-var Buffer = (__nccwpck_require2_(181).Buffer);
+var Buffer = (__nccwpck_require__(181).Buffer);
 var OurUint8Array = (typeof global !== 'undefined' ? global : typeof window !== 'undefined' ? window : typeof self !== 'undefined' ? self : {}).Uint8Array || function () {};
 function _uint8ArrayToBuffer(chunk) {
   return Buffer.from(chunk);
@@ -23360,7 +19859,7 @@ function _isUint8Array(obj) {
 }
 
 /*<replacement>*/
-var debugUtil = __nccwpck_require2_(9023);
+var debugUtil = __nccwpck_require__(9023);
 var debug;
 if (debugUtil && debugUtil.debuglog) {
   debug = debugUtil.debuglog('stream');
@@ -23369,11 +19868,11 @@ if (debugUtil && debugUtil.debuglog) {
 }
 /*</replacement>*/
 
-var BufferList = __nccwpck_require2_(4955);
-var destroyImpl = __nccwpck_require2_(5089);
-var _require = __nccwpck_require2_(4874),
+var BufferList = __nccwpck_require__(4955);
+var destroyImpl = __nccwpck_require__(5089);
+var _require = __nccwpck_require__(4874),
   getHighWaterMark = _require.getHighWaterMark;
-var _require$codes = (__nccwpck_require2_(5500)/* .codes */ .F),
+var _require$codes = (__nccwpck_require__(5500)/* .codes */ .F),
   ERR_INVALID_ARG_TYPE = _require$codes.ERR_INVALID_ARG_TYPE,
   ERR_STREAM_PUSH_AFTER_EOF = _require$codes.ERR_STREAM_PUSH_AFTER_EOF,
   ERR_METHOD_NOT_IMPLEMENTED = _require$codes.ERR_METHOD_NOT_IMPLEMENTED,
@@ -23383,7 +19882,7 @@ var _require$codes = (__nccwpck_require2_(5500)/* .codes */ .F),
 var StringDecoder;
 var createReadableStreamAsyncIterator;
 var from;
-__nccwpck_require2_(9598)(Readable, Stream);
+__nccwpck_require__(9598)(Readable, Stream);
 var errorOrDestroy = destroyImpl.errorOrDestroy;
 var kProxyEvents = ['error', 'close', 'destroy', 'pause', 'resume'];
 function prependListener(emitter, event, fn) {
@@ -23398,7 +19897,7 @@ function prependListener(emitter, event, fn) {
   if (!emitter._events || !emitter._events[event]) emitter.on(event, fn);else if (Array.isArray(emitter._events[event])) emitter._events[event].unshift(fn);else emitter._events[event] = [fn, emitter._events[event]];
 }
 function ReadableState(options, stream, isDuplex) {
-  Duplex = Duplex || __nccwpck_require2_(2063);
+  Duplex = Duplex || __nccwpck_require__(2063);
   options = options || {};
 
   // Duplex streams are both readable and writable, but share
@@ -23465,13 +19964,13 @@ function ReadableState(options, stream, isDuplex) {
   this.decoder = null;
   this.encoding = null;
   if (options.encoding) {
-    if (!StringDecoder) StringDecoder = (__nccwpck_require2_(634)/* .StringDecoder */ .I);
+    if (!StringDecoder) StringDecoder = (__nccwpck_require__(634)/* .StringDecoder */ .I);
     this.decoder = new StringDecoder(options.encoding);
     this.encoding = options.encoding;
   }
 }
 function Readable(options) {
-  Duplex = Duplex || __nccwpck_require2_(2063);
+  Duplex = Duplex || __nccwpck_require__(2063);
   if (!(this instanceof Readable)) return new Readable(options);
 
   // Checking for a Stream.Duplex instance is faster here instead of inside
@@ -23608,7 +20107,7 @@ Readable.prototype.isPaused = function () {
 
 // backwards compatibility.
 Readable.prototype.setEncoding = function (enc) {
-  if (!StringDecoder) StringDecoder = (__nccwpck_require2_(634)/* .StringDecoder */ .I);
+  if (!StringDecoder) StringDecoder = (__nccwpck_require__(634)/* .StringDecoder */ .I);
   var decoder = new StringDecoder(enc);
   this._readableState.decoder = decoder;
   // If setEncoding(null), decoder.encoding equals utf8
@@ -24227,7 +20726,7 @@ Readable.prototype.wrap = function (stream) {
 if (typeof Symbol === 'function') {
   Readable.prototype[Symbol.asyncIterator] = function () {
     if (createReadableStreamAsyncIterator === undefined) {
-      createReadableStreamAsyncIterator = __nccwpck_require2_(4868);
+      createReadableStreamAsyncIterator = __nccwpck_require__(4868);
     }
     return createReadableStreamAsyncIterator(this);
   };
@@ -24324,7 +20823,7 @@ function endReadableNT(state, stream) {
 if (typeof Symbol === 'function') {
   Readable.from = function (iterable, opts) {
     if (from === undefined) {
-      from = __nccwpck_require2_(4659);
+      from = __nccwpck_require__(4659);
     }
     return from(Readable, iterable, opts);
   };
@@ -24339,7 +20838,7 @@ function indexOf(xs, x) {
 /***/ }),
 
 /***/ 2337:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Copyright Joyent, Inc. and other Node contributors.
@@ -24408,13 +20907,13 @@ function indexOf(xs, x) {
 
 
 module.exports = Transform;
-var _require$codes = (__nccwpck_require2_(5500)/* .codes */ .F),
+var _require$codes = (__nccwpck_require__(5500)/* .codes */ .F),
   ERR_METHOD_NOT_IMPLEMENTED = _require$codes.ERR_METHOD_NOT_IMPLEMENTED,
   ERR_MULTIPLE_CALLBACK = _require$codes.ERR_MULTIPLE_CALLBACK,
   ERR_TRANSFORM_ALREADY_TRANSFORMING = _require$codes.ERR_TRANSFORM_ALREADY_TRANSFORMING,
   ERR_TRANSFORM_WITH_LENGTH_0 = _require$codes.ERR_TRANSFORM_WITH_LENGTH_0;
-var Duplex = __nccwpck_require2_(2063);
-__nccwpck_require2_(9598)(Transform, Duplex);
+var Duplex = __nccwpck_require__(2063);
+__nccwpck_require__(9598)(Transform, Duplex);
 function afterTransform(er, data) {
   var ts = this._transformState;
   ts.transforming = false;
@@ -24536,7 +21035,7 @@ function done(stream, er, data) {
 /***/ }),
 
 /***/ 8797:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Copyright Joyent, Inc. and other Node contributors.
@@ -24596,15 +21095,15 @@ Writable.WritableState = WritableState;
 
 /*<replacement>*/
 var internalUtil = {
-  deprecate: __nccwpck_require2_(4488)
+  deprecate: __nccwpck_require__(4488)
 };
 /*</replacement>*/
 
 /*<replacement>*/
-var Stream = __nccwpck_require2_(3283);
+var Stream = __nccwpck_require__(3283);
 /*</replacement>*/
 
-var Buffer = (__nccwpck_require2_(181).Buffer);
+var Buffer = (__nccwpck_require__(181).Buffer);
 var OurUint8Array = (typeof global !== 'undefined' ? global : typeof window !== 'undefined' ? window : typeof self !== 'undefined' ? self : {}).Uint8Array || function () {};
 function _uint8ArrayToBuffer(chunk) {
   return Buffer.from(chunk);
@@ -24612,10 +21111,10 @@ function _uint8ArrayToBuffer(chunk) {
 function _isUint8Array(obj) {
   return Buffer.isBuffer(obj) || obj instanceof OurUint8Array;
 }
-var destroyImpl = __nccwpck_require2_(5089);
-var _require = __nccwpck_require2_(4874),
+var destroyImpl = __nccwpck_require__(5089);
+var _require = __nccwpck_require__(4874),
   getHighWaterMark = _require.getHighWaterMark;
-var _require$codes = (__nccwpck_require2_(5500)/* .codes */ .F),
+var _require$codes = (__nccwpck_require__(5500)/* .codes */ .F),
   ERR_INVALID_ARG_TYPE = _require$codes.ERR_INVALID_ARG_TYPE,
   ERR_METHOD_NOT_IMPLEMENTED = _require$codes.ERR_METHOD_NOT_IMPLEMENTED,
   ERR_MULTIPLE_CALLBACK = _require$codes.ERR_MULTIPLE_CALLBACK,
@@ -24625,10 +21124,10 @@ var _require$codes = (__nccwpck_require2_(5500)/* .codes */ .F),
   ERR_STREAM_WRITE_AFTER_END = _require$codes.ERR_STREAM_WRITE_AFTER_END,
   ERR_UNKNOWN_ENCODING = _require$codes.ERR_UNKNOWN_ENCODING;
 var errorOrDestroy = destroyImpl.errorOrDestroy;
-__nccwpck_require2_(9598)(Writable, Stream);
+__nccwpck_require__(9598)(Writable, Stream);
 function nop() {}
 function WritableState(options, stream, isDuplex) {
-  Duplex = Duplex || __nccwpck_require2_(2063);
+  Duplex = Duplex || __nccwpck_require__(2063);
   options = options || {};
 
   // Duplex streams are both readable and writable, but share
@@ -24770,7 +21269,7 @@ if (typeof Symbol === 'function' && Symbol.hasInstance && typeof Function.protot
   };
 }
 function Writable(options) {
-  Duplex = Duplex || __nccwpck_require2_(2063);
+  Duplex = Duplex || __nccwpck_require__(2063);
 
   // Writable ctor is applied to Duplexes, too.
   // `realHasInstance` is necessary because using plain `instanceof`
@@ -25184,7 +21683,7 @@ Writable.prototype._destroy = function (err, cb) {
 /***/ }),
 
 /***/ 4868:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -25193,7 +21692,7 @@ var _Object$setPrototypeO;
 function _defineProperty(obj, key, value) { key = _toPropertyKey(key); if (key in obj) { Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true }); } else { obj[key] = value; } return obj; }
 function _toPropertyKey(arg) { var key = _toPrimitive(arg, "string"); return typeof key === "symbol" ? key : String(key); }
 function _toPrimitive(input, hint) { if (typeof input !== "object" || input === null) return input; var prim = input[Symbol.toPrimitive]; if (prim !== undefined) { var res = prim.call(input, hint || "default"); if (typeof res !== "object") return res; throw new TypeError("@@toPrimitive must return a primitive value."); } return (hint === "string" ? String : Number)(input); }
-var finished = __nccwpck_require2_(6815);
+var finished = __nccwpck_require__(6815);
 var kLastResolve = Symbol('lastResolve');
 var kLastReject = Symbol('lastReject');
 var kError = Symbol('error');
@@ -25371,7 +21870,7 @@ module.exports = createReadableStreamAsyncIterator;
 /***/ }),
 
 /***/ 4955:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -25384,9 +21883,9 @@ function _defineProperties(target, props) { for (var i = 0; i < props.length; i+
 function _createClass(Constructor, protoProps, staticProps) { if (protoProps) _defineProperties(Constructor.prototype, protoProps); if (staticProps) _defineProperties(Constructor, staticProps); Object.defineProperty(Constructor, "prototype", { writable: false }); return Constructor; }
 function _toPropertyKey(arg) { var key = _toPrimitive(arg, "string"); return typeof key === "symbol" ? key : String(key); }
 function _toPrimitive(input, hint) { if (typeof input !== "object" || input === null) return input; var prim = input[Symbol.toPrimitive]; if (prim !== undefined) { var res = prim.call(input, hint || "default"); if (typeof res !== "object") return res; throw new TypeError("@@toPrimitive must return a primitive value."); } return (hint === "string" ? String : Number)(input); }
-var _require = __nccwpck_require2_(181),
+var _require = __nccwpck_require__(181),
   Buffer = _require.Buffer;
-var _require2 = __nccwpck_require2_(9023),
+var _require2 = __nccwpck_require__(9023),
   inspect = _require2.inspect;
 var custom = inspect && inspect.custom || 'inspect';
 function copyBuffer(src, target, offset) {
@@ -25664,7 +22163,7 @@ module.exports = {
 /***/ }),
 
 /***/ 6815:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Ported from https://github.com/mafintosh/end-of-stream with
@@ -25672,7 +22171,7 @@ module.exports = {
 
 
 
-var ERR_STREAM_PREMATURE_CLOSE = (__nccwpck_require2_(5500)/* .codes */ .F).ERR_STREAM_PREMATURE_CLOSE;
+var ERR_STREAM_PREMATURE_CLOSE = (__nccwpck_require__(5500)/* .codes */ .F).ERR_STREAM_PREMATURE_CLOSE;
 function once(callback) {
   var called = false;
   return function () {
@@ -25757,7 +22256,7 @@ module.exports = eos;
 /***/ }),
 
 /***/ 4659:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -25769,7 +22268,7 @@ function _objectSpread(target) { for (var i = 1; i < arguments.length; i++) { va
 function _defineProperty(obj, key, value) { key = _toPropertyKey(key); if (key in obj) { Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true }); } else { obj[key] = value; } return obj; }
 function _toPropertyKey(arg) { var key = _toPrimitive(arg, "string"); return typeof key === "symbol" ? key : String(key); }
 function _toPrimitive(input, hint) { if (typeof input !== "object" || input === null) return input; var prim = input[Symbol.toPrimitive]; if (prim !== undefined) { var res = prim.call(input, hint || "default"); if (typeof res !== "object") return res; throw new TypeError("@@toPrimitive must return a primitive value."); } return (hint === "string" ? String : Number)(input); }
-var ERR_INVALID_ARG_TYPE = (__nccwpck_require2_(5500)/* .codes */ .F).ERR_INVALID_ARG_TYPE;
+var ERR_INVALID_ARG_TYPE = (__nccwpck_require__(5500)/* .codes */ .F).ERR_INVALID_ARG_TYPE;
 function from(Readable, iterable, opts) {
   var iterator;
   if (iterable && typeof iterable.next === 'function') {
@@ -25817,7 +22316,7 @@ module.exports = from;
 /***/ }),
 
 /***/ 6701:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Ported from https://github.com/mafintosh/pump with
@@ -25834,7 +22333,7 @@ function once(callback) {
     callback.apply(void 0, arguments);
   };
 }
-var _require$codes = (__nccwpck_require2_(5500)/* .codes */ .F),
+var _require$codes = (__nccwpck_require__(5500)/* .codes */ .F),
   ERR_MISSING_ARGS = _require$codes.ERR_MISSING_ARGS,
   ERR_STREAM_DESTROYED = _require$codes.ERR_STREAM_DESTROYED;
 function noop(err) {
@@ -25850,7 +22349,7 @@ function destroyer(stream, reading, writing, callback) {
   stream.on('close', function () {
     closed = true;
   });
-  if (eos === undefined) eos = __nccwpck_require2_(6815);
+  if (eos === undefined) eos = __nccwpck_require__(6815);
   eos(stream, {
     readable: reading,
     writable: writing
@@ -25910,12 +22409,12 @@ module.exports = pipeline;
 /***/ }),
 
 /***/ 4874:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var ERR_INVALID_OPT_VALUE = (__nccwpck_require2_(5500)/* .codes */ .F).ERR_INVALID_OPT_VALUE;
+var ERR_INVALID_OPT_VALUE = (__nccwpck_require__(5500)/* .codes */ .F).ERR_INVALID_OPT_VALUE;
 function highWaterMarkFrom(options, isDuplex, duplexKey) {
   return options.highWaterMark != null ? options.highWaterMark : isDuplex ? options[duplexKey] : null;
 }
@@ -25939,42 +22438,42 @@ module.exports = {
 /***/ }),
 
 /***/ 3283:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-module.exports = __nccwpck_require2_(2203);
+module.exports = __nccwpck_require__(2203);
 
 
 /***/ }),
 
 /***/ 6131:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
-var Stream = __nccwpck_require2_(2203);
+var Stream = __nccwpck_require__(2203);
 if (process.env.READABLE_STREAM === 'disable' && Stream) {
   module.exports = Stream.Readable;
   Object.assign(module.exports, Stream);
   module.exports.Stream = Stream;
 } else {
-  exports = module.exports = __nccwpck_require2_(6893);
+  exports = module.exports = __nccwpck_require__(6893);
   exports.Stream = Stream || exports;
   exports.Readable = exports;
-  exports.Writable = __nccwpck_require2_(8797);
-  exports.Duplex = __nccwpck_require2_(2063);
-  exports.Transform = __nccwpck_require2_(2337);
-  exports.PassThrough = __nccwpck_require2_(7664);
-  exports.finished = __nccwpck_require2_(6815);
-  exports.pipeline = __nccwpck_require2_(6701);
+  exports.Writable = __nccwpck_require__(8797);
+  exports.Duplex = __nccwpck_require__(2063);
+  exports.Transform = __nccwpck_require__(2337);
+  exports.PassThrough = __nccwpck_require__(7664);
+  exports.finished = __nccwpck_require__(6815);
+  exports.pipeline = __nccwpck_require__(6701);
 }
 
 
 /***/ }),
 
 /***/ 3058:
-/***/ ((module, exports, __nccwpck_require2_) => {
+/***/ ((module, exports, __nccwpck_require__) => {
 
 /*! safe-buffer. MIT License. Feross Aboukhadijeh <https://feross.org/opensource> */
 /* eslint-disable node/no-deprecated-api */
-var buffer = __nccwpck_require2_(181)
+var buffer = __nccwpck_require__(181)
 var Buffer = buffer.Buffer
 
 // alternative to using Object.keys for old browsers
@@ -26818,7 +23317,7 @@ exports._createParsedCallSite = function(properties) {
 /***/ }),
 
 /***/ 634:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 // Copyright Joyent, Inc. and other Node contributors.
@@ -26846,7 +23345,7 @@ exports._createParsedCallSite = function(properties) {
 
 /*<replacement>*/
 
-var Buffer = (__nccwpck_require2_(3058).Buffer);
+var Buffer = (__nccwpck_require__(3058).Buffer);
 /*</replacement>*/
 
 var isEncoding = Buffer.isEncoding || function (encoding) {
@@ -27120,6 +23619,149 @@ function simpleEnd(buf) {
 
 /***/ }),
 
+/***/ 1450:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const os = __nccwpck_require__(857);
+const tty = __nccwpck_require__(2018);
+const hasFlag = __nccwpck_require__(3813);
+
+const {env} = process;
+
+let forceColor;
+if (hasFlag('no-color') ||
+	hasFlag('no-colors') ||
+	hasFlag('color=false') ||
+	hasFlag('color=never')) {
+	forceColor = 0;
+} else if (hasFlag('color') ||
+	hasFlag('colors') ||
+	hasFlag('color=true') ||
+	hasFlag('color=always')) {
+	forceColor = 1;
+}
+
+if ('FORCE_COLOR' in env) {
+	if (env.FORCE_COLOR === 'true') {
+		forceColor = 1;
+	} else if (env.FORCE_COLOR === 'false') {
+		forceColor = 0;
+	} else {
+		forceColor = env.FORCE_COLOR.length === 0 ? 1 : Math.min(parseInt(env.FORCE_COLOR, 10), 3);
+	}
+}
+
+function translateLevel(level) {
+	if (level === 0) {
+		return false;
+	}
+
+	return {
+		level,
+		hasBasic: true,
+		has256: level >= 2,
+		has16m: level >= 3
+	};
+}
+
+function supportsColor(haveStream, streamIsTTY) {
+	if (forceColor === 0) {
+		return 0;
+	}
+
+	if (hasFlag('color=16m') ||
+		hasFlag('color=full') ||
+		hasFlag('color=truecolor')) {
+		return 3;
+	}
+
+	if (hasFlag('color=256')) {
+		return 2;
+	}
+
+	if (haveStream && !streamIsTTY && forceColor === undefined) {
+		return 0;
+	}
+
+	const min = forceColor || 0;
+
+	if (env.TERM === 'dumb') {
+		return min;
+	}
+
+	if (process.platform === 'win32') {
+		// Windows 10 build 10586 is the first Windows release that supports 256 colors.
+		// Windows 10 build 14931 is the first release that supports 16m/TrueColor.
+		const osRelease = os.release().split('.');
+		if (
+			Number(osRelease[0]) >= 10 &&
+			Number(osRelease[2]) >= 10586
+		) {
+			return Number(osRelease[2]) >= 14931 ? 3 : 2;
+		}
+
+		return 1;
+	}
+
+	if ('CI' in env) {
+		if (['TRAVIS', 'CIRCLECI', 'APPVEYOR', 'GITLAB_CI', 'GITHUB_ACTIONS', 'BUILDKITE'].some(sign => sign in env) || env.CI_NAME === 'codeship') {
+			return 1;
+		}
+
+		return min;
+	}
+
+	if ('TEAMCITY_VERSION' in env) {
+		return /^(9\.(0*[1-9]\d*)\.|\d{2,}\.)/.test(env.TEAMCITY_VERSION) ? 1 : 0;
+	}
+
+	if (env.COLORTERM === 'truecolor') {
+		return 3;
+	}
+
+	if ('TERM_PROGRAM' in env) {
+		const version = parseInt((env.TERM_PROGRAM_VERSION || '').split('.')[0], 10);
+
+		switch (env.TERM_PROGRAM) {
+			case 'iTerm.app':
+				return version >= 3 ? 3 : 2;
+			case 'Apple_Terminal':
+				return 2;
+			// No default
+		}
+	}
+
+	if (/-256(color)?$/i.test(env.TERM)) {
+		return 2;
+	}
+
+	if (/^screen|^xterm|^vt100|^vt220|^rxvt|color|ansi|cygwin|linux/i.test(env.TERM)) {
+		return 1;
+	}
+
+	if ('COLORTERM' in env) {
+		return 1;
+	}
+
+	return min;
+}
+
+function getSupportLevel(stream) {
+	const level = supportsColor(stream, stream && stream.isTTY);
+	return translateLevel(level);
+}
+
+module.exports = {
+	supportsColor: getSupportLevel,
+	stdout: translateLevel(supportsColor(true, tty.isatty(1))),
+	stderr: translateLevel(supportsColor(true, tty.isatty(2)))
+};
+
+
+/***/ }),
+
 /***/ 8913:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -27171,7 +23813,7 @@ exports.colors = {
 /***/ }),
 
 /***/ 4815:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -27188,7 +23830,7 @@ exports.colors = {
  * @type {Object}
  */
 Object.defineProperty(exports, "cli", ({
-  value: __nccwpck_require2_(8913)
+  value: __nccwpck_require__(8913)
 }));
 
 /**
@@ -27196,7 +23838,7 @@ Object.defineProperty(exports, "cli", ({
  * @type {Object}
  */
 Object.defineProperty(exports, "npm", ({
-  value: __nccwpck_require2_(4110)
+  value: __nccwpck_require__(4110)
 }));
 
 /**
@@ -27204,7 +23846,7 @@ Object.defineProperty(exports, "npm", ({
  * @type {Object}
  */
 Object.defineProperty(exports, "syslog", ({
-  value: __nccwpck_require2_(1906)
+  value: __nccwpck_require__(1906)
 }));
 
 
@@ -27301,7 +23943,7 @@ exports.colors = {
 /***/ }),
 
 /***/ 8836:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -27348,33 +23990,33 @@ Object.defineProperty(exports, "SPLAT", ({
  * @type {Object}
  */
 Object.defineProperty(exports, "configs", ({
-  value: __nccwpck_require2_(4815)
+  value: __nccwpck_require__(4815)
 }));
 
 
 /***/ }),
 
 /***/ 770:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-module.exports = __nccwpck_require2_(218);
+module.exports = __nccwpck_require__(218);
 
 
 /***/ }),
 
 /***/ 218:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-var net = __nccwpck_require2_(9278);
-var tls = __nccwpck_require2_(4756);
-var http = __nccwpck_require2_(8611);
-var https = __nccwpck_require2_(5692);
-var events = __nccwpck_require2_(4434);
-var assert = __nccwpck_require2_(2613);
-var util = __nccwpck_require2_(9023);
+var net = __nccwpck_require__(9278);
+var tls = __nccwpck_require__(4756);
+var http = __nccwpck_require__(8611);
+var https = __nccwpck_require__(5692);
+var events = __nccwpck_require__(4434);
+var assert = __nccwpck_require__(2613);
+var util = __nccwpck_require__(9023);
 
 
 exports.httpOverHttp = httpOverHttp;
@@ -27635,35 +24277,35 @@ exports.debug = debug; // for test
 /***/ }),
 
 /***/ 6752:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const Client = __nccwpck_require2_(6197)
-const Dispatcher = __nccwpck_require2_(992)
-const errors = __nccwpck_require2_(8707)
-const Pool = __nccwpck_require2_(5076)
-const BalancedPool = __nccwpck_require2_(1093)
-const Agent = __nccwpck_require2_(9965)
-const util = __nccwpck_require2_(3440)
+const Client = __nccwpck_require__(6197)
+const Dispatcher = __nccwpck_require__(992)
+const errors = __nccwpck_require__(8707)
+const Pool = __nccwpck_require__(5076)
+const BalancedPool = __nccwpck_require__(1093)
+const Agent = __nccwpck_require__(9965)
+const util = __nccwpck_require__(3440)
 const { InvalidArgumentError } = errors
-const api = __nccwpck_require2_(6615)
-const buildConnector = __nccwpck_require2_(9136)
-const MockClient = __nccwpck_require2_(7365)
-const MockAgent = __nccwpck_require2_(7501)
-const MockPool = __nccwpck_require2_(4004)
-const mockErrors = __nccwpck_require2_(2429)
-const ProxyAgent = __nccwpck_require2_(2720)
-const RetryHandler = __nccwpck_require2_(3573)
-const { getGlobalDispatcher, setGlobalDispatcher } = __nccwpck_require2_(2581)
-const DecoratorHandler = __nccwpck_require2_(8840)
-const RedirectHandler = __nccwpck_require2_(8299)
-const createRedirectInterceptor = __nccwpck_require2_(4415)
+const api = __nccwpck_require__(6615)
+const buildConnector = __nccwpck_require__(9136)
+const MockClient = __nccwpck_require__(7365)
+const MockAgent = __nccwpck_require__(7501)
+const MockPool = __nccwpck_require__(4004)
+const mockErrors = __nccwpck_require__(2429)
+const ProxyAgent = __nccwpck_require__(2720)
+const RetryHandler = __nccwpck_require__(3573)
+const { getGlobalDispatcher, setGlobalDispatcher } = __nccwpck_require__(2581)
+const DecoratorHandler = __nccwpck_require__(8840)
+const RedirectHandler = __nccwpck_require__(8299)
+const createRedirectInterceptor = __nccwpck_require__(4415)
 
 let hasCrypto
 try {
-  __nccwpck_require2_(6982)
+  __nccwpck_require__(6982)
   hasCrypto = true
 } catch {
   hasCrypto = false
@@ -27742,7 +24384,7 @@ if (util.nodeMajor > 16 || (util.nodeMajor === 16 && util.nodeMinor >= 8)) {
   let fetchImpl = null
   module.exports.fetch = async function fetch (resource) {
     if (!fetchImpl) {
-      fetchImpl = (__nccwpck_require2_(2315).fetch)
+      fetchImpl = (__nccwpck_require__(2315).fetch)
     }
 
     try {
@@ -27755,20 +24397,20 @@ if (util.nodeMajor > 16 || (util.nodeMajor === 16 && util.nodeMinor >= 8)) {
       throw err
     }
   }
-  module.exports.Headers = __nccwpck_require2_(6349).Headers
-  module.exports.Response = __nccwpck_require2_(8676).Response
-  module.exports.Request = __nccwpck_require2_(5194).Request
-  module.exports.FormData = __nccwpck_require2_(3073).FormData
-  module.exports.File = __nccwpck_require2_(3041).File
-  module.exports.FileReader = __nccwpck_require2_(2160).FileReader
+  module.exports.Headers = __nccwpck_require__(6349).Headers
+  module.exports.Response = __nccwpck_require__(8676).Response
+  module.exports.Request = __nccwpck_require__(5194).Request
+  module.exports.FormData = __nccwpck_require__(3073).FormData
+  module.exports.File = __nccwpck_require__(3041).File
+  module.exports.FileReader = __nccwpck_require__(2160).FileReader
 
-  const { setGlobalOrigin, getGlobalOrigin } = __nccwpck_require2_(5628)
+  const { setGlobalOrigin, getGlobalOrigin } = __nccwpck_require__(5628)
 
   module.exports.setGlobalOrigin = setGlobalOrigin
   module.exports.getGlobalOrigin = getGlobalOrigin
 
-  const { CacheStorage } = __nccwpck_require2_(4738)
-  const { kConstruct } = __nccwpck_require2_(296)
+  const { CacheStorage } = __nccwpck_require__(4738)
+  const { kConstruct } = __nccwpck_require__(296)
 
   // Cache & CacheStorage are tightly coupled with fetch. Even if it may run
   // in an older version of Node, it doesn't have any use without fetch.
@@ -27776,21 +24418,21 @@ if (util.nodeMajor > 16 || (util.nodeMajor === 16 && util.nodeMinor >= 8)) {
 }
 
 if (util.nodeMajor >= 16) {
-  const { deleteCookie, getCookies, getSetCookies, setCookie } = __nccwpck_require2_(3168)
+  const { deleteCookie, getCookies, getSetCookies, setCookie } = __nccwpck_require__(3168)
 
   module.exports.deleteCookie = deleteCookie
   module.exports.getCookies = getCookies
   module.exports.getSetCookies = getSetCookies
   module.exports.setCookie = setCookie
 
-  const { parseMIMEType, serializeAMimeType } = __nccwpck_require2_(4322)
+  const { parseMIMEType, serializeAMimeType } = __nccwpck_require__(4322)
 
   module.exports.parseMIMEType = parseMIMEType
   module.exports.serializeAMimeType = serializeAMimeType
 }
 
 if (util.nodeMajor >= 18 && hasCrypto) {
-  const { WebSocket } = __nccwpck_require2_(5171)
+  const { WebSocket } = __nccwpck_require__(5171)
 
   module.exports.WebSocket = WebSocket
 }
@@ -27810,19 +24452,19 @@ module.exports.mockErrors = mockErrors
 /***/ }),
 
 /***/ 9965:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { InvalidArgumentError } = __nccwpck_require2_(8707)
-const { kClients, kRunning, kClose, kDestroy, kDispatch, kInterceptors } = __nccwpck_require2_(6443)
-const DispatcherBase = __nccwpck_require2_(1)
-const Pool = __nccwpck_require2_(5076)
-const Client = __nccwpck_require2_(6197)
-const util = __nccwpck_require2_(3440)
-const createRedirectInterceptor = __nccwpck_require2_(4415)
-const { WeakRef, FinalizationRegistry } = __nccwpck_require2_(3194)()
+const { InvalidArgumentError } = __nccwpck_require__(8707)
+const { kClients, kRunning, kClose, kDestroy, kDispatch, kInterceptors } = __nccwpck_require__(6443)
+const DispatcherBase = __nccwpck_require__(1)
+const Pool = __nccwpck_require__(5076)
+const Client = __nccwpck_require__(6197)
+const util = __nccwpck_require__(3440)
+const createRedirectInterceptor = __nccwpck_require__(4415)
+const { WeakRef, FinalizationRegistry } = __nccwpck_require__(3194)()
 
 const kOnConnect = Symbol('onConnect')
 const kOnDisconnect = Symbol('onDisconnect')
@@ -27966,10 +24608,10 @@ module.exports = Agent
 /***/ }),
 
 /***/ 158:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const { addAbortListener } = __nccwpck_require2_(3440)
-const { RequestAbortedError } = __nccwpck_require2_(8707)
+const { addAbortListener } = __nccwpck_require__(3440)
+const { RequestAbortedError } = __nccwpck_require__(8707)
 
 const kListener = Symbol('kListener')
 const kSignal = Symbol('kSignal')
@@ -28027,15 +24669,15 @@ module.exports = {
 /***/ }),
 
 /***/ 4660:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { AsyncResource } = __nccwpck_require2_(290)
-const { InvalidArgumentError, RequestAbortedError, SocketError } = __nccwpck_require2_(8707)
-const util = __nccwpck_require2_(3440)
-const { addSignal, removeSignal } = __nccwpck_require2_(158)
+const { AsyncResource } = __nccwpck_require__(290)
+const { InvalidArgumentError, RequestAbortedError, SocketError } = __nccwpck_require__(8707)
+const util = __nccwpck_require__(3440)
+const { addSignal, removeSignal } = __nccwpck_require__(158)
 
 class ConnectHandler extends AsyncResource {
   constructor (opts, callback) {
@@ -28139,7 +24781,7 @@ module.exports = connect
 /***/ }),
 
 /***/ 6862:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -28148,16 +24790,16 @@ const {
   Readable,
   Duplex,
   PassThrough
-} = __nccwpck_require2_(2203)
+} = __nccwpck_require__(2203)
 const {
   InvalidArgumentError,
   InvalidReturnValueError,
   RequestAbortedError
-} = __nccwpck_require2_(8707)
-const util = __nccwpck_require2_(3440)
-const { AsyncResource } = __nccwpck_require2_(290)
-const { addSignal, removeSignal } = __nccwpck_require2_(158)
-const assert = __nccwpck_require2_(2613)
+} = __nccwpck_require__(8707)
+const util = __nccwpck_require__(3440)
+const { AsyncResource } = __nccwpck_require__(290)
+const { addSignal, removeSignal } = __nccwpck_require__(158)
+const assert = __nccwpck_require__(2613)
 
 const kResume = Symbol('resume')
 
@@ -28396,20 +25038,20 @@ module.exports = pipeline
 /***/ }),
 
 /***/ 4043:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const Readable = __nccwpck_require2_(9927)
+const Readable = __nccwpck_require__(9927)
 const {
   InvalidArgumentError,
   RequestAbortedError
-} = __nccwpck_require2_(8707)
-const util = __nccwpck_require2_(3440)
-const { getResolveErrorBodyCallback } = __nccwpck_require2_(7655)
-const { AsyncResource } = __nccwpck_require2_(290)
-const { addSignal, removeSignal } = __nccwpck_require2_(158)
+} = __nccwpck_require__(8707)
+const util = __nccwpck_require__(3440)
+const { getResolveErrorBodyCallback } = __nccwpck_require__(7655)
+const { AsyncResource } = __nccwpck_require__(290)
+const { addSignal, removeSignal } = __nccwpck_require__(158)
 
 class RequestHandler extends AsyncResource {
   constructor (opts, callback) {
@@ -28584,21 +25226,21 @@ module.exports.RequestHandler = RequestHandler
 /***/ }),
 
 /***/ 3560:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { finished, PassThrough } = __nccwpck_require2_(2203)
+const { finished, PassThrough } = __nccwpck_require__(2203)
 const {
   InvalidArgumentError,
   InvalidReturnValueError,
   RequestAbortedError
-} = __nccwpck_require2_(8707)
-const util = __nccwpck_require2_(3440)
-const { getResolveErrorBodyCallback } = __nccwpck_require2_(7655)
-const { AsyncResource } = __nccwpck_require2_(290)
-const { addSignal, removeSignal } = __nccwpck_require2_(158)
+} = __nccwpck_require__(8707)
+const util = __nccwpck_require__(3440)
+const { getResolveErrorBodyCallback } = __nccwpck_require__(7655)
+const { AsyncResource } = __nccwpck_require__(290)
+const { addSignal, removeSignal } = __nccwpck_require__(158)
 
 class StreamHandler extends AsyncResource {
   constructor (opts, factory, callback) {
@@ -28812,16 +25454,16 @@ module.exports = stream
 /***/ }),
 
 /***/ 1882:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { InvalidArgumentError, RequestAbortedError, SocketError } = __nccwpck_require2_(8707)
-const { AsyncResource } = __nccwpck_require2_(290)
-const util = __nccwpck_require2_(3440)
-const { addSignal, removeSignal } = __nccwpck_require2_(158)
-const assert = __nccwpck_require2_(2613)
+const { InvalidArgumentError, RequestAbortedError, SocketError } = __nccwpck_require__(8707)
+const { AsyncResource } = __nccwpck_require__(290)
+const util = __nccwpck_require__(3440)
+const { addSignal, removeSignal } = __nccwpck_require__(158)
+const assert = __nccwpck_require__(2613)
 
 class UpgradeHandler extends AsyncResource {
   constructor (opts, callback) {
@@ -28925,33 +25567,33 @@ module.exports = upgrade
 /***/ }),
 
 /***/ 6615:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-module.exports.request = __nccwpck_require2_(4043)
-module.exports.stream = __nccwpck_require2_(3560)
-module.exports.pipeline = __nccwpck_require2_(6862)
-module.exports.upgrade = __nccwpck_require2_(1882)
-module.exports.connect = __nccwpck_require2_(4660)
+module.exports.request = __nccwpck_require__(4043)
+module.exports.stream = __nccwpck_require__(3560)
+module.exports.pipeline = __nccwpck_require__(6862)
+module.exports.upgrade = __nccwpck_require__(1882)
+module.exports.connect = __nccwpck_require__(4660)
 
 
 /***/ }),
 
 /***/ 9927:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // Ported from https://github.com/nodejs/undici/pull/907
 
 
 
-const assert = __nccwpck_require2_(2613)
-const { Readable } = __nccwpck_require2_(2203)
-const { RequestAbortedError, NotSupportedError, InvalidArgumentError } = __nccwpck_require2_(8707)
-const util = __nccwpck_require2_(3440)
-const { ReadableStreamFrom, toUSVString } = __nccwpck_require2_(3440)
+const assert = __nccwpck_require__(2613)
+const { Readable } = __nccwpck_require__(2203)
+const { RequestAbortedError, NotSupportedError, InvalidArgumentError } = __nccwpck_require__(8707)
+const util = __nccwpck_require__(3440)
+const { ReadableStreamFrom, toUSVString } = __nccwpck_require__(3440)
 
 let Blob
 
@@ -29231,7 +25873,7 @@ function consumeEnd (consume) {
       resolve(dst.buffer)
     } else if (type === 'blob') {
       if (!Blob) {
-        Blob = (__nccwpck_require2_(181).Blob)
+        Blob = (__nccwpck_require__(181).Blob)
       }
       resolve(new Blob(body, { type: stream[kContentType] }))
     }
@@ -29270,13 +25912,13 @@ function consumeFinish (consume, err) {
 /***/ }),
 
 /***/ 7655:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const assert = __nccwpck_require2_(2613)
+const assert = __nccwpck_require__(2613)
 const {
   ResponseStatusCodeError
-} = __nccwpck_require2_(8707)
-const { toUSVString } = __nccwpck_require2_(3440)
+} = __nccwpck_require__(8707)
+const { toUSVString } = __nccwpck_require__(3440)
 
 async function getResolveErrorBodyCallback ({ callback, body, contentType, statusCode, statusMessage, headers }) {
   assert(body)
@@ -29323,7 +25965,7 @@ module.exports = { getResolveErrorBodyCallback }
 /***/ }),
 
 /***/ 1093:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -29331,7 +25973,7 @@ module.exports = { getResolveErrorBodyCallback }
 const {
   BalancedPoolMissingUpstreamError,
   InvalidArgumentError
-} = __nccwpck_require2_(8707)
+} = __nccwpck_require__(8707)
 const {
   PoolBase,
   kClients,
@@ -29339,10 +25981,10 @@ const {
   kAddClient,
   kRemoveClient,
   kGetDispatcher
-} = __nccwpck_require2_(8640)
-const Pool = __nccwpck_require2_(5076)
-const { kUrl, kInterceptors } = __nccwpck_require2_(6443)
-const { parseOrigin } = __nccwpck_require2_(3440)
+} = __nccwpck_require__(8640)
+const Pool = __nccwpck_require__(5076)
+const { kUrl, kInterceptors } = __nccwpck_require__(6443)
+const { parseOrigin } = __nccwpck_require__(3440)
 const kFactory = Symbol('factory')
 
 const kOptions = Symbol('options')
@@ -29521,23 +26163,23 @@ module.exports = BalancedPool
 /***/ }),
 
 /***/ 479:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { kConstruct } = __nccwpck_require2_(296)
-const { urlEquals, fieldValues: getFieldValues } = __nccwpck_require2_(3993)
-const { kEnumerableProperty, isDisturbed } = __nccwpck_require2_(3440)
-const { kHeadersList } = __nccwpck_require2_(6443)
-const { webidl } = __nccwpck_require2_(4222)
-const { Response, cloneResponse } = __nccwpck_require2_(8676)
-const { Request } = __nccwpck_require2_(5194)
-const { kState, kHeaders, kGuard, kRealm } = __nccwpck_require2_(9710)
-const { fetching } = __nccwpck_require2_(2315)
-const { urlIsHttpHttpsScheme, createDeferredPromise, readAllBytes } = __nccwpck_require2_(5523)
-const assert = __nccwpck_require2_(2613)
-const { getGlobalDispatcher } = __nccwpck_require2_(2581)
+const { kConstruct } = __nccwpck_require__(296)
+const { urlEquals, fieldValues: getFieldValues } = __nccwpck_require__(3993)
+const { kEnumerableProperty, isDisturbed } = __nccwpck_require__(3440)
+const { kHeadersList } = __nccwpck_require__(6443)
+const { webidl } = __nccwpck_require__(4222)
+const { Response, cloneResponse } = __nccwpck_require__(8676)
+const { Request } = __nccwpck_require__(5194)
+const { kState, kHeaders, kGuard, kRealm } = __nccwpck_require__(9710)
+const { fetching } = __nccwpck_require__(2315)
+const { urlIsHttpHttpsScheme, createDeferredPromise, readAllBytes } = __nccwpck_require__(5523)
+const assert = __nccwpck_require__(2613)
+const { getGlobalDispatcher } = __nccwpck_require__(2581)
 
 /**
  * @see https://w3c.github.io/ServiceWorker/#dfn-cache-batch-operation
@@ -30367,15 +27009,15 @@ module.exports = {
 /***/ }),
 
 /***/ 4738:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { kConstruct } = __nccwpck_require2_(296)
-const { Cache } = __nccwpck_require2_(479)
-const { webidl } = __nccwpck_require2_(4222)
-const { kEnumerableProperty } = __nccwpck_require2_(3440)
+const { kConstruct } = __nccwpck_require__(296)
+const { Cache } = __nccwpck_require__(479)
+const { webidl } = __nccwpck_require__(4222)
+const { kEnumerableProperty } = __nccwpck_require__(3440)
 
 class CacheStorage {
   /**
@@ -30519,27 +27161,27 @@ module.exports = {
 /***/ }),
 
 /***/ 296:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
 module.exports = {
-  kConstruct: (__nccwpck_require2_(6443).kConstruct)
+  kConstruct: (__nccwpck_require__(6443).kConstruct)
 }
 
 
 /***/ }),
 
 /***/ 3993:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const assert = __nccwpck_require2_(2613)
-const { URLSerializer } = __nccwpck_require2_(4322)
-const { isValidHeaderName } = __nccwpck_require2_(5523)
+const assert = __nccwpck_require__(2613)
+const { URLSerializer } = __nccwpck_require__(4322)
+const { isValidHeaderName } = __nccwpck_require__(5523)
 
 /**
  * @see https://url.spec.whatwg.org/#concept-url-equals
@@ -30589,7 +27231,7 @@ module.exports = {
 /***/ }),
 
 /***/ 6197:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // @ts-check
@@ -30598,14 +27240,14 @@ module.exports = {
 
 /* global WebAssembly */
 
-const assert = __nccwpck_require2_(2613)
-const net = __nccwpck_require2_(9278)
-const http = __nccwpck_require2_(8611)
-const { pipeline } = __nccwpck_require2_(2203)
-const util = __nccwpck_require2_(3440)
-const timers = __nccwpck_require2_(8804)
-const Request = __nccwpck_require2_(4655)
-const DispatcherBase = __nccwpck_require2_(1)
+const assert = __nccwpck_require__(2613)
+const net = __nccwpck_require__(9278)
+const http = __nccwpck_require__(8611)
+const { pipeline } = __nccwpck_require__(2203)
+const util = __nccwpck_require__(3440)
+const timers = __nccwpck_require__(8804)
+const Request = __nccwpck_require__(4655)
+const DispatcherBase = __nccwpck_require__(1)
 const {
   RequestContentLengthMismatchError,
   ResponseContentLengthMismatchError,
@@ -30619,8 +27261,8 @@ const {
   HTTPParserError,
   ResponseExceededMaxSizeError,
   ClientDestroyedError
-} = __nccwpck_require2_(8707)
-const buildConnector = __nccwpck_require2_(9136)
+} = __nccwpck_require__(8707)
+const buildConnector = __nccwpck_require__(9136)
 const {
   kUrl,
   kReset,
@@ -30672,12 +27314,12 @@ const {
   kHTTP2BuildRequest,
   kHTTP2CopyHeaders,
   kHTTP1BuildRequest
-} = __nccwpck_require2_(6443)
+} = __nccwpck_require__(6443)
 
 /** @type {import('http2')} */
 let http2
 try {
-  http2 = __nccwpck_require2_(5675)
+  http2 = __nccwpck_require__(5675)
 } catch {
   // @ts-ignore
   http2 = { constants: {} }
@@ -30705,7 +27347,7 @@ const kClosedResolve = Symbol('kClosedResolve')
 const channels = {}
 
 try {
-  const diagnosticsChannel = __nccwpck_require2_(1637)
+  const diagnosticsChannel = __nccwpck_require__(1637)
   channels.sendHeaders = diagnosticsChannel.channel('undici:client:sendHeaders')
   channels.beforeConnect = diagnosticsChannel.channel('undici:client:beforeConnect')
   channels.connectError = diagnosticsChannel.channel('undici:client:connectError')
@@ -31078,16 +27720,16 @@ function onHTTP2GoAway (code) {
   resume(client)
 }
 
-const constants = __nccwpck_require2_(2824)
-const createRedirectInterceptor = __nccwpck_require2_(4415)
+const constants = __nccwpck_require__(2824)
+const createRedirectInterceptor = __nccwpck_require__(4415)
 const EMPTY_BUF = Buffer.alloc(0)
 
 async function lazyllhttp () {
-  const llhttpWasmData = process.env.JEST_WORKER_ID ? __nccwpck_require2_(3870) : undefined
+  const llhttpWasmData = process.env.JEST_WORKER_ID ? __nccwpck_require__(3870) : undefined
 
   let mod
   try {
-    mod = await WebAssembly.compile(Buffer.from(__nccwpck_require2_(3434), 'base64'))
+    mod = await WebAssembly.compile(Buffer.from(__nccwpck_require__(3434), 'base64'))
   } catch (e) {
     /* istanbul ignore next */
 
@@ -31095,7 +27737,7 @@ async function lazyllhttp () {
     // being enabled, but the occurring of this other error
     // * https://github.com/emscripten-core/emscripten/issues/11495
     // got me to remove that check to avoid breaking Node 12.
-    mod = await WebAssembly.compile(Buffer.from(llhttpWasmData || __nccwpck_require2_(3870), 'base64'))
+    mod = await WebAssembly.compile(Buffer.from(llhttpWasmData || __nccwpck_require__(3870), 'base64'))
   }
 
   return await WebAssembly.instantiate(mod, {
@@ -32880,14 +29522,14 @@ module.exports = Client
 /***/ }),
 
 /***/ 3194:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
 /* istanbul ignore file: only for Node 12 */
 
-const { kConnected, kSize } = __nccwpck_require2_(6443)
+const { kConnected, kSize } = __nccwpck_require__(6443)
 
 class CompatWeakRef {
   constructor (value) {
@@ -32956,15 +29598,15 @@ module.exports = {
 /***/ }),
 
 /***/ 3168:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { parseSetCookie } = __nccwpck_require2_(8915)
-const { stringify } = __nccwpck_require2_(3834)
-const { webidl } = __nccwpck_require2_(4222)
-const { Headers } = __nccwpck_require2_(6349)
+const { parseSetCookie } = __nccwpck_require__(8915)
+const { stringify } = __nccwpck_require__(3834)
+const { webidl } = __nccwpck_require__(4222)
+const { Headers } = __nccwpck_require__(6349)
 
 /**
  * @typedef {Object} Cookie
@@ -33147,15 +29789,15 @@ module.exports = {
 /***/ }),
 
 /***/ 8915:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { maxNameValuePairSize, maxAttributeValueSize } = __nccwpck_require2_(9237)
-const { isCTLExcludingHtab } = __nccwpck_require2_(3834)
-const { collectASequenceOfCodePointsFast } = __nccwpck_require2_(4322)
-const assert = __nccwpck_require2_(2613)
+const { maxNameValuePairSize, maxAttributeValueSize } = __nccwpck_require__(9237)
+const { isCTLExcludingHtab } = __nccwpck_require__(3834)
+const { collectASequenceOfCodePointsFast } = __nccwpck_require__(4322)
+const assert = __nccwpck_require__(2613)
 
 /**
  * @description Parses the field-value attributes of a set-cookie header string.
@@ -33754,15 +30396,15 @@ module.exports = {
 /***/ }),
 
 /***/ 9136:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const net = __nccwpck_require2_(9278)
-const assert = __nccwpck_require2_(2613)
-const util = __nccwpck_require2_(3440)
-const { InvalidArgumentError, ConnectTimeoutError } = __nccwpck_require2_(8707)
+const net = __nccwpck_require__(9278)
+const assert = __nccwpck_require__(2613)
+const util = __nccwpck_require__(3440)
+const { InvalidArgumentError, ConnectTimeoutError } = __nccwpck_require__(8707)
 
 let tls // include tls conditionally since it is not always available
 
@@ -33845,7 +30487,7 @@ function buildConnector ({ allowH2, maxCachedSessions, socketPath, timeout, ...o
     let socket
     if (protocol === 'https:') {
       if (!tls) {
-        tls = __nccwpck_require2_(4756)
+        tls = __nccwpck_require__(4756)
       }
       servername = servername || options.servername || util.getServerName(host) || null
 
@@ -34315,7 +30957,7 @@ module.exports = {
 /***/ }),
 
 /***/ 4655:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -34323,10 +30965,10 @@ module.exports = {
 const {
   InvalidArgumentError,
   NotSupportedError
-} = __nccwpck_require2_(8707)
-const assert = __nccwpck_require2_(2613)
-const { kHTTP2BuildRequest, kHTTP2CopyHeaders, kHTTP1BuildRequest } = __nccwpck_require2_(6443)
-const util = __nccwpck_require2_(3440)
+} = __nccwpck_require__(8707)
+const assert = __nccwpck_require__(2613)
+const { kHTTP2BuildRequest, kHTTP2CopyHeaders, kHTTP1BuildRequest } = __nccwpck_require__(6443)
+const util = __nccwpck_require__(3440)
 
 // tokenRegExp and headerCharRegex have been lifted from
 // https://github.com/nodejs/node/blob/main/lib/_http_common.js
@@ -34356,7 +30998,7 @@ const channels = {}
 let extractBody
 
 try {
-  const diagnosticsChannel = __nccwpck_require2_(1637)
+  const diagnosticsChannel = __nccwpck_require__(1637)
   channels.create = diagnosticsChannel.channel('undici:request:create')
   channels.bodySent = diagnosticsChannel.channel('undici:request:bodySent')
   channels.headers = diagnosticsChannel.channel('undici:request:headers')
@@ -34521,7 +31163,7 @@ class Request {
       }
 
       if (!extractBody) {
-        extractBody = (__nccwpck_require2_(8923).extractBody)
+        extractBody = (__nccwpck_require__(8923).extractBody)
       }
 
       const [bodyStream, contentType] = extractBody(body)
@@ -34892,21 +31534,21 @@ module.exports = {
 /***/ }),
 
 /***/ 3440:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const assert = __nccwpck_require2_(2613)
-const { kDestroyed, kBodyUsed } = __nccwpck_require2_(6443)
-const { IncomingMessage } = __nccwpck_require2_(8611)
-const stream = __nccwpck_require2_(2203)
-const net = __nccwpck_require2_(9278)
-const { InvalidArgumentError } = __nccwpck_require2_(8707)
-const { Blob } = __nccwpck_require2_(181)
-const nodeUtil = __nccwpck_require2_(9023)
-const { stringify } = __nccwpck_require2_(3480)
-const { headerNameLowerCasedRecord } = __nccwpck_require2_(735)
+const assert = __nccwpck_require__(2613)
+const { kDestroyed, kBodyUsed } = __nccwpck_require__(6443)
+const { IncomingMessage } = __nccwpck_require__(8611)
+const stream = __nccwpck_require__(2203)
+const net = __nccwpck_require__(9278)
+const { InvalidArgumentError } = __nccwpck_require__(8707)
+const { Blob } = __nccwpck_require__(181)
+const nodeUtil = __nccwpck_require__(9023)
+const { stringify } = __nccwpck_require__(3480)
+const { headerNameLowerCasedRecord } = __nccwpck_require__(735)
 
 const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(v => Number(v))
 
@@ -35275,7 +31917,7 @@ async function * convertIterableToBuffer (iterable) {
 let ReadableStream
 function ReadableStreamFrom (iterable) {
   if (!ReadableStream) {
-    ReadableStream = (__nccwpck_require2_(3774).ReadableStream)
+    ReadableStream = (__nccwpck_require__(3774).ReadableStream)
   }
 
   if (ReadableStream.from) {
@@ -35422,18 +32064,18 @@ module.exports = {
 /***/ }),
 
 /***/ 1:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const Dispatcher = __nccwpck_require2_(992)
+const Dispatcher = __nccwpck_require__(992)
 const {
   ClientDestroyedError,
   ClientClosedError,
   InvalidArgumentError
-} = __nccwpck_require2_(8707)
-const { kDestroy, kClose, kDispatch, kInterceptors } = __nccwpck_require2_(6443)
+} = __nccwpck_require__(8707)
+const { kDestroy, kClose, kDispatch, kInterceptors } = __nccwpck_require__(6443)
 
 const kDestroyed = Symbol('destroyed')
 const kClosed = Symbol('closed')
@@ -35622,12 +32264,12 @@ module.exports = DispatcherBase
 /***/ }),
 
 /***/ 992:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const EventEmitter = __nccwpck_require2_(4434)
+const EventEmitter = __nccwpck_require__(4434)
 
 class Dispatcher extends EventEmitter {
   dispatch () {
@@ -35649,13 +32291,13 @@ module.exports = Dispatcher
 /***/ }),
 
 /***/ 8923:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const Busboy = __nccwpck_require2_(9581)
-const util = __nccwpck_require2_(3440)
+const Busboy = __nccwpck_require__(9581)
+const util = __nccwpck_require__(3440)
 const {
   ReadableStreamFrom,
   isBlobLike,
@@ -35663,22 +32305,22 @@ const {
   readableStreamClose,
   createDeferredPromise,
   fullyReadBody
-} = __nccwpck_require2_(5523)
-const { FormData } = __nccwpck_require2_(3073)
-const { kState } = __nccwpck_require2_(9710)
-const { webidl } = __nccwpck_require2_(4222)
-const { DOMException, structuredClone } = __nccwpck_require2_(7326)
-const { Blob, File: NativeFile } = __nccwpck_require2_(181)
-const { kBodyUsed } = __nccwpck_require2_(6443)
-const assert = __nccwpck_require2_(2613)
-const { isErrored } = __nccwpck_require2_(3440)
-const { isUint8Array, isArrayBuffer } = __nccwpck_require2_(8253)
-const { File: UndiciFile } = __nccwpck_require2_(3041)
-const { parseMIMEType, serializeAMimeType } = __nccwpck_require2_(4322)
+} = __nccwpck_require__(5523)
+const { FormData } = __nccwpck_require__(3073)
+const { kState } = __nccwpck_require__(9710)
+const { webidl } = __nccwpck_require__(4222)
+const { DOMException, structuredClone } = __nccwpck_require__(7326)
+const { Blob, File: NativeFile } = __nccwpck_require__(181)
+const { kBodyUsed } = __nccwpck_require__(6443)
+const assert = __nccwpck_require__(2613)
+const { isErrored } = __nccwpck_require__(3440)
+const { isUint8Array, isArrayBuffer } = __nccwpck_require__(8253)
+const { File: UndiciFile } = __nccwpck_require__(3041)
+const { parseMIMEType, serializeAMimeType } = __nccwpck_require__(4322)
 
 let random
 try {
-  const crypto = __nccwpck_require2_(7598)
+  const crypto = __nccwpck_require__(7598)
   random = (max) => crypto.randomInt(0, max)
 } catch {
   random = (max) => Math.floor(Math.random(max))
@@ -35694,7 +32336,7 @@ const textDecoder = new TextDecoder()
 // https://fetch.spec.whatwg.org/#concept-bodyinit-extract
 function extractBody (object, keepalive = false) {
   if (!ReadableStream) {
-    ReadableStream = (__nccwpck_require2_(3774).ReadableStream)
+    ReadableStream = (__nccwpck_require__(3774).ReadableStream)
   }
 
   // 1. Let stream be null.
@@ -35915,7 +32557,7 @@ function extractBody (object, keepalive = false) {
 function safelyExtractBody (object, keepalive = false) {
   if (!ReadableStream) {
     // istanbul ignore next
-    ReadableStream = (__nccwpck_require2_(3774).ReadableStream)
+    ReadableStream = (__nccwpck_require__(3774).ReadableStream)
   }
 
   // To safely extract a body and a `Content-Type` value from
@@ -36270,12 +32912,12 @@ module.exports = {
 /***/ }),
 
 /***/ 7326:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { MessageChannel, receiveMessageOnPort } = __nccwpck_require2_(8167)
+const { MessageChannel, receiveMessageOnPort } = __nccwpck_require__(8167)
 
 const corsSafeListedMethods = ['GET', 'HEAD', 'POST']
 const corsSafeListedMethodsSet = new Set(corsSafeListedMethods)
@@ -36429,11 +33071,11 @@ module.exports = {
 /***/ }),
 
 /***/ 4322:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const assert = __nccwpck_require2_(2613)
-const { atob } = __nccwpck_require2_(181)
-const { isomorphicDecode } = __nccwpck_require2_(5523)
+const assert = __nccwpck_require__(2613)
+const { atob } = __nccwpck_require__(181)
+const { isomorphicDecode } = __nccwpck_require__(5523)
 
 const encoder = new TextEncoder()
 
@@ -37063,18 +33705,18 @@ module.exports = {
 /***/ }),
 
 /***/ 3041:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { Blob, File: NativeFile } = __nccwpck_require2_(181)
-const { types } = __nccwpck_require2_(9023)
-const { kState } = __nccwpck_require2_(9710)
-const { isBlobLike } = __nccwpck_require2_(5523)
-const { webidl } = __nccwpck_require2_(4222)
-const { parseMIMEType, serializeAMimeType } = __nccwpck_require2_(4322)
-const { kEnumerableProperty } = __nccwpck_require2_(3440)
+const { Blob, File: NativeFile } = __nccwpck_require__(181)
+const { types } = __nccwpck_require__(9023)
+const { kState } = __nccwpck_require__(9710)
+const { isBlobLike } = __nccwpck_require__(5523)
+const { webidl } = __nccwpck_require__(4222)
+const { parseMIMEType, serializeAMimeType } = __nccwpck_require__(4322)
+const { kEnumerableProperty } = __nccwpck_require__(3440)
 const encoder = new TextEncoder()
 
 class File extends Blob {
@@ -37415,16 +34057,16 @@ module.exports = { File, FileLike, isFileLike }
 /***/ }),
 
 /***/ 3073:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { isBlobLike, toUSVString, makeIterator } = __nccwpck_require2_(5523)
-const { kState } = __nccwpck_require2_(9710)
-const { File: UndiciFile, FileLike, isFileLike } = __nccwpck_require2_(3041)
-const { webidl } = __nccwpck_require2_(4222)
-const { Blob, File: NativeFile } = __nccwpck_require2_(181)
+const { isBlobLike, toUSVString, makeIterator } = __nccwpck_require__(5523)
+const { kState } = __nccwpck_require__(9710)
+const { File: UndiciFile, FileLike, isFileLike } = __nccwpck_require__(3041)
+const { webidl } = __nccwpck_require__(4222)
+const { Blob, File: NativeFile } = __nccwpck_require__(181)
 
 /** @type {globalThis['File']} */
 const File = NativeFile ?? UndiciFile
@@ -37736,24 +34378,24 @@ module.exports = {
 /***/ }),
 
 /***/ 6349:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // https://github.com/Ethan-Arrowood/undici-fetch
 
 
 
-const { kHeadersList, kConstruct } = __nccwpck_require2_(6443)
-const { kGuard } = __nccwpck_require2_(9710)
-const { kEnumerableProperty } = __nccwpck_require2_(3440)
+const { kHeadersList, kConstruct } = __nccwpck_require__(6443)
+const { kGuard } = __nccwpck_require__(9710)
+const { kEnumerableProperty } = __nccwpck_require__(3440)
 const {
   makeIterator,
   isValidHeaderName,
   isValidHeaderValue
-} = __nccwpck_require2_(5523)
-const util = __nccwpck_require2_(9023)
-const { webidl } = __nccwpck_require2_(4222)
-const assert = __nccwpck_require2_(2613)
+} = __nccwpck_require__(5523)
+const util = __nccwpck_require__(9023)
+const { webidl } = __nccwpck_require__(4222)
+const assert = __nccwpck_require__(2613)
 
 const kHeadersMap = Symbol('headers map')
 const kHeadersSortedMap = Symbol('headers map sorted')
@@ -38337,7 +34979,7 @@ module.exports = {
 /***/ }),
 
 /***/ 2315:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 // https://github.com/Ethan-Arrowood/undici-fetch
@@ -38350,10 +34992,10 @@ const {
   makeAppropriateNetworkError,
   filterResponse,
   makeResponse
-} = __nccwpck_require2_(8676)
-const { Headers } = __nccwpck_require2_(6349)
-const { Request, makeRequest } = __nccwpck_require2_(5194)
-const zlib = __nccwpck_require2_(3106)
+} = __nccwpck_require__(8676)
+const { Headers } = __nccwpck_require__(6349)
+const { Request, makeRequest } = __nccwpck_require__(5194)
+const zlib = __nccwpck_require__(3106)
 const {
   bytesMatch,
   makePolicyContainer,
@@ -38383,10 +35025,10 @@ const {
   urlIsLocal,
   urlIsHttpHttpsScheme,
   urlHasHttpsScheme
-} = __nccwpck_require2_(5523)
-const { kState, kHeaders, kGuard, kRealm } = __nccwpck_require2_(9710)
-const assert = __nccwpck_require2_(2613)
-const { safelyExtractBody } = __nccwpck_require2_(8923)
+} = __nccwpck_require__(5523)
+const { kState, kHeaders, kGuard, kRealm } = __nccwpck_require__(9710)
+const assert = __nccwpck_require__(2613)
+const { safelyExtractBody } = __nccwpck_require__(8923)
 const {
   redirectStatusSet,
   nullBodyStatus,
@@ -38394,16 +35036,16 @@ const {
   requestBodyHeader,
   subresourceSet,
   DOMException
-} = __nccwpck_require2_(7326)
-const { kHeadersList } = __nccwpck_require2_(6443)
-const EE = __nccwpck_require2_(4434)
-const { Readable, pipeline } = __nccwpck_require2_(2203)
-const { addAbortListener, isErrored, isReadable, nodeMajor, nodeMinor } = __nccwpck_require2_(3440)
-const { dataURLProcessor, serializeAMimeType } = __nccwpck_require2_(4322)
-const { TransformStream } = __nccwpck_require2_(3774)
-const { getGlobalDispatcher } = __nccwpck_require2_(2581)
-const { webidl } = __nccwpck_require2_(4222)
-const { STATUS_CODES } = __nccwpck_require2_(8611)
+} = __nccwpck_require__(7326)
+const { kHeadersList } = __nccwpck_require__(6443)
+const EE = __nccwpck_require__(4434)
+const { Readable, pipeline } = __nccwpck_require__(2203)
+const { addAbortListener, isErrored, isReadable, nodeMajor, nodeMinor } = __nccwpck_require__(3440)
+const { dataURLProcessor, serializeAMimeType } = __nccwpck_require__(4322)
+const { TransformStream } = __nccwpck_require__(3774)
+const { getGlobalDispatcher } = __nccwpck_require__(2581)
+const { webidl } = __nccwpck_require__(4222)
+const { STATUS_CODES } = __nccwpck_require__(8611)
 const GET_OR_HEAD = ['GET', 'HEAD']
 
 /** @type {import('buffer').resolveObjectURL} */
@@ -39145,7 +35787,7 @@ function schemeFetch (fetchParams) {
     }
     case 'blob:': {
       if (!resolveObjectURL) {
-        resolveObjectURL = (__nccwpck_require2_(181).resolveObjectURL)
+        resolveObjectURL = (__nccwpck_require__(181).resolveObjectURL)
       }
 
       // 1. Let blobURLEntry be request’s current URL’s blob URL entry.
@@ -40144,7 +36786,7 @@ async function httpNetworkFetch (
   // cancelAlgorithm set to cancelAlgorithm, highWaterMark set to
   // highWaterMark, and sizeAlgorithm set to sizeAlgorithm.
   if (!ReadableStream) {
-    ReadableStream = (__nccwpck_require2_(3774).ReadableStream)
+    ReadableStream = (__nccwpck_require__(3774).ReadableStream)
   }
 
   const stream = new ReadableStream(
@@ -40493,24 +37135,24 @@ module.exports = {
 /***/ }),
 
 /***/ 5194:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /* globals AbortController */
 
 
 
-const { extractBody, mixinBody, cloneBody } = __nccwpck_require2_(8923)
-const { Headers, fill: fillHeaders, HeadersList } = __nccwpck_require2_(6349)
-const { FinalizationRegistry } = __nccwpck_require2_(3194)()
-const util = __nccwpck_require2_(3440)
+const { extractBody, mixinBody, cloneBody } = __nccwpck_require__(8923)
+const { Headers, fill: fillHeaders, HeadersList } = __nccwpck_require__(6349)
+const { FinalizationRegistry } = __nccwpck_require__(3194)()
+const util = __nccwpck_require__(3440)
 const {
   isValidHTTPToken,
   sameOrigin,
   normalizeMethod,
   makePolicyContainer,
   normalizeMethodRecord
-} = __nccwpck_require2_(5523)
+} = __nccwpck_require__(5523)
 const {
   forbiddenMethodsSet,
   corsSafeListedMethodsSet,
@@ -40520,15 +37162,15 @@ const {
   requestCredentials,
   requestCache,
   requestDuplex
-} = __nccwpck_require2_(7326)
+} = __nccwpck_require__(7326)
 const { kEnumerableProperty } = util
-const { kHeaders, kSignal, kState, kGuard, kRealm } = __nccwpck_require2_(9710)
-const { webidl } = __nccwpck_require2_(4222)
-const { getGlobalOrigin } = __nccwpck_require2_(5628)
-const { URLSerializer } = __nccwpck_require2_(4322)
-const { kHeadersList, kConstruct } = __nccwpck_require2_(6443)
-const assert = __nccwpck_require2_(2613)
-const { getMaxListeners, setMaxListeners, getEventListeners, defaultMaxListeners } = __nccwpck_require2_(4434)
+const { kHeaders, kSignal, kState, kGuard, kRealm } = __nccwpck_require__(9710)
+const { webidl } = __nccwpck_require__(4222)
+const { getGlobalOrigin } = __nccwpck_require__(5628)
+const { URLSerializer } = __nccwpck_require__(4322)
+const { kHeadersList, kConstruct } = __nccwpck_require__(6443)
+const assert = __nccwpck_require__(2613)
+const { getMaxListeners, setMaxListeners, getEventListeners, defaultMaxListeners } = __nccwpck_require__(4434)
 
 let TransformStream = globalThis.TransformStream
 
@@ -41015,7 +37657,7 @@ class Request {
 
       // 2. Set finalBody to the result of creating a proxy for inputBody.
       if (!TransformStream) {
-        TransformStream = (__nccwpck_require2_(3774).TransformStream)
+        TransformStream = (__nccwpck_require__(3774).TransformStream)
       }
 
       // https://streams.spec.whatwg.org/#readablestream-create-a-proxy
@@ -41447,14 +38089,14 @@ module.exports = { Request, makeRequest }
 /***/ }),
 
 /***/ 8676:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { Headers, HeadersList, fill } = __nccwpck_require2_(6349)
-const { extractBody, cloneBody, mixinBody } = __nccwpck_require2_(8923)
-const util = __nccwpck_require2_(3440)
+const { Headers, HeadersList, fill } = __nccwpck_require__(6349)
+const { extractBody, cloneBody, mixinBody } = __nccwpck_require__(8923)
+const util = __nccwpck_require__(3440)
 const { kEnumerableProperty } = util
 const {
   isValidReasonPhrase,
@@ -41464,22 +38106,22 @@ const {
   serializeJavascriptValueToJSONString,
   isErrorLike,
   isomorphicEncode
-} = __nccwpck_require2_(5523)
+} = __nccwpck_require__(5523)
 const {
   redirectStatusSet,
   nullBodyStatus,
   DOMException
-} = __nccwpck_require2_(7326)
-const { kState, kHeaders, kGuard, kRealm } = __nccwpck_require2_(9710)
-const { webidl } = __nccwpck_require2_(4222)
-const { FormData } = __nccwpck_require2_(3073)
-const { getGlobalOrigin } = __nccwpck_require2_(5628)
-const { URLSerializer } = __nccwpck_require2_(4322)
-const { kHeadersList, kConstruct } = __nccwpck_require2_(6443)
-const assert = __nccwpck_require2_(2613)
-const { types } = __nccwpck_require2_(9023)
+} = __nccwpck_require__(7326)
+const { kState, kHeaders, kGuard, kRealm } = __nccwpck_require__(9710)
+const { webidl } = __nccwpck_require__(4222)
+const { FormData } = __nccwpck_require__(3073)
+const { getGlobalOrigin } = __nccwpck_require__(5628)
+const { URLSerializer } = __nccwpck_require__(4322)
+const { kHeadersList, kConstruct } = __nccwpck_require__(6443)
+const assert = __nccwpck_require__(2613)
+const { types } = __nccwpck_require__(9023)
 
-const ReadableStream = globalThis.ReadableStream || (__nccwpck_require2_(3774).ReadableStream)
+const ReadableStream = globalThis.ReadableStream || (__nccwpck_require__(3774).ReadableStream)
 const textEncoder = new TextEncoder('utf-8')
 
 // https://fetch.spec.whatwg.org/#response-class
@@ -42044,17 +38686,17 @@ module.exports = {
 /***/ }),
 
 /***/ 5523:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { redirectStatusSet, referrerPolicySet: referrerPolicyTokens, badPortsSet } = __nccwpck_require2_(7326)
-const { getGlobalOrigin } = __nccwpck_require2_(5628)
-const { performance } = __nccwpck_require2_(2987)
-const { isBlobLike, toUSVString, ReadableStreamFrom } = __nccwpck_require2_(3440)
-const assert = __nccwpck_require2_(2613)
-const { isUint8Array } = __nccwpck_require2_(8253)
+const { redirectStatusSet, referrerPolicySet: referrerPolicyTokens, badPortsSet } = __nccwpck_require__(7326)
+const { getGlobalOrigin } = __nccwpck_require__(5628)
+const { performance } = __nccwpck_require__(2987)
+const { isBlobLike, toUSVString, ReadableStreamFrom } = __nccwpck_require__(3440)
+const assert = __nccwpck_require__(2613)
+const { isUint8Array } = __nccwpck_require__(8253)
 
 let supportedHashes = []
 
@@ -42063,7 +38705,7 @@ let supportedHashes = []
 let crypto
 
 try {
-  crypto = __nccwpck_require2_(6982)
+  crypto = __nccwpck_require__(6982)
   const possibleRelevantHashes = ['sha256', 'sha384', 'sha512']
   supportedHashes = crypto.getHashes().filter((hash) => possibleRelevantHashes.includes(hash))
 /* c8 ignore next 3 */
@@ -43016,7 +39658,7 @@ let ReadableStream = globalThis.ReadableStream
 
 function isReadableStreamLike (stream) {
   if (!ReadableStream) {
-    ReadableStream = (__nccwpck_require2_(3774).ReadableStream)
+    ReadableStream = (__nccwpck_require__(3774).ReadableStream)
   }
 
   return stream instanceof ReadableStream || (
@@ -43196,13 +39838,13 @@ module.exports = {
 /***/ }),
 
 /***/ 4222:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { types } = __nccwpck_require2_(9023)
-const { hasOwn, toUSVString } = __nccwpck_require2_(5523)
+const { types } = __nccwpck_require__(9023)
+const { hasOwn, toUSVString } = __nccwpck_require__(5523)
 
 /** @type {import('../../types/webidl').Webidl} */
 const webidl = {}
@@ -44148,7 +40790,7 @@ module.exports = {
 /***/ }),
 
 /***/ 2160:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -44157,16 +40799,16 @@ const {
   staticPropertyDescriptors,
   readOperation,
   fireAProgressEvent
-} = __nccwpck_require2_(165)
+} = __nccwpck_require__(165)
 const {
   kState,
   kError,
   kResult,
   kEvents,
   kAborted
-} = __nccwpck_require2_(6812)
-const { webidl } = __nccwpck_require2_(4222)
-const { kEnumerableProperty } = __nccwpck_require2_(3440)
+} = __nccwpck_require__(6812)
+const { webidl } = __nccwpck_require__(4222)
+const { kEnumerableProperty } = __nccwpck_require__(3440)
 
 class FileReader extends EventTarget {
   constructor () {
@@ -44500,12 +41142,12 @@ module.exports = {
 /***/ }),
 
 /***/ 5976:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { webidl } = __nccwpck_require2_(4222)
+const { webidl } = __nccwpck_require__(4222)
 
 const kState = Symbol('ProgressEvent state')
 
@@ -44604,7 +41246,7 @@ module.exports = {
 /***/ }),
 
 /***/ 165:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -44615,14 +41257,14 @@ const {
   kResult,
   kAborted,
   kLastProgressEventFired
-} = __nccwpck_require2_(6812)
-const { ProgressEvent } = __nccwpck_require2_(5976)
-const { getEncoding } = __nccwpck_require2_(396)
-const { DOMException } = __nccwpck_require2_(7326)
-const { serializeAMimeType, parseMIMEType } = __nccwpck_require2_(4322)
-const { types } = __nccwpck_require2_(9023)
-const { StringDecoder } = __nccwpck_require2_(3193)
-const { btoa } = __nccwpck_require2_(181)
+} = __nccwpck_require__(6812)
+const { ProgressEvent } = __nccwpck_require__(5976)
+const { getEncoding } = __nccwpck_require__(396)
+const { DOMException } = __nccwpck_require__(7326)
+const { serializeAMimeType, parseMIMEType } = __nccwpck_require__(4322)
+const { types } = __nccwpck_require__(9023)
+const { StringDecoder } = __nccwpck_require__(3193)
+const { btoa } = __nccwpck_require__(181)
 
 /** @type {PropertyDescriptor} */
 const staticPropertyDescriptors = {
@@ -45004,7 +41646,7 @@ module.exports = {
 /***/ }),
 
 /***/ 2581:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -45012,8 +41654,8 @@ module.exports = {
 // We include a version number for the Dispatcher API. In case of breaking changes,
 // this version number must be increased to avoid conflicts.
 const globalDispatcher = Symbol.for('undici.globalDispatcher.1')
-const { InvalidArgumentError } = __nccwpck_require2_(8707)
-const Agent = __nccwpck_require2_(9965)
+const { InvalidArgumentError } = __nccwpck_require__(8707)
+const Agent = __nccwpck_require__(9965)
 
 if (getGlobalDispatcher() === undefined) {
   setGlobalDispatcher(new Agent())
@@ -45087,16 +41729,16 @@ module.exports = class DecoratorHandler {
 /***/ }),
 
 /***/ 8299:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const util = __nccwpck_require2_(3440)
-const { kBodyUsed } = __nccwpck_require2_(6443)
-const assert = __nccwpck_require2_(2613)
-const { InvalidArgumentError } = __nccwpck_require2_(8707)
-const EE = __nccwpck_require2_(4434)
+const util = __nccwpck_require__(3440)
+const { kBodyUsed } = __nccwpck_require__(6443)
+const assert = __nccwpck_require__(2613)
+const { InvalidArgumentError } = __nccwpck_require__(8707)
+const EE = __nccwpck_require__(4434)
 
 const redirectableStatusCodes = [300, 301, 302, 303, 307, 308]
 
@@ -45316,13 +41958,13 @@ module.exports = RedirectHandler
 /***/ }),
 
 /***/ 3573:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const assert = __nccwpck_require2_(2613)
+const assert = __nccwpck_require__(2613)
 
-const { kRetryHandlerDefaultRetry } = __nccwpck_require2_(6443)
-const { RequestRetryError } = __nccwpck_require2_(8707)
-const { isDisturbed, parseHeaders, parseRangeHeader } = __nccwpck_require2_(3440)
+const { kRetryHandlerDefaultRetry } = __nccwpck_require__(6443)
+const { RequestRetryError } = __nccwpck_require__(8707)
+const { isDisturbed, parseHeaders, parseRangeHeader } = __nccwpck_require__(3440)
 
 function calculateRetryAfterHeader (retryAfter) {
   const current = Date.now()
@@ -45659,12 +42301,12 @@ module.exports = RetryHandler
 /***/ }),
 
 /***/ 4415:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const RedirectHandler = __nccwpck_require2_(8299)
+const RedirectHandler = __nccwpck_require__(8299)
 
 function createRedirectInterceptor ({ maxRedirections: defaultMaxRedirections }) {
   return (dispatch) => {
@@ -45688,13 +42330,13 @@ module.exports = createRedirectInterceptor
 /***/ }),
 
 /***/ 2824:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.SPECIAL_HEADERS = exports.HEADER_STATE = exports.MINOR = exports.MAJOR = exports.CONNECTION_TOKEN_CHARS = exports.HEADER_CHARS = exports.TOKEN = exports.STRICT_TOKEN = exports.HEX = exports.URL_CHAR = exports.STRICT_URL_CHAR = exports.USERINFO_CHARS = exports.MARK = exports.ALPHANUM = exports.NUM = exports.HEX_MAP = exports.NUM_MAP = exports.ALPHA = exports.FINISH = exports.H_METHOD_MAP = exports.METHOD_MAP = exports.METHODS_RTSP = exports.METHODS_ICE = exports.METHODS_HTTP = exports.METHODS = exports.LENIENT_FLAGS = exports.FLAGS = exports.TYPE = exports.ERROR = void 0;
-const utils_1 = __nccwpck_require2_(172);
+const utils_1 = __nccwpck_require__(172);
 // C headers
 var ERROR;
 (function (ERROR) {
@@ -46011,13 +42653,13 @@ exports.enumToMap = enumToMap;
 /***/ }),
 
 /***/ 7501:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { kClients } = __nccwpck_require2_(6443)
-const Agent = __nccwpck_require2_(9965)
+const { kClients } = __nccwpck_require__(6443)
+const Agent = __nccwpck_require__(9965)
 const {
   kAgent,
   kMockAgentSet,
@@ -46028,14 +42670,14 @@ const {
   kGetNetConnect,
   kOptions,
   kFactory
-} = __nccwpck_require2_(1117)
-const MockClient = __nccwpck_require2_(7365)
-const MockPool = __nccwpck_require2_(4004)
-const { matchValue, buildMockOptions } = __nccwpck_require2_(3397)
-const { InvalidArgumentError, UndiciError } = __nccwpck_require2_(8707)
-const Dispatcher = __nccwpck_require2_(992)
-const Pluralizer = __nccwpck_require2_(1529)
-const PendingInterceptorsFormatter = __nccwpck_require2_(6142)
+} = __nccwpck_require__(1117)
+const MockClient = __nccwpck_require__(7365)
+const MockPool = __nccwpck_require__(4004)
+const { matchValue, buildMockOptions } = __nccwpck_require__(3397)
+const { InvalidArgumentError, UndiciError } = __nccwpck_require__(8707)
+const Dispatcher = __nccwpck_require__(992)
+const Pluralizer = __nccwpck_require__(1529)
+const PendingInterceptorsFormatter = __nccwpck_require__(6142)
 
 class FakeWeakRef {
   constructor (value) {
@@ -46190,14 +42832,14 @@ module.exports = MockAgent
 /***/ }),
 
 /***/ 7365:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { promisify } = __nccwpck_require2_(9023)
-const Client = __nccwpck_require2_(6197)
-const { buildMockDispatch } = __nccwpck_require2_(3397)
+const { promisify } = __nccwpck_require__(9023)
+const Client = __nccwpck_require__(6197)
+const { buildMockDispatch } = __nccwpck_require__(3397)
 const {
   kDispatches,
   kMockAgent,
@@ -46206,10 +42848,10 @@ const {
   kOrigin,
   kOriginalDispatch,
   kConnected
-} = __nccwpck_require2_(1117)
-const { MockInterceptor } = __nccwpck_require2_(1511)
-const Symbols = __nccwpck_require2_(6443)
-const { InvalidArgumentError } = __nccwpck_require2_(8707)
+} = __nccwpck_require__(1117)
+const { MockInterceptor } = __nccwpck_require__(1511)
+const Symbols = __nccwpck_require__(6443)
+const { InvalidArgumentError } = __nccwpck_require__(8707)
 
 /**
  * MockClient provides an API that extends the Client to influence the mockDispatches.
@@ -46257,12 +42899,12 @@ module.exports = MockClient
 /***/ }),
 
 /***/ 2429:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { UndiciError } = __nccwpck_require2_(8707)
+const { UndiciError } = __nccwpck_require__(8707)
 
 class MockNotMatchedError extends UndiciError {
   constructor (message) {
@@ -46282,12 +42924,12 @@ module.exports = {
 /***/ }),
 
 /***/ 1511:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { getResponseData, buildKey, addMockDispatch } = __nccwpck_require2_(3397)
+const { getResponseData, buildKey, addMockDispatch } = __nccwpck_require__(3397)
 const {
   kDispatches,
   kDispatchKey,
@@ -46295,9 +42937,9 @@ const {
   kDefaultTrailers,
   kContentLength,
   kMockDispatch
-} = __nccwpck_require2_(1117)
-const { InvalidArgumentError } = __nccwpck_require2_(8707)
-const { buildURL } = __nccwpck_require2_(3440)
+} = __nccwpck_require__(1117)
+const { InvalidArgumentError } = __nccwpck_require__(8707)
+const { buildURL } = __nccwpck_require__(3440)
 
 /**
  * Defines the scope API for an interceptor reply
@@ -46496,14 +43138,14 @@ module.exports.MockScope = MockScope
 /***/ }),
 
 /***/ 4004:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { promisify } = __nccwpck_require2_(9023)
-const Pool = __nccwpck_require2_(5076)
-const { buildMockDispatch } = __nccwpck_require2_(3397)
+const { promisify } = __nccwpck_require__(9023)
+const Pool = __nccwpck_require__(5076)
+const { buildMockDispatch } = __nccwpck_require__(3397)
 const {
   kDispatches,
   kMockAgent,
@@ -46512,10 +43154,10 @@ const {
   kOrigin,
   kOriginalDispatch,
   kConnected
-} = __nccwpck_require2_(1117)
-const { MockInterceptor } = __nccwpck_require2_(1511)
-const Symbols = __nccwpck_require2_(6443)
-const { InvalidArgumentError } = __nccwpck_require2_(8707)
+} = __nccwpck_require__(1117)
+const { MockInterceptor } = __nccwpck_require__(1511)
+const Symbols = __nccwpck_require__(6443)
+const { InvalidArgumentError } = __nccwpck_require__(8707)
 
 /**
  * MockPool provides an API that extends the Pool to influence the mockDispatches.
@@ -46594,26 +43236,26 @@ module.exports = {
 /***/ }),
 
 /***/ 3397:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { MockNotMatchedError } = __nccwpck_require2_(2429)
+const { MockNotMatchedError } = __nccwpck_require__(2429)
 const {
   kDispatches,
   kMockAgent,
   kOriginalDispatch,
   kOrigin,
   kGetNetConnect
-} = __nccwpck_require2_(1117)
-const { buildURL, nop } = __nccwpck_require2_(3440)
-const { STATUS_CODES } = __nccwpck_require2_(8611)
+} = __nccwpck_require__(1117)
+const { buildURL, nop } = __nccwpck_require__(3440)
+const { STATUS_CODES } = __nccwpck_require__(8611)
 const {
   types: {
     isPromise
   }
-} = __nccwpck_require2_(9023)
+} = __nccwpck_require__(9023)
 
 function matchValue (match, value) {
   if (typeof match === 'string') {
@@ -46953,13 +43595,13 @@ module.exports = {
 /***/ }),
 
 /***/ 6142:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { Transform } = __nccwpck_require2_(2203)
-const { Console } = __nccwpck_require2_(4236)
+const { Transform } = __nccwpck_require__(2203)
+const { Console } = __nccwpck_require__(4236)
 
 /**
  * Gets the output of `console.table(…)` as a string.
@@ -47163,15 +43805,15 @@ module.exports = class FixedQueue {
 /***/ }),
 
 /***/ 8640:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const DispatcherBase = __nccwpck_require2_(1)
-const FixedQueue = __nccwpck_require2_(4869)
-const { kConnected, kSize, kRunning, kPending, kQueued, kBusy, kFree, kUrl, kClose, kDestroy, kDispatch } = __nccwpck_require2_(6443)
-const PoolStats = __nccwpck_require2_(4622)
+const DispatcherBase = __nccwpck_require__(1)
+const FixedQueue = __nccwpck_require__(4869)
+const { kConnected, kSize, kRunning, kPending, kQueued, kBusy, kFree, kUrl, kClose, kDestroy, kDispatch } = __nccwpck_require__(6443)
+const PoolStats = __nccwpck_require__(4622)
 
 const kClients = Symbol('clients')
 const kNeedDrain = Symbol('needDrain')
@@ -47365,9 +44007,9 @@ module.exports = {
 /***/ }),
 
 /***/ 4622:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const { kFree, kConnected, kPending, kQueued, kRunning, kSize } = __nccwpck_require2_(6443)
+const { kFree, kConnected, kPending, kQueued, kRunning, kSize } = __nccwpck_require__(6443)
 const kPool = Symbol('pool')
 
 class PoolStats {
@@ -47406,7 +44048,7 @@ module.exports = PoolStats
 /***/ }),
 
 /***/ 5076:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -47417,14 +44059,14 @@ const {
   kNeedDrain,
   kAddClient,
   kGetDispatcher
-} = __nccwpck_require2_(8640)
-const Client = __nccwpck_require2_(6197)
+} = __nccwpck_require__(8640)
+const Client = __nccwpck_require__(6197)
 const {
   InvalidArgumentError
-} = __nccwpck_require2_(8707)
-const util = __nccwpck_require2_(3440)
-const { kUrl, kInterceptors } = __nccwpck_require2_(6443)
-const buildConnector = __nccwpck_require2_(9136)
+} = __nccwpck_require__(8707)
+const util = __nccwpck_require__(3440)
+const { kUrl, kInterceptors } = __nccwpck_require__(6443)
+const buildConnector = __nccwpck_require__(9136)
 
 const kOptions = Symbol('options')
 const kConnections = Symbol('connections')
@@ -47522,18 +44164,18 @@ module.exports = Pool
 /***/ }),
 
 /***/ 2720:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { kProxy, kClose, kDestroy, kInterceptors } = __nccwpck_require2_(6443)
-const { URL } = __nccwpck_require2_(7016)
-const Agent = __nccwpck_require2_(9965)
-const Pool = __nccwpck_require2_(5076)
-const DispatcherBase = __nccwpck_require2_(1)
-const { InvalidArgumentError, RequestAbortedError } = __nccwpck_require2_(8707)
-const buildConnector = __nccwpck_require2_(9136)
+const { kProxy, kClose, kDestroy, kInterceptors } = __nccwpck_require__(6443)
+const { URL } = __nccwpck_require__(7016)
+const Agent = __nccwpck_require__(9965)
+const Pool = __nccwpck_require__(5076)
+const DispatcherBase = __nccwpck_require__(1)
+const { InvalidArgumentError, RequestAbortedError } = __nccwpck_require__(8707)
+const buildConnector = __nccwpck_require__(9136)
 
 const kAgent = Symbol('proxy agent')
 const kClient = Symbol('proxy client')
@@ -47824,26 +44466,26 @@ module.exports = {
 /***/ }),
 
 /***/ 8550:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const diagnosticsChannel = __nccwpck_require2_(1637)
-const { uid, states } = __nccwpck_require2_(5913)
+const diagnosticsChannel = __nccwpck_require__(1637)
+const { uid, states } = __nccwpck_require__(5913)
 const {
   kReadyState,
   kSentClose,
   kByteParser,
   kReceivedClose
-} = __nccwpck_require2_(2933)
-const { fireEvent, failWebsocketConnection } = __nccwpck_require2_(3574)
-const { CloseEvent } = __nccwpck_require2_(6255)
-const { makeRequest } = __nccwpck_require2_(5194)
-const { fetching } = __nccwpck_require2_(2315)
-const { Headers } = __nccwpck_require2_(6349)
-const { getGlobalDispatcher } = __nccwpck_require2_(2581)
-const { kHeadersList } = __nccwpck_require2_(6443)
+} = __nccwpck_require__(2933)
+const { fireEvent, failWebsocketConnection } = __nccwpck_require__(3574)
+const { CloseEvent } = __nccwpck_require__(6255)
+const { makeRequest } = __nccwpck_require__(5194)
+const { fetching } = __nccwpck_require__(2315)
+const { Headers } = __nccwpck_require__(6349)
+const { getGlobalDispatcher } = __nccwpck_require__(2581)
+const { kHeadersList } = __nccwpck_require__(6443)
 
 const channels = {}
 channels.open = diagnosticsChannel.channel('undici:websocket:open')
@@ -47853,7 +44495,7 @@ channels.socketError = diagnosticsChannel.channel('undici:websocket:socket_error
 /** @type {import('crypto')} */
 let crypto
 try {
-  crypto = __nccwpck_require2_(6982)
+  crypto = __nccwpck_require__(6982)
 } catch {
 
 }
@@ -48182,14 +44824,14 @@ module.exports = {
 /***/ }),
 
 /***/ 6255:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { webidl } = __nccwpck_require2_(4222)
-const { kEnumerableProperty } = __nccwpck_require2_(3440)
-const { MessagePort } = __nccwpck_require2_(8167)
+const { webidl } = __nccwpck_require__(4222)
+const { kEnumerableProperty } = __nccwpck_require__(3440)
+const { MessagePort } = __nccwpck_require__(8167)
 
 /**
  * @see https://html.spec.whatwg.org/multipage/comms.html#messageevent
@@ -48493,17 +45135,17 @@ module.exports = {
 /***/ }),
 
 /***/ 1237:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { maxUnsigned16Bit } = __nccwpck_require2_(5913)
+const { maxUnsigned16Bit } = __nccwpck_require__(5913)
 
 /** @type {import('crypto')} */
 let crypto
 try {
-  crypto = __nccwpck_require2_(6982)
+  crypto = __nccwpck_require__(6982)
 } catch {
 
 }
@@ -48574,17 +45216,17 @@ module.exports = {
 /***/ }),
 
 /***/ 3171:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { Writable } = __nccwpck_require2_(2203)
-const diagnosticsChannel = __nccwpck_require2_(1637)
-const { parserStates, opcodes, states, emptyBuffer } = __nccwpck_require2_(5913)
-const { kReadyState, kSentClose, kResponse, kReceivedClose } = __nccwpck_require2_(2933)
-const { isValidStatusCode, failWebsocketConnection, websocketMessageReceived } = __nccwpck_require2_(3574)
-const { WebsocketFrameSend } = __nccwpck_require2_(1237)
+const { Writable } = __nccwpck_require__(2203)
+const diagnosticsChannel = __nccwpck_require__(1637)
+const { parserStates, opcodes, states, emptyBuffer } = __nccwpck_require__(5913)
+const { kReadyState, kSentClose, kResponse, kReceivedClose } = __nccwpck_require__(2933)
+const { isValidStatusCode, failWebsocketConnection, websocketMessageReceived } = __nccwpck_require__(3574)
+const { WebsocketFrameSend } = __nccwpck_require__(1237)
 
 // This code was influenced by ws released under the MIT license.
 // Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
@@ -48946,14 +45588,14 @@ module.exports = {
 /***/ }),
 
 /***/ 3574:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { kReadyState, kController, kResponse, kBinaryType, kWebSocketURL } = __nccwpck_require2_(2933)
-const { states, opcodes } = __nccwpck_require2_(5913)
-const { MessageEvent, ErrorEvent } = __nccwpck_require2_(6255)
+const { kReadyState, kController, kResponse, kBinaryType, kWebSocketURL } = __nccwpck_require__(2933)
+const { states, opcodes } = __nccwpck_require__(5913)
+const { MessageEvent, ErrorEvent } = __nccwpck_require__(6255)
 
 /* globals Blob */
 
@@ -49154,16 +45796,16 @@ module.exports = {
 /***/ }),
 
 /***/ 5171:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { webidl } = __nccwpck_require2_(4222)
-const { DOMException } = __nccwpck_require2_(7326)
-const { URLSerializer } = __nccwpck_require2_(4322)
-const { getGlobalOrigin } = __nccwpck_require2_(5628)
-const { staticPropertyDescriptors, states, opcodes, emptyBuffer } = __nccwpck_require2_(5913)
+const { webidl } = __nccwpck_require__(4222)
+const { DOMException } = __nccwpck_require__(7326)
+const { URLSerializer } = __nccwpck_require__(4322)
+const { getGlobalOrigin } = __nccwpck_require__(5628)
+const { staticPropertyDescriptors, states, opcodes, emptyBuffer } = __nccwpck_require__(5913)
 const {
   kWebSocketURL,
   kReadyState,
@@ -49172,14 +45814,14 @@ const {
   kResponse,
   kSentClose,
   kByteParser
-} = __nccwpck_require2_(2933)
-const { isEstablished, isClosing, isValidSubprotocol, failWebsocketConnection, fireEvent } = __nccwpck_require2_(3574)
-const { establishWebSocketConnection } = __nccwpck_require2_(8550)
-const { WebsocketFrameSend } = __nccwpck_require2_(1237)
-const { ByteParser } = __nccwpck_require2_(3171)
-const { kEnumerableProperty, isBlobLike } = __nccwpck_require2_(3440)
-const { getGlobalDispatcher } = __nccwpck_require2_(2581)
-const { types } = __nccwpck_require2_(9023)
+} = __nccwpck_require__(2933)
+const { isEstablished, isClosing, isValidSubprotocol, failWebsocketConnection, fireEvent } = __nccwpck_require__(3574)
+const { establishWebSocketConnection } = __nccwpck_require__(8550)
+const { WebsocketFrameSend } = __nccwpck_require__(1237)
+const { ByteParser } = __nccwpck_require__(3171)
+const { kEnumerableProperty, isBlobLike } = __nccwpck_require__(3440)
+const { getGlobalDispatcher } = __nccwpck_require__(2581)
+const { types } = __nccwpck_require__(9023)
 
 let experimentalWarned = false
 
@@ -49803,42 +46445,42 @@ module.exports = {
 /***/ }),
 
 /***/ 4488:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 
 /**
  * For Node.js, simply re-export the core `util.deprecate` function.
  */
 
-module.exports = __nccwpck_require2_(9023).deprecate;
+module.exports = __nccwpck_require__(9023).deprecate;
 
 
 /***/ }),
 
 /***/ 3588:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
 // Expose modern transport directly as the export
-module.exports = __nccwpck_require2_(8241);
+module.exports = __nccwpck_require__(8241);
 
 // Expose legacy stream
-module.exports.LegacyTransportStream = __nccwpck_require2_(6493);
+module.exports.LegacyTransportStream = __nccwpck_require__(6493);
 
 
 /***/ }),
 
 /***/ 6493:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const util = __nccwpck_require2_(9023);
-const { LEVEL } = __nccwpck_require2_(8836);
-const TransportStream = __nccwpck_require2_(8241);
+const util = __nccwpck_require__(9023);
+const { LEVEL } = __nccwpck_require__(8836);
+const TransportStream = __nccwpck_require__(8241);
 
 /**
  * Constructor function for the LegacyTransportStream. This is an internal
@@ -49958,14 +46600,14 @@ LegacyTransportStream.prototype.close = function close() {
 /***/ }),
 
 /***/ 8241:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const util = __nccwpck_require2_(9023);
-const Writable = __nccwpck_require2_(8797);
-const { LEVEL } = __nccwpck_require2_(8836);
+const util = __nccwpck_require__(9023);
+const Writable = __nccwpck_require__(8797);
+const { LEVEL } = __nccwpck_require__(8836);
 
 /**
  * Constructor function for the TransportStream. This is the base prototype
@@ -50177,7 +46819,7 @@ TransportStream.prototype._nop = function _nop() {
 /***/ }),
 
 /***/ 4240:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -50189,24 +46831,24 @@ TransportStream.prototype._nop = function _nop() {
 
 
 
-const logform = __nccwpck_require2_(5440);
-const { warn } = __nccwpck_require2_(3254);
+const logform = __nccwpck_require__(5440);
+const { warn } = __nccwpck_require__(3254);
 
 /**
  * Expose version. Use `require` method for `webpack` support.
  * @type {string}
  */
-exports.version = __nccwpck_require2_(6256).version;
+exports.version = __nccwpck_require__(6256).version;
 /**
  * Include transports defined by default by winston
  * @type {Array}
  */
-exports.transports = __nccwpck_require2_(7522);
+exports.transports = __nccwpck_require__(7522);
 /**
  * Expose utility methods
  * @type {Object}
  */
-exports.config = __nccwpck_require2_(1942);
+exports.config = __nccwpck_require__(1942);
 /**
  * Hoist format-related functionality from logform.
  * @type {Object}
@@ -50221,32 +46863,32 @@ exports.format = logform.format;
  * Expose core Logging-related prototypes.
  * @type {function}
  */
-exports.createLogger = __nccwpck_require2_(4092);
+exports.createLogger = __nccwpck_require__(4092);
 /**
  * Expose core Logging-related prototypes.
  * @type {function}
  */
-exports.Logger = __nccwpck_require2_(1279);
+exports.Logger = __nccwpck_require__(1279);
 /**
  * Expose core Logging-related prototypes.
  * @type {Object}
  */
-exports.ExceptionHandler = __nccwpck_require2_(1019);
+exports.ExceptionHandler = __nccwpck_require__(1019);
 /**
  * Expose core Logging-related prototypes.
  * @type {Object}
  */
-exports.RejectionHandler = __nccwpck_require2_(5421);
+exports.RejectionHandler = __nccwpck_require__(5421);
 /**
  * Expose core Logging-related prototypes.
  * @type {Container}
  */
-exports.Container = __nccwpck_require2_(632);
+exports.Container = __nccwpck_require__(632);
 /**
  * Expose core Logging-related prototypes.
  * @type {Object}
  */
-exports.Transport = __nccwpck_require2_(3588);
+exports.Transport = __nccwpck_require__(3588);
 /**
  * We create and expose a default `Container` to `winston.loggers` so that the
  * programmer may manage multiple `winston.Logger` instances without any
@@ -50376,7 +47018,7 @@ warn.forProperties(exports, 'deprecated', ['emitErrs', 'levelLength']);
 /***/ }),
 
 /***/ 3254:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -50388,7 +47030,7 @@ warn.forProperties(exports, 'deprecated', ['emitErrs', 'levelLength']);
 
 
 
-const { format } = __nccwpck_require2_(9023);
+const { format } = __nccwpck_require__(9023);
 
 /**
  * Set of simple deprecation notices and a way to expose them for a set of
@@ -50430,7 +47072,7 @@ exports.warn = {
 /***/ }),
 
 /***/ 1942:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -50442,8 +47084,8 @@ exports.warn = {
 
 
 
-const logform = __nccwpck_require2_(5440);
-const { configs } = __nccwpck_require2_(8836);
+const logform = __nccwpck_require__(5440);
+const { configs } = __nccwpck_require__(8836);
 
 /**
  * Export config set for the CLI.
@@ -50473,7 +47115,7 @@ exports.addColors = logform.levels;
 /***/ }),
 
 /***/ 632:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -50485,7 +47127,7 @@ exports.addColors = logform.levels;
 
 
 
-const createLogger = __nccwpck_require2_(4092);
+const createLogger = __nccwpck_require__(4092);
 
 /**
  * Inversion of control container for winston logger instances.
@@ -50599,7 +47241,7 @@ module.exports = class Container {
 /***/ }),
 
 /***/ 4092:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -50611,10 +47253,10 @@ module.exports = class Container {
 
 
 
-const { LEVEL } = __nccwpck_require2_(8836);
-const config = __nccwpck_require2_(1942);
-const Logger = __nccwpck_require2_(1279);
-const debug = __nccwpck_require2_(1379)('winston:create-logger');
+const { LEVEL } = __nccwpck_require__(8836);
+const config = __nccwpck_require__(1942);
+const Logger = __nccwpck_require__(1279);
+const debug = __nccwpck_require__(1379)('winston:create-logger');
 
 function isLevelEnabledFunctionName(level) {
   return 'is' + level.charAt(0).toUpperCase() + level.slice(1) + 'Enabled';
@@ -50711,7 +47353,7 @@ module.exports = function (opts = {}) {
 /***/ }),
 
 /***/ 1019:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -50723,12 +47365,12 @@ module.exports = function (opts = {}) {
 
 
 
-const os = __nccwpck_require2_(857);
-const asyncForEach = __nccwpck_require2_(3650);
-const debug = __nccwpck_require2_(1379)('winston:exception');
-const once = __nccwpck_require2_(8186);
-const stackTrace = __nccwpck_require2_(9428);
-const ExceptionStream = __nccwpck_require2_(391);
+const os = __nccwpck_require__(857);
+const asyncForEach = __nccwpck_require__(3650);
+const debug = __nccwpck_require__(1379)('winston:exception');
+const once = __nccwpck_require__(8186);
+const stackTrace = __nccwpck_require__(9428);
+const ExceptionStream = __nccwpck_require__(391);
 
 /**
  * Object for handling uncaughtException events.
@@ -50964,7 +47606,7 @@ module.exports = class ExceptionHandler {
 /***/ }),
 
 /***/ 391:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -50976,7 +47618,7 @@ module.exports = class ExceptionHandler {
 
 
 
-const { Writable } = __nccwpck_require2_(6131);
+const { Writable } = __nccwpck_require__(6131);
 
 /**
  * TODO: add class description.
@@ -51026,7 +47668,7 @@ module.exports = class ExceptionStream extends Writable {
 /***/ }),
 
 /***/ 1279:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -51038,16 +47680,16 @@ module.exports = class ExceptionStream extends Writable {
 
 
 
-const { Stream, Transform } = __nccwpck_require2_(6131);
-const asyncForEach = __nccwpck_require2_(3650);
-const { LEVEL, SPLAT } = __nccwpck_require2_(8836);
-const isStream = __nccwpck_require2_(6543);
-const ExceptionHandler = __nccwpck_require2_(1019);
-const RejectionHandler = __nccwpck_require2_(5421);
-const LegacyTransportStream = __nccwpck_require2_(6493);
-const Profiler = __nccwpck_require2_(314);
-const { warn } = __nccwpck_require2_(3254);
-const config = __nccwpck_require2_(1942);
+const { Stream, Transform } = __nccwpck_require__(6131);
+const asyncForEach = __nccwpck_require__(3650);
+const { LEVEL, SPLAT } = __nccwpck_require__(8836);
+const isStream = __nccwpck_require__(6543);
+const ExceptionHandler = __nccwpck_require__(1019);
+const RejectionHandler = __nccwpck_require__(5421);
+const LegacyTransportStream = __nccwpck_require__(6493);
+const Profiler = __nccwpck_require__(314);
+const { warn } = __nccwpck_require__(3254);
+const config = __nccwpck_require__(1942);
 
 /**
  * Captures the number of format (i.e. %s strings) in a given string.
@@ -51133,7 +47775,7 @@ class Logger extends Transform {
     }
 
     this.silent = silent;
-    this.format = format || this.format || __nccwpck_require2_(7864)();
+    this.format = format || this.format || __nccwpck_require__(7864)();
 
     this.defaultMeta = defaultMeta || null;
     // Hoist other options onto this instance.
@@ -51734,7 +48376,7 @@ module.exports = Logger;
 /***/ }),
 
 /***/ 314:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -51759,7 +48401,7 @@ class Profiler {
    * @private
    */
   constructor(logger) {
-    const Logger = __nccwpck_require2_(1279);
+    const Logger = __nccwpck_require__(1279);
     if (typeof logger !== 'object' || Array.isArray(logger) || !(logger instanceof Logger)) {
       throw new Error('Logger is required for profiling');
     } else {
@@ -51795,7 +48437,7 @@ module.exports = Profiler;
 /***/ }),
 
 /***/ 5421:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -51807,12 +48449,12 @@ module.exports = Profiler;
 
 
 
-const os = __nccwpck_require2_(857);
-const asyncForEach = __nccwpck_require2_(3650);
-const debug = __nccwpck_require2_(1379)('winston:rejection');
-const once = __nccwpck_require2_(8186);
-const stackTrace = __nccwpck_require2_(9428);
-const RejectionStream = __nccwpck_require2_(3309);
+const os = __nccwpck_require__(857);
+const asyncForEach = __nccwpck_require__(3650);
+const debug = __nccwpck_require__(1379)('winston:rejection');
+const once = __nccwpck_require__(8186);
+const stackTrace = __nccwpck_require__(9428);
+const RejectionStream = __nccwpck_require__(3309);
 
 /**
  * Object for handling unhandledRejection events.
@@ -52054,7 +48696,7 @@ module.exports = class RejectionHandler {
 /***/ }),
 
 /***/ 3309:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -52066,7 +48708,7 @@ module.exports = class RejectionHandler {
 
 
 
-const { Writable } = __nccwpck_require2_(6131);
+const { Writable } = __nccwpck_require__(6131);
 
 /**
  * TODO: add class description.
@@ -52114,7 +48756,7 @@ module.exports = class RejectionStream extends Writable {
 /***/ }),
 
 /***/ 6516:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -52126,9 +48768,9 @@ module.exports = class RejectionStream extends Writable {
 
 
 
-const fs = __nccwpck_require2_(9896);
-const { StringDecoder } = __nccwpck_require2_(3193);
-const { Stream } = __nccwpck_require2_(6131);
+const fs = __nccwpck_require__(9896);
+const { StringDecoder } = __nccwpck_require__(3193);
+const { Stream } = __nccwpck_require__(6131);
 
 /**
  * Simple no-op function.
@@ -52246,7 +48888,7 @@ module.exports = (options, iter) => {
 /***/ }),
 
 /***/ 9543:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /* eslint-disable no-console */
@@ -52259,9 +48901,9 @@ module.exports = (options, iter) => {
 
 
 
-const os = __nccwpck_require2_(857);
-const { LEVEL, MESSAGE } = __nccwpck_require2_(8836);
-const TransportStream = __nccwpck_require2_(3588);
+const os = __nccwpck_require__(857);
+const { LEVEL, MESSAGE } = __nccwpck_require__(8836);
+const TransportStream = __nccwpck_require__(3588);
 
 /**
  * Transport for outputting to the console.
@@ -52379,7 +49021,7 @@ module.exports = class Console extends TransportStream {
 /***/ }),
 
 /***/ 5478:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /* eslint-disable complexity,max-statements */
@@ -52392,16 +49034,16 @@ module.exports = class Console extends TransportStream {
 
 
 
-const fs = __nccwpck_require2_(9896);
-const path = __nccwpck_require2_(6928);
-const asyncSeries = __nccwpck_require2_(8719);
-const zlib = __nccwpck_require2_(3106);
-const { MESSAGE } = __nccwpck_require2_(8836);
-const { Stream, PassThrough } = __nccwpck_require2_(6131);
-const TransportStream = __nccwpck_require2_(3588);
-const debug = __nccwpck_require2_(1379)('winston:file');
-const os = __nccwpck_require2_(857);
-const tailFile = __nccwpck_require2_(6516);
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+const asyncSeries = __nccwpck_require__(8719);
+const zlib = __nccwpck_require__(3106);
+const { MESSAGE } = __nccwpck_require__(8836);
+const { Stream, PassThrough } = __nccwpck_require__(6131);
+const TransportStream = __nccwpck_require__(3588);
+const debug = __nccwpck_require__(1379)('winston:file');
+const os = __nccwpck_require__(857);
+const tailFile = __nccwpck_require__(6516);
 
 /**
  * Transport for outputting to a local log file.
@@ -53182,7 +49824,7 @@ module.exports = class File extends TransportStream {
 /***/ }),
 
 /***/ 376:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -53194,11 +49836,11 @@ module.exports = class File extends TransportStream {
 
 
 
-const http = __nccwpck_require2_(8611);
-const https = __nccwpck_require2_(5692);
-const { Stream } = __nccwpck_require2_(6131);
-const TransportStream = __nccwpck_require2_(3588);
-const { configure } = __nccwpck_require2_(7467);
+const http = __nccwpck_require__(8611);
+const https = __nccwpck_require__(5692);
+const { Stream } = __nccwpck_require__(6131);
+const TransportStream = __nccwpck_require__(3588);
+const { configure } = __nccwpck_require__(7467);
 
 /**
  * Transport for outputting to a json-rpc server.
@@ -53452,7 +50094,7 @@ module.exports = class Http extends TransportStream {
 /***/ }),
 
 /***/ 7522:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require2_) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -53472,7 +50114,7 @@ Object.defineProperty(exports, "Console", ({
   configurable: true,
   enumerable: true,
   get() {
-    return __nccwpck_require2_(9543);
+    return __nccwpck_require__(9543);
   }
 }));
 
@@ -53484,7 +50126,7 @@ Object.defineProperty(exports, "File", ({
   configurable: true,
   enumerable: true,
   get() {
-    return __nccwpck_require2_(5478);
+    return __nccwpck_require__(5478);
   }
 }));
 
@@ -53496,7 +50138,7 @@ Object.defineProperty(exports, "Http", ({
   configurable: true,
   enumerable: true,
   get() {
-    return __nccwpck_require2_(376);
+    return __nccwpck_require__(376);
   }
 }));
 
@@ -53508,7 +50150,7 @@ Object.defineProperty(exports, "Stream", ({
   configurable: true,
   enumerable: true,
   get() {
-    return __nccwpck_require2_(3464);
+    return __nccwpck_require__(3464);
   }
 }));
 
@@ -53516,7 +50158,7 @@ Object.defineProperty(exports, "Stream", ({
 /***/ }),
 
 /***/ 3464:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /**
@@ -53528,10 +50170,10 @@ Object.defineProperty(exports, "Stream", ({
 
 
 
-const isStream = __nccwpck_require2_(6543);
-const { MESSAGE } = __nccwpck_require2_(8836);
-const os = __nccwpck_require2_(857);
-const TransportStream = __nccwpck_require2_(3588);
+const isStream = __nccwpck_require__(6543);
+const { MESSAGE } = __nccwpck_require__(8836);
+const os = __nccwpck_require__(857);
+const TransportStream = __nccwpck_require__(3588);
 
 /**
  * Transport for outputting to any arbitrary stream.
@@ -53586,10 +50228,3516 @@ module.exports = class Stream extends TransportStream {
 
 /***/ }),
 
-/***/ 75:
+/***/ 5378:
 /***/ ((module) => {
 
-module.exports = eval("require")("supports-color");
+class MetricsCalculator {
+  static mergeResults(slocResult, lizardResult, duplicationResult) {
+    // 合并总体指标（排除 fileDetails / identicalFileDetails / duplicationOccurrences，单独处理）
+    const { fileDetails: slocFileDetails, ...slocMetrics } = slocResult;
+    const { fileDetails: lizardFileDetails, ...lizardMetrics } = lizardResult;
+    // 显式提取 duplicationOccurrences，避免被 ...duplicationMetrics 散开混入总体指标
+    const {
+      fileDetails: duplicationFileDetails,
+      identicalFileDetails,
+      duplicationOccurrences,
+      ...duplicationMetrics
+    } = duplicationResult;
+
+    // 合并文件级指标：以 sloc 的 fileDetails 为基础
+    const fileDetails = MetricsCalculator.mergeFileDetails(
+      slocFileDetails || [],
+      lizardFileDetails || [],
+      duplicationFileDetails || []
+    );
+
+    return {
+      ...slocMetrics,
+      ...lizardMetrics,
+      ...duplicationMetrics,
+      fileDetails: fileDetails,
+      identicalFileDetails: identicalFileDetails || [],
+      // 重复块出现位置列表（含每块的明文 content，由 uploader 做 Base64 编码后分批上报）
+      duplicationOccurrences: duplicationOccurrences || []
+    };
+  }
+
+  // 合并三个检测器的 fileDetails
+  static mergeFileDetails(slocFileDetails, lizardFileDetails, duplicationFileDetails) {
+    // 以 sloc 的 fileDetails 为基础（有 filePath, language, loc）
+    const fileMap = new Map();
+
+    for (const detail of slocFileDetails) {
+      fileMap.set(detail.filePath, {
+        filePath: detail.filePath,
+        language: detail.language || '',
+        loc: detail.loc || 0,
+        commentLines: detail.commentLines || 0,
+        functionCount: 0,
+        avgFunctionLoc: 0,
+        avgCyclomaticComplexity: 0,
+        functionDetails: [],
+        duplicationRate: 0,
+        duplicationLineCount: 0,
+        duplicatedFiles: []
+      });
+    }
+
+    // 合并 lizard 的 fileDetails（按 filePath 匹配）
+    for (const detail of lizardFileDetails) {
+      const existing = fileMap.get(detail.filePath);
+      if (existing) {
+        existing.functionCount = detail.functionCount || 0;
+        existing.avgFunctionLoc = detail.avgFunctionLoc || 0;
+        existing.avgCyclomaticComplexity = detail.avgCyclomaticComplexity || 0;
+        existing.functionDetails = detail.functionDetails || [];
+      } else {
+        fileMap.set(detail.filePath, {
+          filePath: detail.filePath,
+          language: '',
+          loc: 0,
+          commentLines: 0,
+          functionCount: detail.functionCount || 0,
+          avgFunctionLoc: detail.avgFunctionLoc || 0,
+          avgCyclomaticComplexity: detail.avgCyclomaticComplexity || 0,
+          functionDetails: detail.functionDetails || [],
+          duplicationRate: 0,
+          duplicationLineCount: 0,
+          duplicatedFiles: []
+        });
+      }
+    }
+
+    // 合并 duplication 的 fileDetails（按 filePath 匹配）
+    for (const detail of duplicationFileDetails) {
+      const existing = fileMap.get(detail.filePath);
+      if (existing) {
+        existing.duplicationRate = detail.duplicationRate || 0;
+        existing.duplicationLineCount = detail.duplicationLineCount || 0;
+        existing.duplicatedFiles = detail.duplicatedFiles || [];
+        // 上下文片段快照（重复块±5行，整体 Base64 编码），由 buildContextSegments 生成
+        existing.snapshotData = detail.snapshotData || null;
+      } else {
+        // duplication 独有文件（scc 不识别其扩展名，如 .prelds）：
+        // loc 用 duplication 检测携带的 totalLines 兜底（本地"非空非注释"口径），
+        // 避免 loc=0 但 duplicationLineCount>0 的矛盾展示
+        fileMap.set(detail.filePath, {
+          filePath: detail.filePath,
+          language: '',
+          loc: detail.totalLines || 0,
+          commentLines: 0,
+          functionCount: 0,
+          avgFunctionLoc: 0,
+          avgCyclomaticComplexity: 0,
+          functionDetails: [],
+          duplicationRate: detail.duplicationRate || 0,
+          duplicationLineCount: detail.duplicationLineCount || 0,
+          duplicatedFiles: detail.duplicatedFiles || [],
+          snapshotData: detail.snapshotData || null
+        });
+      }
+    }
+
+    return [...fileMap.values()];
+  }
+
+  static validate(metrics) {
+    const required = [
+      'codeScale',
+      'averageFunctionLoc',
+      'averageCyclomaticComplexity',
+      'totalCodeDuplicationRate',
+      'totalFileDuplicationRate'
+    ];
+
+    for (const key of required) {
+      if (metrics[key] === undefined || metrics[key] === null) {
+        throw new Error(`Missing required metric: ${key}`);
+      }
+    }
+
+    return true;
+  }
+
+  static formatForReport(metrics) {
+    // 分离 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
+    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metrics;
+
+    return {
+      codeScale: Number(overallMetrics.codeScale) || 0,
+      // 扫描代码总行数：代码 + 注释 + 空行的物理总行数（scc Lines 汇总，即 rawLines），
+      // 区别于 codeScale（有效代码行）；sloc 检测器禁用时 rawLines 缺失，降级为 0
+      codeLineTotal: Number(overallMetrics.rawLines) || 0,
+      // 注释行数：直接取 sloc 检测器的 scc 汇总 commentLines（现成数据）；
+      // 每文件 commentLines 明细仍随 fileDetails 落 file_detail，供文件级下钻
+      commentLines: Number(overallMetrics.commentLines) || 0,
+      // 总圈复杂度：lizard 函数圈复杂度总和（方法维度总量，与 avgCyclomaticComplexity 同源）
+      complexityCount: Number(overallMetrics.totalCyclomaticComplexity) || 0,
+      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（lizard 口径，
+      // 区别于方法维度的 avgCyclomaticComplexity）
+      cyclomaticComplexityPerFile: Number(overallMetrics.cyclomaticComplexityPerFile) || 0,
+      // 重复代码块数量：重复块出现位置总数（与 duplication_block 表行数一致）
+      duplicatedBlocks: Number(overallMetrics.duplicatedBlocks) || 0,
+      // 重复代码行数量：Σ 每文件重复行数（totalCodeDuplicationRate 的分子）
+      duplicatedLines: Number(overallMetrics.duplicatedLines) || 0,
+      avgFunctionLoc: Number(overallMetrics.averageFunctionLoc) || 0,
+      avgCyclomaticComplexity: Number(overallMetrics.averageCyclomaticComplexity) || 0,
+      totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,
+      totalFileDuplicationRate: Number(overallMetrics.totalFileDuplicationRate) || 0,
+      fileDetails: fileDetails || [],
+      identicalFileDetails: identicalFileDetails || [],
+      // 重复块出现位置列表（含明文 content），uploader 会 Base64 编码后分批上报
+      duplicationOccurrences: duplicationOccurrences || []
+    };
+  }
+}
+
+module.exports = MetricsCalculator;
+
+
+/***/ }),
+
+/***/ 6145:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+const yaml = __nccwpck_require__(4281);
+
+const DEFAULT_CONFIG = {
+  sourceDir: './',
+  output: 'metrics.json',
+  // 排除目录：常见构建产物、依赖目录和 IDE/工具配置目录
+  excludeDirs: [],
+  // 支持的文件扩展名：覆盖主流编程语言
+  allowedExtensions: [],
+  detectors: {
+    sloc: {
+      enabled: true
+    },
+    lizard: {
+      enabled: true
+    },
+    duplication: {
+      enabled: true,
+      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块重复记为一次"
+      minLines: 10,
+      threshold: 0.3
+    }
+  },
+  uploader: {
+    enabled: true,
+    coderepoUrl: '',
+    timeout: 30
+  },
+  verbose: false,
+  parallel: true
+};
+
+class ConfigLoader {
+  static load(configPath) {
+    let config = { ...DEFAULT_CONFIG };
+
+    if (configPath && fs.existsSync(configPath)) {
+      try {
+        const fileContent = fs.readFileSync(configPath, 'utf8');
+        const ext = path.extname(configPath).toLowerCase();
+
+        let userConfig;
+        if (ext === '.yaml' || ext === '.yml') {
+          userConfig = yaml.load(fileContent);
+        } else if (ext === '.json') {
+          userConfig = JSON.parse(fileContent);
+        } else {
+          throw new Error(`Unsupported config file format: ${ext}`);
+        }
+
+        config = this.mergeConfig(config, userConfig);
+      } catch (error) {
+        console.warn(`Warning: Failed to load config file ${configPath}: ${error.message}`);
+      }
+    }
+
+    return config;
+  }
+
+  static mergeConfig(defaultConfig, userConfig) {
+    const merged = { ...defaultConfig };
+
+    for (const key of Object.keys(userConfig)) {
+      if (userConfig[key] === undefined || userConfig[key] === null) {
+        continue;
+      }
+
+      if (Array.isArray(userConfig[key])) {
+        // 如果用户配置了数组，完全替换默认值
+        merged[key] = [...userConfig[key]];
+      } else if (typeof userConfig[key] === 'object' && userConfig[key] !== null) {
+        if (typeof merged[key] === 'object' && merged[key] !== null) {
+          merged[key] = this.mergeConfig(merged[key], userConfig[key]);
+        } else {
+          merged[key] = userConfig[key];
+        }
+      } else {
+        merged[key] = userConfig[key];
+      }
+    }
+
+    return merged;
+  }
+
+  static getDefaultConfig() {
+    return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  }
+}
+
+module.exports = ConfigLoader;
+
+
+/***/ }),
+
+/***/ 658:
+/***/ ((module) => {
+
+class BaseDetector {
+  constructor(config = {}) {
+    this.config = config;
+  }
+
+  async detect(sourceDir) {
+    throw new Error('Method detect() must be implemented');
+  }
+
+  getName() {
+    throw new Error('Method getName() must be implemented');
+  }
+}
+
+module.exports = BaseDetector;
+
+
+/***/ }),
+
+/***/ 1223:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+const crypto = __nccwpck_require__(6982);
+const BaseDetector = __nccwpck_require__(658);
+const FileCollector = __nccwpck_require__(6790);
+
+class DuplicationDetector extends BaseDetector {
+  constructor(config = {}) {
+    super(config);
+    // 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
+    // - minLines=10：连续源代码行至少 10 行才算一次重复
+    this.minLines = config.minLines || 10;
+    this.allowedExtensions = config.allowedExtensions || [];
+  }
+
+  async detect(source, slocResult = null) {
+    // 支持单个路径或多个路径
+    const sources = Array.isArray(source) ? source : [source];
+    const excludeDirs = this.config.excludeDirs || [];
+
+    // 相对路径基准：优先用 git 仓库根目录，确保返回的是仓库根的相对全路径
+    // （source-dir 可能是子目录，用 sources 做基准会把子目录前缀也剥掉，只剩文件名）
+    const gitRoot = this.findGitRoot(sources[0]);
+    const pathBase = gitRoot ? [gitRoot] : sources;
+
+    // scc 的总体代码行数（codeScale），作为总重复率的分母
+    const codeScale = slocResult ? slocResult.codeScale : null;
+
+    // scc 每个文件的 loc 作为该文件重复率的权威分母，保证与上报的 loc 完全一致
+    const locByRel = new Map();
+    if (slocResult && Array.isArray(slocResult.fileDetails)) {
+      for (const d of slocResult.fileDetails) {
+        if (d && d.filePath) locByRel.set(d.filePath, Number(d.loc) || 0);
+      }
+    }
+
+    // 收集所有文件
+    const allFiles = [];
+    for (const src of sources) {
+      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+      allFiles.push(...files);
+    }
+    const uniqueFiles = [...new Set(allFiles)];
+
+    if (uniqueFiles.length === 0) {
+      return this.getEmptyResult();
+    }
+
+    // scc 口径有效行 < minLines 的文件不参与重复检测（第二道防线）：
+    // 即使插件注释规则与 scc 口径出现不一致（如历史 bug：CMakeLists.txt 的 #[[ ]]
+    // 注释体被当有效行），纯注释撑起的 10 行窗口也会在文件级被拦截，
+    // 与 cmetrics "≥10 个有效代码行才算重复"的定义对齐。
+    // 仅当 slocResult 中确有该文件的 loc 记录时过滤（路径不匹配/scc 不识别的文件保守放行）。
+    let locFiltered = 0;
+    const effectiveFiles = [];
+    for (const file of uniqueFiles) {
+      const rel = this.toRelativePath(file, pathBase);
+      const loc = locByRel.get(rel);
+      if (loc !== undefined && loc < this.minLines) {
+        locFiltered++;
+        continue;
+      }
+      effectiveFiles.push(file);
+    }
+    if (locFiltered > 0) {
+      console.log(`[duplication] Skipped ${locFiltered} files with scc loc < ${this.minLines}`);
+    }
+
+    const fileContents = new Map();
+    const fileSourceLineMaps = new Map();
+    let totalSourceLines = 0;
+    let binarySkipped = 0;
+    for (const file of effectiveFiles) {
+      try {
+        // 二进制文件嗅探：前 8KB 含 \x00 字节即判定为二进制（与 Git 同款标准），
+        // 跳过重复检测——二进制按 UTF-8 读取会产生 U+FFFD 乱码且大量伪重复块。
+        // 用内容嗅探而非扩展名黑名单：.config/.cfg 等文本配置不能按扩展名误杀。
+        if (DuplicationDetector.isBinaryFile(file)) {
+          binarySkipped++;
+          continue;
+        }
+        const content = fs.readFileSync(file, 'utf8');
+        fileContents.set(file, content);
+        const sourceLineMap = this.buildSourceLineMap(content, file);
+        fileSourceLineMaps.set(file, sourceLineMap);
+        totalSourceLines += sourceLineMap.sourceCount;
+      } catch (error) {
+        console.warn(`[WARN] Failed to read file ${file}: ${error.message}`);
+      }
+    }
+    if (binarySkipped > 0) {
+      console.log(`[duplication] Skipped ${binarySkipped} binary files (NUL byte sniffing)`);
+    }
+
+    // 行级跨文件匹配（与 cmetrics 官方定义对齐："非空非注释行连续 10 行相同"）
+    const lineResult = this.detectWithLineLevel(effectiveFiles, fileSourceLineMaps);
+    // 用 scc 对每个文件的重复行重新计数（分子分母同工具同口径，保证与 loc 完全一致）
+    const sccDupByRel = this.countDuplicatedLinesWithScc(
+        lineResult.fileDuplicatedLines, fileContents, pathBase);
+    // 使用 let 声明：buildContextSegments 会返回带 snapshotData 的新 fileDetails
+    let fileDetails = this.calculateFileDetailsFromLines(
+        lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase, locByRel, sccDupByRel);
+    // 从共享滑动窗口构建重复块出现位置（窗口级 union-find 分组，自动去重）
+    const duplicationOccurrences = this.buildDuplicationOccurrences(
+        lineResult.fileSourceLines, fileContents, pathBase, lineResult.sharedHashWindows);
+
+    // 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData
+    fileDetails = this.buildContextSegments(fileDetails, duplicationOccurrences, fileContents, pathBase);
+
+    const duplicatedLines = fileDetails.reduce((sum, d) => sum + d.duplicationLineCount, 0);
+
+    // 分母：优先用传入的 codeScale（与 cmetrics 和华为云保持一致）
+    // 如果没有 codeScale，则用本地统计的源代码行总数
+    const denominator = codeScale || totalSourceLines;
+
+    const duplicationRate = denominator > 0
+      ? parseFloat(((duplicatedLines / denominator) * 100).toFixed(2))
+      : 0;
+
+    // 完全一致文件计数（用于总文件重复率）
+    const identicalFileCount = this.calculateFileDuplication(fileContents);
+    const fileDuplicationRate = uniqueFiles.length > 0
+      ? parseFloat(((identicalFileCount / uniqueFiles.length) * 100).toFixed(2))
+      : 0;
+
+    // 计算完全一致文件的详情（用于总文件重复率下钻）
+    const identicalFileDetails = this.calculateIdenticalFileDetails(fileContents, pathBase);
+
+    return {
+      totalCodeDuplicationRate: duplicationRate,
+      totalFileDuplicationRate: fileDuplicationRate,
+      // 重复代码块数量：重复块出现位置总数（与 code_metrics_duplication_block 表行数一致）
+      duplicatedBlocks: duplicationOccurrences.length,
+      duplicatedLines: duplicatedLines,
+      totalLines: denominator,
+      duplicatedFiles: identicalFileCount,
+      totalFiles: uniqueFiles.length,
+      fileDetails: fileDetails,
+      identicalFileDetails: identicalFileDetails,
+      // 重复块出现位置列表（同一代码内容的所有出现位置归为同一 group_id），供后端入库 code_metrics_duplication_block
+      duplicationOccurrences: duplicationOccurrences
+    };
+  }
+
+  /**
+   * 行级跨文件重复检测（主路径）
+   * 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
+   *
+   * 算法：
+   * 1. 提取每个文件的源代码行（非空非注释，含 import 行），保留原始行号
+   * 2. 10 源代码行滑动窗口，md5 哈希每个窗口
+   * 3. 同一 hash 有 2+ 个窗口即计为重复（含同文件内重复）
+   * 4. 标记所有被匹配窗口覆盖的源代码行索引
+   * 5. 合并连续的源代码行索引为最大区间 → 每个区间是一个重复块出现位置
+   *
+   * 相比 token 级窗口的优势：
+   * - 按行对齐，30 行连续重复只产生 1 个块（而非多个 19 行碎片）
+   * - 合并后同一 (file, startLine, endLine) 只产生一条记录（避免重复入库）
+   *
+   * @param {string[]} files 文件绝对路径列表
+   * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（含 sourceLines，分类口径与 scc 一致）
+   * @returns {Object} {fileDuplicatedLines, fileSourceLines, sharedHashWindows}
+   */
+  detectWithLineLevel(files, fileSourceLineMaps) {
+    const WINDOW_SIZE = this.minLines; // 10
+
+    // Step 1: 提取每个文件的源代码行（与 scc 有效代码行语义一致），保留原始行号
+    // 直接复用 buildSourceLineMap 已计算好的 sourceLines，避免分类口径不一致
+    const fileSourceLines = new Map();
+    for (const file of files) {
+      const sourceLineMap = fileSourceLineMaps.get(file)
+        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
+      if (!sourceLineMap || !sourceLineMap.sourceLines) continue;
+      fileSourceLines.set(file.replace(/\\/g, '/'), sourceLineMap.sourceLines);
+    }
+
+    // Step 2: 10 源代码行滑动窗口，md5 哈希
+    const hashToWindows = new Map();
+    for (const [normalizedFile, sourceLines] of fileSourceLines) {
+      if (sourceLines.length < WINDOW_SIZE) continue;
+      for (let i = 0; i <= sourceLines.length - WINDOW_SIZE; i++) {
+        const windowText = sourceLines.slice(i, i + WINDOW_SIZE)
+          .map(l => l.text).join('\n');
+        const hash = crypto.createHash('md5').update(windowText).digest('hex');
+        if (!hashToWindows.has(hash)) hashToWindows.set(hash, []);
+        hashToWindows.get(hash).push({
+          file: normalizedFile,
+          startIdx: i,
+          endIdx: i + WINDOW_SIZE - 1
+        });
+      }
+    }
+
+    // Step 3: 标记重复行 + 收集共享 hash 的滑动窗口（供分组使用）
+    const fileDuplicatedLines = new Map();
+    // 仅含跨 2+ 个窗口的共享 hash：hash -> [{file, startIdx, endIdx}]
+    const sharedHashWindows = new Map();
+
+    for (const [hash, windows] of hashToWindows) {
+      if (windows.length < 2) continue;
+      sharedHashWindows.set(hash, windows);
+
+      for (const win of windows) {
+        const sourceLines = fileSourceLines.get(win.file);
+        if (!sourceLines) continue;
+
+        if (!fileDuplicatedLines.has(win.file)) fileDuplicatedLines.set(win.file, new Set());
+
+        const lineSet = fileDuplicatedLines.get(win.file);
+
+        for (let i = win.startIdx; i <= win.endIdx; i++) {
+          lineSet.add(sourceLines[i].lineNum);
+        }
+      }
+    }
+
+    return { fileDuplicatedLines, fileSourceLines, sharedHashWindows };
+  }
+
+  /**
+   * 把行级匹配得到的「文件→重复行号集合」转为 fileDetails 数组（Step 5）
+   * - 过滤为源代码行（剔除空行/注释行）
+   * - 只含有重复的文件入 fileDetails（无重复文件由 sloc 基础记录覆盖）
+   */
+  calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources, locByRel, sccDupByRel) {
+    const fileDetails = [];
+    for (const [file, lineSet] of fileDuplicatedLines) {
+      // 兼容路径分隔符：detectWithLineLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
+      const sourceLineMap = fileSourceLineMaps.get(file)
+        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
+      if (!sourceLineMap) continue;
+
+      // 分母：优先用 scc 每个文件的 loc（与上报的 loc 完全一致），否则回退到本地分类统计
+      const filePath = this.toRelativePath(file, sources);
+      const sccLoc = locByRel ? locByRel.get(filePath) : undefined;
+      const totalFileSourceLines = (sccLoc !== undefined && sccLoc > 0) ? sccLoc : sourceLineMap.sourceCount;
+
+      // 分子：优先用 scc 对重复行的重数结果（与分母完全同工具同口径，
+      // 保证重复率明细中的有效代码行与代码规模文件级明细一致，杜绝 >100%）；
+      // scc 重数失败（返回 null）时回退到本地 lineMap 口径并做分母封顶保护
+      let duplicatedSourceLines;
+      if (sccDupByRel) {
+        duplicatedSourceLines = sccDupByRel.get(filePath) || 0;
+        // 块注释边界等极端情况下抽取行重数可能略超全集，按分母封顶
+        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
+      } else {
+        duplicatedSourceLines = 0;
+        for (const lineNum of lineSet) {
+          if (sourceLineMap.lineMap.get(lineNum)) {
+            duplicatedSourceLines++;
+          }
+        }
+        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
+      }
+      if (duplicatedSourceLines === 0) continue;  // 全是注释/空行：不入 fileDetails
+
+      const duplicationRate = totalFileSourceLines > 0
+        ? parseFloat(((duplicatedSourceLines / totalFileSourceLines) * 100).toFixed(2))
+        : 0;
+
+      fileDetails.push({
+        filePath: filePath,
+        duplicationRate,
+        duplicationLineCount: duplicatedSourceLines,
+        // 该文件的有效代码行数（scc loc 优先，无则本地分类统计）。
+        // scc 不识别的扩展名（如 .prelds）不会出现在 sloc fileDetails 中，
+        // 合并时用该值兜底 loc，避免 loc=0 但 duplicationLineCount>0 的矛盾展示
+        totalLines: totalFileSourceLines
+      });
+    }
+    return fileDetails;
+  }
+
+  /**
+   * 用 scc 对每个文件的重复行重新计数，保证分子（重复有效行数）与分母（loc）完全同口径。
+   *
+   * <p>实现方式：把每个文件的重复物理行按行号顺序抽取到临时镜像目录（保持原相对路径与扩展名，
+   * 让 scc 用与全量扫描完全相同的语言规则解析），单次 scc 扫描取每文件 Code 即为重复有效行数。
+   * 任何异常返回 null，调用方回退本地 lineMap 口径。
+   *
+   * @param {Map<string, Set<number>>} fileDuplicatedLines 文件 → 重复物理行号集合
+   * @param {Map<string, string>} fileContents 文件 → 内容
+   * @param {string[]} sources 源目录（用于相对路径对齐）
+   * @returns {Map<string, number>|null} 相对路径 → 重复有效行数（scc 口径），失败返回 null
+   */
+  countDuplicatedLinesWithScc(fileDuplicatedLines, fileContents, sources) {
+    if (!fileDuplicatedLines || fileDuplicatedLines.size === 0) {
+      return new Map();
+    }
+    const os = __nccwpck_require__(857);
+    const { execSync } = __nccwpck_require__(5317);
+    const sccPath = DuplicationDetector.getSccBinPath();
+    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
+    // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
+    if (!sccPath) {
+      return null;
+    }
+    // 临时镜像目录：mkdtemp 防并发冲突，finally 统一清理
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-scc-'));
+    try {
+      for (const [file, lineSet] of fileDuplicatedLines) {
+        const content = fileContents.get(file);
+        if (!content) continue;
+        const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
+        // 按物理行号升序抽取重复行内容，保持原相对路径与扩展名写入镜像
+        const dupTexts = [...lineSet].sort((a, b) => a - b)
+          .filter(n => lines[n - 1] !== undefined)
+          .map(n => lines[n - 1]);
+        if (dupTexts.length === 0) continue;
+        const relPath = this.toRelativePath(file, sources);
+        const dest = path.join(tmpRoot, ...relPath.split('/'));
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
+      }
+      const cmd = `"${sccPath}" -f json --no-cocomo --no-size --by-file "${tmpRoot}"`;
+      const output = execSync(cmd, {
+        encoding: 'utf8',
+        maxBuffer: 100 * 1024 * 1024,
+        timeout: 300000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      const sccResult = JSON.parse(output.trim());
+      const dupByRel = new Map();
+      for (const lang of sccResult) {
+        for (const f of (lang.Files || [])) {
+          const name = f.Location || f.Name || '';
+          if (!name) continue;
+          const rel = path.relative(tmpRoot, name).replace(/\\/g, '/');
+          dupByRel.set(rel, f.Code || 0);
+        }
+      }
+      console.log(`[duplication] scc recount done for ${dupByRel.size} duplicated files`);
+      return dupByRel;
+    } catch (error) {
+      console.warn(`[WARN] scc recount of duplicated lines failed, fallback to local line-map: ${error.message}`);
+      return null;
+    } finally {
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (e) { /* 忽略清理异常 */ }
+    }
+  }
+
+  /**
+   * 获取 scc 二进制路径，策略与 slocDetector 完全一致：
+   * 优先使用 dist/bin 内置二进制，其次回退 PATH 查找（保证分子分母用同一个 scc）。
+   *
+   * @returns {string} scc 可执行路径
+   */
+  static getSccBinPath() {
+    // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+    // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
+    // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 dist/detectors
+    const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
+      ? __nccwpck_require2_.ab
+      : null;
+    // 候选顺序：bundle 根 + bin/ → bundle 根平铺（asset 平铺分发形态）→ 源码结构上溯
+    const candidates = [];
+    if (bundleRoot) {
+      candidates.push(path.join(bundleRoot, 'bin', 'scc'));
+      candidates.push(path.join(bundleRoot, 'scc'));
+    }
+    candidates.push(path.join(__dirname, 'bin', 'scc'));
+    candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
+    candidates.push(path.join(__dirname, 'scc'));
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755
+        try {
+          fs.chmodSync(candidate, 0o755);
+        } catch (e) {
+          console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
+        }
+        return candidate;
+      }
+    }
+    // PATH 探测：确认环境本身安装了 scc 才使用裸命令名，
+    // 避免执行注定失败的命令产生误导性报错
+    try {
+      (__nccwpck_require__(5317).execSync)('command -v scc', { stdio: 'ignore' });
+      return 'scc';
+    } catch (e) {
+      console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），重复行统计回退到本地 line-map');
+      return null;
+    }
+  }
+
+  // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）
+  // hashIsCode=true：C/C++ 预处理指令（#include/#define 等）计入代码行（scc 计入）
+  // mlStrings：Python 三引号 docstring 按注释处理（scc 不计入代码行）
+  // blockComments：多组块注释标记（如 CMake 的 #[[ ]]），进入后直到对应结束标记出现
+  static getLanguageConfig(ext, fileName) {
+    const e = (ext || '').toLowerCase();
+    // CMake 按文件名/扩展名识别（与 scc 一致）：CMakeLists.txt / *.cmake。
+    // 支持行注释 # 与方括号块注释 #[[ ]]（#[==[ 变体罕见，暂不支持）。
+    // 此前 CMakeLists.txt 按 .txt 走 default 规则，#[[ ]] 注释体被当成有效代码行，
+    // 导致纯 license 注释撑起 10 行窗口被判重复块（scc 口径 loc=2 的矛盾现象）。
+    const base = (fileName || '').toLowerCase();
+    if (base === 'cmakelists.txt' || e === '.cmake') {
+      return { lineComments: ['#'], blockStart: null, blockEnd: null,
+        blockComments: [['#[[', ']]']], mlStrings: [], hashIsCode: false };
+    }
+    switch (e) {
+      case '.c': case '.cpp': case '.cc': case '.cxx': case '.h': case '.hpp': case '.cuh':
+        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: true };
+      case '.java': case '.js': case '.mjs': case '.cjs': case '.ts': case '.go': case '.cs':
+      case '.scala': case '.kt': case '.kts': case '.swift': case '.rs':
+        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+      case '.php':
+        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+      case '.py':
+        return { lineComments: ['#'], blockStart: null, blockEnd: null, mlStrings: ['"""', "'''"], hashIsCode: false };
+      case '.rb':
+        // Ruby 块注释：=begin ... =end（必须位于行首），行注释为 #
+        return { lineComments: ['#'], blockStart: '=begin', blockEnd: '=end', mlStrings: [], hashIsCode: false };
+      default:
+        // 未知语言：保守兜底，覆盖 C 风格与 # 注释
+        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+    }
+  }
+
+  static startsWithAny(text, markers) {
+    for (const m of markers) {
+      if (text.startsWith(m)) return true;
+    }
+    return false;
+  }
+
+  // 判断一行是否以某个多行字符串标记开始；若同一行内已闭合则返回 null（不进入状态）
+  static openMlString(text, markers) {
+    for (const m of markers) {
+      if (text.startsWith(m)) {
+        return text.slice(m.length).includes(m) ? null : m;
+      }
+    }
+    return null;
+  }
+
+  // 判断一行中（非行首）是否出现三引号字符串标记。
+  // 与 scc 语义对齐：行首的三引号是 docstring（注释），行中的三引号是字符串字面量（计入代码行）。
+  // 返回 { marker, open }：open=true 表示该行打开了未在同行闭合的多行字符串；open=false 表示同行已闭合。
+  static findMidLineMlString(line, markers) {
+    for (const m of markers) {
+      const idx = line.indexOf(m);
+      // 只处理出现在行中的标记；行首由调用方走 docstring 分支
+      if (idx > 0) {
+        const after = line.slice(idx + m.length);
+        return { marker: m, open: !after.includes(m) };
+      }
+    }
+    return null;
+  }
+
+  // 逐文件构建"有效代码行"分析：与 scc 口径完全一致
+  // - 剔除空行、行注释、块注释、行首三引号 docstring（注释）
+  // - 行中三引号多行字符串（如 x = '''...'''）整块计入代码行（含内部空白行）
+  // - C/C++ 预处理指令（#include/#define 等）计入代码行
+  // 返回 { lineMap: 行号→是否有效代码行, sourceCount, sourceLines: [{lineNum,text}] }
+  buildSourceLineMap(content, filePath) {
+    const lines = content.split('\n');
+    const lang = DuplicationDetector.getLanguageConfig(
+        filePath ? path.extname(filePath) : '',
+        filePath ? path.basename(filePath) : '');
+    const lineMap = new Map();
+    const sourceLines = [];
+    let sourceCount = 0;
+    let inBlock = null;       // 块注释结束标记（null=不在块注释中；支持多组标记，如 CMake #[[ ]]）
+    let inDocstring = null;   // 行首三引号 docstring（注释）的结束标记
+    let inMlStringCode = null; // 行中三引号多行字符串（代码）的结束标记
+
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      let isCode = false;
+
+      if (inBlock !== null) {
+        // 块注释中：查找当前组的结束标记
+        if (trimmed.includes(inBlock)) inBlock = null;
+      } else if (inDocstring) {
+        // docstring（注释）中：查找结束标记
+        if (trimmed.includes(inDocstring)) inDocstring = null;
+      } else if (inMlStringCode) {
+        // 行中多行字符串中：整块计入代码行（含空白行），查找结束标记
+        isCode = true;
+        if (trimmed.includes(inMlStringCode)) inMlStringCode = null;
+      } else if (trimmed.length === 0) {
+        // 空行
+      } else if (lang.mlStrings.length > 0 && DuplicationDetector.startsWithAny(trimmed, lang.mlStrings)) {
+        // 行首三引号 → docstring，视为注释不计入代码行；未闭合则进入状态
+        const marker = DuplicationDetector.openMlString(trimmed, lang.mlStrings);
+        if (marker !== null) inDocstring = marker;
+      } else if (lang.blockComments
+          && DuplicationDetector.startsWithAny(trimmed, lang.blockComments.map(p => p[0]))) {
+        // 多组块注释开始行（如 CMake #[[ ]]）：进入后直到对应结束标记出现
+        for (const [bs, be] of lang.blockComments) {
+          if (trimmed.startsWith(bs)) {
+            if (!trimmed.slice(bs.length).includes(be)) inBlock = be;
+            break;
+          }
+        }
+      } else if (lang.blockStart && trimmed.startsWith(lang.blockStart)) {
+        // 块注释开始行
+        if (!trimmed.includes(lang.blockEnd)) inBlock = lang.blockEnd;
+      } else if (DuplicationDetector.startsWithAny(trimmed, lang.lineComments)) {
+        // 纯行注释
+      } else if (lang.hashIsCode && trimmed.startsWith('#')) {
+        // C/C++ 预处理指令：计入代码行
+        isCode = true;
+      } else {
+        // 普通代码行；若行中出现三引号且未同行闭合，则进入"行中多行字符串"状态（仍计入代码行）
+        isCode = true;
+        if (lang.mlStrings.length > 0) {
+          const mm = DuplicationDetector.findMidLineMlString(trimmed, lang.mlStrings);
+          if (mm && mm.open) inMlStringCode = mm.marker;
+        }
+      }
+
+      lineMap.set(i + 1, isCode);
+      if (isCode) {
+        sourceCount++;
+        sourceLines.push({ lineNum: i + 1, text: trimmed });
+      }
+    }
+    return { lineMap, sourceCount, sourceLines };
+  }
+
+  calculateFileDuplication(fileContents) {
+    const hashCount = new Map();
+    for (const content of fileContents.values()) {
+      const normalized = content.trim();
+      const hash = crypto.createHash('md5').update(normalized).digest('hex');
+      if (!hashCount.has(hash)) hashCount.set(hash, 0);
+      hashCount.set(hash, hashCount.get(hash) + 1);
+    }
+
+    let identicalFileCount = 0;
+    for (const count of hashCount.values()) {
+      if (count > 1) identicalFileCount += count;
+    }
+    return identicalFileCount;
+  }
+
+  // 将绝对路径转为相对路径
+  // 修复前缀匹配问题：/repo 会误匹配 /repo-other/test.py，需确保 src 是路径分隔符边界
+  toRelativePath(absolutePath, sources) {
+    if (!sources || sources.length === 0) {
+      return absolutePath.replace(/\\/g, '/');
+    }
+    const normalizedPath = absolutePath.replace(/\\/g, '/');
+    for (const src of sources) {
+      const normalizedSrc = src.replace(/\\/g, '/').replace(/\/+$/, ''); // 去掉尾部斜杠
+      // 精确前缀匹配：src 后必须跟 / 或恰好等于完整路径
+      if (normalizedPath === normalizedSrc
+          || normalizedPath.startsWith(normalizedSrc + '/')) {
+        return path.relative(src, absolutePath).replace(/\\/g, '/');
+      }
+    }
+    return absolutePath.replace(/\\/g, '/');
+  }
+
+  /**
+   * 判断文件是否为二进制文件：读取前 8KB，包含 \x00（NUL）字节即判定为二进制。
+   * 与 Git 的 binary 检测标准一致；UTF-8 文本不可能包含 \x00，因此不会误伤文本文件
+   * （.config/.cfg/.json 等文本配置即使扩展名可疑也能正常参与扫描）。
+   *
+   * @param {string} file 文件绝对路径
+   * @returns {boolean} true 表示二进制文件，应跳过重复检测
+   */
+  static isBinaryFile(file) {
+    const SNIFF_BYTES = 8192;
+    let fd = null;
+    try {
+      fd = fs.openSync(file, 'r');
+      const buf = Buffer.alloc(SNIFF_BYTES);
+      const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
+      return buf.slice(0, bytesRead).includes(0);
+    } catch (error) {
+      // 读取失败按非二进制处理，交给后续 readFileSync 的 catch 统一告警
+      return false;
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch (e) { /* 忽略关闭异常 */ }
+      }
+    }
+  }
+
+  /**
+   * 从起始目录向上查找 git 仓库根目录（包含 .git 的目录）
+   * .git 既可能是目录（普通仓库）也可能是文件（worktree/submodule）
+   * @param {string} startDir 起始目录
+   * @returns {string|null} 仓库根目录绝对路径，找不到返回 null
+   */
+  findGitRoot(startDir) {
+    let cur = path.resolve(startDir);
+    const root = path.parse(cur).root;
+    for (let i = 0; i < 8 && cur && cur !== root; i++) {
+      if (fs.existsSync(path.join(cur, '.git'))) return cur;
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+    return null;
+  }
+
+  // 计算完全一致文件的详情（用于总文件重复率下钻）
+  // 只在文件内容完全一致（MD5相同）时才认为是重复文件
+  // 对于一组重复文件 A、B、C，只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
+  // 前端将同一组的所有文件展示在一起，无需区分"原始文件"和"重复副本"
+  calculateIdenticalFileDetails(fileContents, sources) {
+    // 按内容哈希分组
+    const hashGroups = new Map();
+    for (const [file, content] of fileContents) {
+      const normalized = content.trim();
+      const hash = crypto.createHash('md5').update(normalized).digest('hex');
+      if (!hashGroups.has(hash)) {
+        hashGroups.set(hash, []);
+      }
+      hashGroups.get(hash).push(file);
+    }
+
+    const details = [];
+    for (const [hash, files] of hashGroups) {
+      // 只处理有重复的组（2个及以上文件内容一致）
+      if (files.length < 2) continue;
+
+      // 每组只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
+      // 前端展示时将同一组的所有文件列在一起，不再双向展示
+      const duplicatedFiles = files.map(f => this.toRelativePath(f, sources));
+
+      details.push({
+        duplicatedFiles: duplicatedFiles
+      });
+    }
+
+    return details;
+  }
+
+  /**
+   * 从行级检测的共享滑动窗口构建重复块出现位置列表（主路径）
+   *
+   * 分组策略（基于「精确文件集合分桶」+「完全一致文件去重」+「跨组去重」）：
+   * - 每个共享 hash（10 行连续窗口内容）都有一个「出现文件集合」F(hash)，即共同出现该内容的所有文件
+   * - 内容完全一致的文件（trim 后 MD5 相同）视为同一「等价类」，每个等价类选一个代表；
+   *   每个窗口的「代表集合」F' = { rep(f) | f ∈ F(hash) }
+   * - 按 F' 精确分桶：同一 F' 的窗口归入同一「重复关系」，不再做超集匹配
+   *   ——这保证同一代码块只属于一个精确文件集合组，不会被多个子集组重复包含
+   * - 同一 F' 桶内 |F'| ≥ 2 才算重复关系；桶内按代表合并连续索引为出现区间，每个区间一条 occurrence
+   * - 完全一致文件组单独输出：同一等价类 ≥2 个文件时整块成一组
+   * - 跨组去重保险：最终对同一 (file, startLine, endLine) 出现在多个组的情形，
+   *   只保留行覆盖最大的那个组，从其余组删除该 occurrence（不足 2 条的组整组丢弃）
+   *
+   * 最终分组示例（all_dup_cfile.cpp=A, test-codeql-cpp.cpp=T 完全一致，dup_cfile.cpp=D 为 A 的子集）：
+   * - 完全一致组：{A, T}（整块 1-46 行）
+   * - 部分重复组：{A, D}（L14-46 共同部分），T 因与 A 完全一致被折叠为 A，不再单独出现
+   * - apig 三文件完全共同代码 L4-16：F'={anti, codecheck, sca} 精确成一组，
+   *   不会在 {anti,codecheck}、{codecheck,sca} 等子集组重复出现
+   *
+   * 重复代码行数/重复率仍由行级检测（fileDuplicatedLines）取并集计算，与分组无关，不受影响。
+   *
+   * @param {Map} fileSourceLines file → [{lineNum, text}]（key 为 '/' 归一化路径）
+   * @param {Map} fileContents file(原始路径) → 内容
+   * @param {string[]} sources 源目录列表
+   * @param {Map} sharedHashWindows hash → [{file, startIdx, endIdx}]（仅跨 2+ 窗口的共享 hash）
+   * @returns {Array} duplicationOccurrences 列表
+   */
+  buildDuplicationOccurrences(fileSourceLines, fileContents, sources, sharedHashWindows) {
+    if (!sharedHashWindows || sharedHashWindows.size === 0) return [];
+
+    // 1) 计算「完全一致文件」的等价类：内容(trim 后)哈希相同的文件归为一类
+    //    （如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp 完全相同）
+    const contentHashToFiles = new Map(); // hash -> [归一化路径]
+    const fileToRep = new Map();          // 归一化路径 -> 该类代表
+    for (const [file, content] of fileContents) {
+      const norm = file.replace(/\\/g, '/');
+      const hash = crypto.createHash('md5').update(content.trim()).digest('hex');
+      if (!contentHashToFiles.has(hash)) contentHashToFiles.set(hash, []);
+      contentHashToFiles.get(hash).push(norm);
+    }
+    for (const files of contentHashToFiles.values()) {
+      const rep = files[0];
+      for (const f of files) fileToRep.set(f, rep);
+    }
+
+    const occurrences = [];
+    const W = this.minLines;
+
+    // 2) 预计算每个「代表文件」的 10 行滑动窗口哈希数组（每代表一份，供两两匹配复用）
+    //    repInfo: rep -> { src, winHashes: [idx], hashToPos: Map<hash, [idx]> }
+    const repInfo = new Map();
+    const allReps = new Set();
+    for (const f of fileToRep.keys()) allReps.add(fileToRep.get(f));
+    for (const rep of allReps) {
+      const src = fileSourceLines.get(rep);
+      if (!src || src.length < W) continue;
+      const winHashes = new Array(src.length - W + 1);
+      const hashToPos = new Map();
+      for (let i = 0; i <= src.length - W; i++) {
+        const h = crypto.createHash('md5')
+          .update(src.slice(i, i + W).map(l => l.text).join('\n')).digest('hex');
+        winHashes[i] = h;
+        if (!hashToPos.has(h)) hashToPos.set(h, []);
+        hashToPos.get(h).push(i);
+      }
+      repInfo.set(rep, { src, winHashes, hashToPos });
+    }
+
+    // 3) 两两代表文件：枚举所有「最大连续相同源代码行」运行（run）。
+    //    每个 run 代表一条独立的重复关系；对 run 内的两个出现位置建立连接（union），
+    //    再以「文件+索引区间」为节点做 union-find，把多文件共享同一段内容的出现位置合并成一组。
+    //    这样 A-B(1-45) 与 A-B-C(14-45) 作为两条独立关系同时保留，互不截断——
+    //    不再像旧的「按精确文件集合分桶」那样，把长关系中的窗口让给超集关系导致长关系被截断。
+    const parent = new Map();
+    const find = (k) => {
+      let root = k;
+      while (parent.get(root) !== root) root = parent.get(root);
+      while (parent.get(k) !== root) {
+        const next = parent.get(k);
+        parent.set(k, root);
+        k = next;
+      }
+      return root;
+    };
+    const union = (a, b) => {
+      const ra = find(a), rb = find(b);
+      if (ra !== rb) parent.set(ra, rb);
+    };
+    const nodeKey = (rep, s, e) => `${rep}\u0001${s}\u0001${e}`;
+
+    const repList = [...repInfo.keys()];
+    for (let a = 0; a < repList.length; a++) {
+      const A = repInfo.get(repList[a]);
+      for (let b = a + 1; b < repList.length; b++) {
+        const B = repInfo.get(repList[b]);
+        // 以 A 的窗口为基准，逐个匹配 B 中位置，并沿对角线扩展成最大 run
+        const consumed = new Set(); // "i:j" 已归属某个 run，避免重复枚举
+        for (let i = 0; i < A.winHashes.length; i++) {
+          const positions = B.hashToPos.get(A.winHashes[i]) || [];
+          for (const j of positions) {
+            const ck = i + ':' + j;
+            if (consumed.has(ck)) continue;
+            let k = 0;
+            while (i + k < A.winHashes.length && j + k < B.winHashes.length
+                && A.winHashes[i + k] === B.winHashes[j + k]) k++;
+            for (let t = 0; t < k; t++) consumed.add((i + t) + ':' + (j + t));
+            // run 覆盖的源代码索引区间（含窗口内所有行）
+            const sA = i, eA = i + W - 1 + (k - 1);
+            const sB = j, eB = j + W - 1 + (k - 1);
+            const kA = nodeKey(repList[a], sA, eA);
+            const kB = nodeKey(repList[b], sB, eB);
+            if (!parent.has(kA)) parent.set(kA, kA);
+            if (!parent.has(kB)) parent.set(kB, kB);
+            union(kA, kB);
+          }
+        }
+      }
+    }
+
+    // 3.5) 同文件内自重复：同一文件中相同内容出现在 ≥2 个非重叠位置时，这些区间互相 union。
+    //      行级检测（detectWithLineLevel）把同文件内重复计入重复行数，而上面两两匹配只覆盖跨文件，
+    //      会导致"文件内自重复"的文件（如大型 JSON 配置）重复率有值却没有 occurrence 明细。
+    //      按「对角线 run 扩展」合并长重复（8-36/72-100 不再被切成 10 行小块），并做了两项防爆保护：
+    //      a) 不用 Set 标记已处理位置对：V8 的 Set/Map 元素上限为 2^24（nodejs/node#37320），
+    //         大型配置文件的高频模板窗口对数可达千万级，Set.add 会抛
+    //         RangeError: Value undefined out of range for undefined options property undefined。
+    //         改用「对角线连续性剪枝」：若 (i-1, j-1) 处窗口哈希也相等，说明该对已被更早
+    //         起点的 run 覆盖，直接跳过——每个 run 只从其最左端点完整扩展一次。
+    //      b) 同一 hash 的出现段数超过 MAX_SELF_DUP_SEGS 时退回「所有段 union 成一组」：
+    //         超高频模板（同内容出现上百次）两两配对组合爆炸且展示价值低，整组输出即可。
+    const MAX_SELF_DUP_SEGS = 64;
+    for (const [rep, info] of repInfo) {
+      const winHashes = info.winHashes;
+      const len = winHashes.length;
+      for (const positions of info.hashToPos.values()) {
+        if (positions.length < 2) continue;
+        // 分段：连续窗口位置合段（段内为周期性重叠窗口，j-i < W 会被跳过，不参与配对）
+        const segs = [];
+        let segStart = positions[0];
+        for (let p = 1; p <= positions.length; p++) {
+          const cur = positions[p];
+          if (cur === undefined || cur !== positions[p - 1] + 1) {
+            segs.push([segStart, positions[p - 1]]);
+            segStart = cur;
+          }
+        }
+        if (segs.length < 2) continue;
+        if (segs.length > MAX_SELF_DUP_SEGS) {
+          // 超高频模板：所有段整组 union（每段一个节点），避免两两配对组合爆炸
+          const segNodes = segs.map(([a, b]) => {
+            const k = nodeKey(rep, a, b + W - 1);
+            if (!parent.has(k)) parent.set(k, k);
+            return k;
+          });
+          for (let i = 1; i < segNodes.length; i++) union(segNodes[0], segNodes[i]);
+          continue;
+        }
+        // 常规场景：跨段位置对做对角线 run 扩展（段数 ≤ MAX_SELF_DUP_SEGS，组合可控）
+        for (let si = 0; si < segs.length; si++) {
+          for (let sj = si + 1; sj < segs.length; sj++) {
+            for (let i = segs[si][0]; i <= segs[si][1]; i++) {
+              for (let j = segs[sj][0]; j <= segs[sj][1]; j++) {
+                // 只处理非重叠的后向重复位置：j ≥ i+W 保证两段窗口不重叠
+                if (j < i + W) continue;
+                // 对角线连续性剪枝：(i-1, j-1) 也同哈希 → 该对属于已扩展过的 run，跳过
+                if (i > 0 && winHashes[i - 1] === winHashes[j - 1]) continue;
+                // 从 (i, j) 沿对角线扩展最大 run：(i+k, j+k) 窗口内容一致即同属一段重复
+                let k = 0;
+                while (i + k < len && j + k < len
+                    && winHashes[i + k] === winHashes[j + k]) {
+                  k++;
+                }
+                // run 覆盖的源代码索引区间（含窗口内所有行）
+                const kA = nodeKey(rep, i, i + W - 1 + (k - 1));
+                const kB = nodeKey(rep, j, j + W - 1 + (k - 1));
+                if (!parent.has(kA)) parent.set(kA, kA);
+                if (!parent.has(kB)) parent.set(kB, kB);
+                union(kA, kB);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 按连通分量分组：每个分量 = 一条独立的重复关系组
+    const compNodes = new Map(); // root -> Set<nodeKey>
+    for (const k of parent.keys()) {
+      const r = find(k);
+      if (!compNodes.has(r)) compNodes.set(r, new Set());
+      compNodes.get(r).add(k);
+    }
+    for (const nodes of compNodes.values()) {
+      if (nodes.size < 2) continue;
+      const fileOccs = [];
+      for (const nk of nodes) {
+        const parts = nk.split('\u0001');
+        const rep = parts[0];
+        const s = Number(parts[1]), e = Number(parts[2]);
+        const src = fileSourceLines.get(rep);
+        if (!src) continue;
+        fileOccs.push({
+          file: rep,
+          startLine: src[s].lineNum,
+          endLine: src[e].lineNum
+        });
+      }
+      if (fileOccs.length < 2) continue; // 少于 2 个出现位置不算重复
+      this.pushGroup(occurrences, fileOccs, sources, fileContents);
+    }
+
+    // 4) 处理「完全一致文件」组：同一内容哈希的 ≥2 个文件单独成一组，
+    //    每个成员各占一条出现记录（整文件为重复块）
+    //    只有源代码行数 ≥ minLines(10) 的文件才可能被滑窗检测为重复块，故以此作为阈值
+    for (const files of contentHashToFiles.values()) {
+      if (files.length < 2) continue;
+      const fileOccs = [];
+      for (const f of files) {
+        const sourceLines = fileSourceLines.get(f);
+        if (!sourceLines || sourceLines.length < this.minLines) continue;
+        fileOccs.push({
+          file: f,
+          startLine: sourceLines[0].lineNum,
+          endLine: sourceLines[sourceLines.length - 1].lineNum
+        });
+      }
+      if (fileOccs.length < 2) continue;
+      this.pushGroup(occurrences, fileOccs, sources, fileContents);
+    }
+
+    // 5) 跨组去重保险：同一 (file, startLine, endLine) 若出现在多个组，
+    //    只保留行覆盖最大的那个组中的出现位置，从其余组删除。
+    //    （理论上精确分桶后不应出现，此处作为防御性兜底，避免任何边界情形造成跨组重复）
+    this.dedupOccurrencesAcrossGroups(occurrences);
+
+    return occurrences;
+  }
+
+  // 跨组去重：同一 (filePath, startLine, endLine) 出现在多个组时，
+  // 只保留组内「所有出现位置行覆盖并集」最大的那个组中的该出现位置，从其它组删除。
+  // 删除后若某组不足 2 条出现位置，则整组丢弃。
+  // 注意：此处以 occurrence 自身的 groupId 为分组依据，不依赖外部结构。
+  dedupOccurrencesAcrossGroups(occurrences) {
+    if (!occurrences || occurrences.length === 0) return;
+
+    // 统计每个组的行覆盖并集大小，用于决定保留哪个组
+    const groupLineSpan = new Map(); // groupId -> Set<lineKey>
+    for (const o of occurrences) {
+      if (!groupLineSpan.has(o.groupId)) groupLineSpan.set(o.groupId, new Set());
+      const span = groupLineSpan.get(o.groupId);
+      for (let ln = o.startLine; ln <= o.endLine; ln++) {
+        span.add(`${o.filePath}:${ln}`);
+      }
+    }
+
+    // 对每个 (filePath, startLine, endLine) 找出它所在的所有组，保留 span 最大者
+    const blockToGroups = new Map(); // blockKey -> Set<groupId>
+    for (const o of occurrences) {
+      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
+      if (!blockToGroups.has(k)) blockToGroups.set(k, new Set());
+      blockToGroups.get(k).add(o.groupId);
+    }
+    const dropGroupForBlock = new Map(); // blockKey -> Set<groupId>(要删除的组)
+    for (const [k, gids] of blockToGroups) {
+      if (gids.size < 2) continue;
+      let best = null, bestSize = -1;
+      for (const gid of gids) {
+        const sz = groupLineSpan.get(gid) ? groupLineSpan.get(gid).size : 0;
+        if (sz > bestSize) { bestSize = sz; best = gid; }
+      }
+      const drop = new Set();
+      for (const gid of gids) if (gid !== best) drop.add(gid);
+      dropGroupForBlock.set(k, drop);
+    }
+    if (dropGroupForBlock.size === 0) return;
+
+    // 执行删除：从被标记为删除的 (blockKey, groupId) 对中移除 occurrence
+    for (let i = occurrences.length - 1; i >= 0; i--) {
+      const o = occurrences[i];
+      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
+      const drop = dropGroupForBlock.get(k);
+      if (drop && drop.has(o.groupId)) {
+        occurrences.splice(i, 1);
+      }
+    }
+
+    // 删除后若某组不足 2 条，整组丢弃
+    const groupCount = new Map();
+    for (const o of occurrences) {
+      groupCount.set(o.groupId, (groupCount.get(o.groupId) || 0) + 1);
+    }
+    for (let i = occurrences.length - 1; i >= 0; i--) {
+      if (groupCount.get(occurrences[i].groupId) < 2) {
+        occurrences.splice(i, 1);
+      }
+    }
+  }
+
+  // 把一组出现位置(重复块)统一排序、生成 groupId 并写入 occurrences
+  pushGroup(occurrences, fileOccs, sources, fileContents) {
+    // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
+    fileOccs.sort((a, b) => {
+      const relA = this.toRelativePath(a.file, sources);
+      const relB = this.toRelativePath(b.file, sources);
+      if (relA !== relB) return relA.localeCompare(relB);
+      return a.startLine - b.startLine;
+    });
+
+    // groupId 用组内所有出现位置(文件+起止行)的结构化哈希，保证不同重复关系唯一。
+    // 同一关系内各 occurrence 的内容可能不同（如共同部分与完全一致块），
+    // 因此不能再用「单一内容哈希」作为组 ID，否则不同关系可能因首块内容相同而碰撞。
+    const groupId = crypto.createHash('sha256')
+      .update(fileOccs
+          .map(o => `${this.toRelativePath(o.file, sources)}:${o.startLine}-${o.endLine}`)
+          .sort()
+          .join('\u0001'))
+      .digest('hex');
+
+    fileOccs.forEach((occ, i) => {
+      const content = this.extractBlockContent(occ.file, occ.startLine, occ.endLine, fileContents);
+      occurrences.push({
+        groupId: groupId,
+        contentHash: groupId,
+        occurrenceIndex: i,
+        filePath: this.toRelativePath(occ.file, sources),
+        startLine: occ.startLine,
+        endLine: occ.endLine,
+        content: content
+      });
+    });
+  }
+
+  /**
+   * 提取文件中指定行号区间的代码内容
+   *
+   * @param {string} file 文件路径（可能是正斜杠或反斜杠格式）
+   * @param {number} startLine 起始行（1-based）
+   * @param {number} endLine 结束行（1-based）
+   * @param {Map} fileContents file(原始路径) → 内容
+   * @returns {string} 代码内容，找不到文件时返回空字符串
+   */
+  extractBlockContent(file, startLine, endLine, fileContents) {
+    // 兼容路径分隔符：fileContents 的 key 是原始路径（Windows 下含反斜杠）
+    const content = fileContents.get(file)
+        || fileContents.get(file.replace(/\//g, '\\'));
+    if (!content) return '';
+    const lines = content.split('\n');
+    const start = Math.max(0, startLine - 1);
+    const end = Math.min(lines.length, endLine);
+    return lines.slice(start, end).join('\n');
+  }
+
+  /**
+   * 合并重叠/相邻的行号区间
+   *
+   * @param {Array} intervals [{startLine, endLine}]
+   * @param {boolean} mergeAdjacent 是否合并相邻区间（间隔 ≤1 行），默认 true。
+   *   重复块本身合并传 true（相邻重复块视为一个连续重复区域）；
+   *   扩展 ±contextLines 后的区间合并传 false（只有真正重叠才合并，避免上下文过长）。
+   * @returns {Array} 合并后的区间列表（按 startLine 排序）
+   */
+  mergeIntervals(intervals, mergeAdjacent = true) {
+    if (intervals.length === 0) return [];
+    const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
+    const merged = [Object.assign({}, sorted[0])];
+    // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
+    const overlapThreshold = mergeAdjacent ? 1 : 0;
+    for (let i = 1; i < sorted.length; i++) {
+      const last = merged[merged.length - 1];
+      if (sorted[i].startLine <= last.endLine + overlapThreshold) {
+        last.endLine = Math.max(last.endLine, sorted[i].endLine);
+        // 合并时透传附加属性（如 oversized）：任一子区间为真则合并区间视为真
+        if (sorted[i].oversized) last.oversized = true;
+      } else {
+        merged.push(Object.assign({}, sorted[i]));
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData。
+   *
+   * segments 生成策略（完整输出，不截断）：
+   * - 所有重复块（含超大块）均完整保留其代码内容（含 ±contextLines 上下文），
+   *   保证前端能展示/高亮全部重复代码；相邻块的上下文重叠时会合并成一个连续区间。
+   * - 超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多个 segment（分段不丢内容），
+   *   不再对超大块做「头+省略+尾」截断；快照整体随全量上报文件上传 OBS。
+   * - 未覆盖的行段由前端根据相邻片段的行号差用 "... N lines omitted ..." 占位。
+   *
+   * snapshotData 结构（整体 Base64 编码）：
+   * {
+   *   totalLines: 原始文件总行数,
+   *   contextLines: 上下文行数(5),
+   *   truncated: 固定 false（保留字段做结构兼容，现已完整输出不再截断）,
+   *   segments: [{originalStartLine, originalEndLine, contentB64}]
+   *   // 每个 segment 的 contentB64 为该片段代码内容再次 Base64 编码
+   * }
+   *
+   * @param {Array} fileDetails 文件明细列表
+   * @param {Array} duplicationOccurrences 重复块出现位置列表
+   * @param {Map} fileContents file(原始路径) → 内容
+   * @param {string[]} sources 源目录列表
+   * @param {number} contextLines 上下文行数，默认 5
+   * @returns {Array} 更新后的 fileDetails（每个有重复的 fileDetail 增加 snapshotData 字段）
+   */
+  buildContextSegments(fileDetails, duplicationOccurrences, fileContents, sources, contextLines = 5) {
+    if (!duplicationOccurrences || duplicationOccurrences.length === 0) {
+      return fileDetails;
+    }
+
+    // 按 filePath 分组出现位置，得到每个文件的重复块区间
+    const blocksByFile = new Map(); // relativePath → [{startLine, endLine}]
+    for (const occ of duplicationOccurrences) {
+      if (!blocksByFile.has(occ.filePath)) blocksByFile.set(occ.filePath, []);
+      blocksByFile.get(occ.filePath).push({ startLine: occ.startLine, endLine: occ.endLine });
+    }
+
+    // 构建 relativePath → content 的映射，便于按 fileDetail.filePath 查找
+    const relativeToContent = new Map();
+    for (const [absPath, content] of fileContents) {
+      relativeToContent.set(this.toRelativePath(absPath, sources), content);
+    }
+
+    for (const fileDetail of fileDetails) {
+      // 只有有重复的文件才生成快照
+      if (!fileDetail.duplicationLineCount || fileDetail.duplicationLineCount === 0) continue;
+
+      const blocks = blocksByFile.get(fileDetail.filePath);
+      if (!blocks || blocks.length === 0) continue;
+
+      // 1. 合并重叠的重复块区间
+      const mergedBlocks = this.mergeIntervals(blocks);
+
+      // 2. 获取文件内容和总行数
+      const content = relativeToContent.get(fileDetail.filePath);
+      if (!content) continue;
+      const lines = content.split('\n');
+      const totalLines = lines.length;
+
+      // 3. 每个块扩展 ±contextLines，再次合并重叠的扩展区间
+      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间。
+      const extended = mergedBlocks.map((b) => ({
+        startLine: Math.max(1, b.startLine - contextLines),
+        endLine: b.endLine + contextLines
+      }));
+      const mergedExtended = this.mergeIntervals(extended, false);
+
+      // 4. 构建 segments：所有区间（含超大块）完整保留代码内容，不做任何省略。
+      //    超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多段（分段不丢内容），
+      //    避免 Base64/JSON 单字符串过大影响传输与解析。
+      const MAX_SEGMENT_CHARS = 24 * 1024; // 单段原始内容字符数上限（仅分段用，不截断内容）
+      const segments = [];
+      // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
+      const pushSegment = (segStart, segEnd, contentText) => {
+        segments.push({
+          originalStartLine: segStart,
+          originalEndLine: segEnd,
+          contentB64: Buffer.from(contentText, 'utf8').toString('base64')
+        });
+      };
+      for (const interval of mergedExtended) {
+        const start = Math.max(1, interval.startLine);
+        const end = Math.min(totalLines, interval.endLine);
+        // 完整保留路径：按字符预算切段（分段间行号连续，内容无丢失）
+        let segStart = start;
+        let segChars = 0;
+        for (let ln = start; ln <= end; ln++) {
+          const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
+          const lineLen = lineText.length + 1; // 行内容 + 换行符
+          if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
+            pushSegment(segStart, ln - 1, lines.slice(segStart - 1, ln - 1).join('\n'));
+            segStart = ln;
+            segChars = 0;
+          }
+          segChars += lineLen;
+        }
+        if (segChars > 0) {
+          pushSegment(segStart, end, lines.slice(segStart - 1, end).join('\n'));
+        }
+      }
+
+      // 5. 构建 snapshotData JSON 并整体 Base64 编码（完整内容随全量上报文件上传 OBS，
+      //    DB snapshot_data 为 LONGTEXT 可承载 MB 级快照，不再做 512KB 截断兜底）
+      const snapshotDataObj = {
+        totalLines: totalLines,
+        contextLines: contextLines,
+        segments: segments,
+        truncated: false // 结构兼容字段：现已完整输出，恒为 false
+      };
+      const snapshotJson = JSON.stringify(snapshotDataObj);
+      fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
+    }
+
+    return fileDetails;
+  }
+
+  getEmptyResult() {
+    return {
+      totalCodeDuplicationRate: 0,
+      totalFileDuplicationRate: 0,
+      duplicatedBlocks: 0,
+      duplicatedLines: 0,
+      totalLines: 0,
+      duplicatedFiles: 0,
+      totalFiles: 0,
+      fileDetails: [],
+      identicalFileDetails: [],
+      duplicationOccurrences: []
+    };
+  }
+
+  getName() {
+    return 'duplication';
+  }
+}
+
+module.exports = DuplicationDetector;
+
+
+/***/ }),
+
+/***/ 843:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { execSync } = __nccwpck_require__(5317);
+const path = __nccwpck_require__(6928);
+const fs = __nccwpck_require__(9896);
+const os = __nccwpck_require__(857);
+const BaseDetector = __nccwpck_require__(658);
+const FileCollector = __nccwpck_require__(6790);
+
+class LizardDetector extends BaseDetector {
+  constructor(config = {}) {
+    super(config);
+    this.tempJsonFile = './lizard_output.json';
+    this.allowedExtensions = config.allowedExtensions || [];
+  }
+
+  async detect(source) {
+    // 支持单个路径或多个路径
+    const sources = Array.isArray(source) ? source : [source];
+    const excludeDirs = this.config.excludeDirs || [];
+
+    // 收集所有文件
+    const allFiles = [];
+    for (const src of sources) {
+      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+      allFiles.push(...files);
+    }
+
+    // 去重
+    const uniqueFiles = [...new Set(allFiles)];
+
+    if (uniqueFiles.length === 0) {
+      return this.getEmptyResult();
+    }
+
+    // Lizard 处理所有文件，统一获取函数数、函数代码行数和圈复杂度
+    let lizardResult = { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+    if (uniqueFiles.length > 0) {
+      lizardResult = this.runLizard(uniqueFiles);
+    }
+
+    const totalFunctions = lizardResult.totalFunctions;
+    const totalNloc = lizardResult.totalNloc;
+    const totalCC = lizardResult.totalCC;
+
+    if (totalFunctions === 0) {
+      return this.getEmptyResult();
+    }
+
+    // 按文件聚合函数数据，计算文件级指标
+    const fileDetails = this.aggregateFileDetails(lizardResult.functions, sources);
+
+    return {
+      totalFunctions,
+      totalNloc,
+      averageFunctionLoc: totalFunctions > 0
+        ? parseFloat((totalNloc / totalFunctions).toFixed(2))
+        : 0,
+      totalCyclomaticComplexity: totalCC,
+      averageCyclomaticComplexity: totalFunctions > 0
+        ? parseFloat((totalCC / totalFunctions).toFixed(2))
+        : 0,
+      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（区别于方法维度的 averageCyclomaticComplexity）
+      cyclomaticComplexityPerFile: fileDetails.length > 0
+        ? parseFloat((totalCC / fileDetails.length).toFixed(2))
+        : 0,
+      fileDetails: fileDetails
+    };
+  }
+
+  // 将文件列表写入临时文件，供 lizard 的 -f 参数读取
+  writeInputFile(files) {
+    const tempInputPath = path.join(os.tmpdir(), `lizard_input_${Date.now()}.txt`);
+    fs.writeFileSync(tempInputPath, files.join('\n'), 'utf8');
+    return tempInputPath;
+  }
+
+  runLizard(files) {
+    const tempJsonPath = path.resolve(this.tempJsonFile);
+    let tempInputPath = null;
+
+    try {
+      if (fs.existsSync(tempJsonPath)) {
+        fs.unlinkSync(tempJsonPath);
+      }
+
+      // 使用 -f 参数从临时文件读取文件列表，避免命令行长度限制
+      tempInputPath = this.writeInputFile(files);
+      const args = ['-f', tempInputPath, '-o', tempJsonPath];
+
+      execSync('python3 -m lizard ' + args.join(' '), {
+        encoding: 'utf8',
+        maxBuffer: 50 * 1024 * 1024,
+        timeout: 300000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      if (tempInputPath) {
+        fs.unlinkSync(tempInputPath);
+        tempInputPath = null;
+      }
+
+      if (!fs.existsSync(tempJsonPath)) {
+        return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+      }
+
+      const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
+      if (fs.existsSync(tempJsonPath)) fs.unlinkSync(tempJsonPath);
+
+      if (!content) {
+        return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+      }
+
+      if (content.startsWith('{')) {
+        const results = JSON.parse(content);
+        return this.calculateMetricsFromLizard(results);
+      } else {
+        return this.parseTextOutput(content);
+      }
+    } catch (error) {
+      if (tempInputPath && fs.existsSync(tempInputPath)) {
+        fs.unlinkSync(tempInputPath);
+        tempInputPath = null;
+      }
+      if (fs.existsSync(tempJsonPath)) {
+        try {
+          const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
+          if (fs.existsSync(tempJsonPath)) fs.unlinkSync(tempJsonPath);
+          if (content) {
+            if (content.startsWith('{')) {
+              return this.calculateMetricsFromLizard(JSON.parse(content));
+            } else {
+              return this.parseTextOutput(content);
+            }
+          }
+        } catch (parseError) {
+          console.warn(`Failed to parse lizard output: ${parseError.message}`);
+        }
+      }
+      console.warn(`Lizard detection warning: ${error.message}`);
+      return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+    }
+  }
+
+  parseTextOutput(content) {
+    let totalFunctions = 0;
+    let totalNloc = 0;
+    let totalCC = 0;
+    const functions = [];
+
+    const lines = content.split('\n');
+    for (const line of lines) {
+      if (!line.trim() || line.includes('NLOC') || line.includes('===') || line.includes('----')) {
+        continue;
+      }
+
+      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+?)@(\d+)-(\d+)@(.+)$/);
+      if (match) {
+        totalFunctions++;
+        const cc = parseInt(match[2], 10);
+        totalCC += cc;
+
+        // 从源文件中计算函数体有效代码行（排除方法签名和参数行）
+        const startLine = parseInt(match[7], 10);
+        const endLine = parseInt(match[8], 10);
+        const filePath = match[9].trim();
+
+        let bodyNloc = parseInt(match[1], 10);
+        try {
+          const fileContent = fs.readFileSync(filePath, 'utf8');
+          const defLines = this.countDefinitionLines(fileContent, startLine);
+          bodyNloc = this.calculateBodyNloc(fileContent, startLine, endLine, defLines);
+        } catch (e) {
+          // 读取源文件失败时，回退到 nloc - 1
+          bodyNloc = Math.max(0, bodyNloc - 1);
+        }
+
+        totalNloc += bodyNloc;
+        // 保留 filename 用于按文件聚合
+        functions.push({
+          // match[6] 是正则捕获的函数名（如 MyClass.myMethod）
+          name: match[6] || '',
+          nloc: bodyNloc,
+          cc: cc,
+          startLine: startLine,
+          endLine: endLine,
+          filename: filePath
+        });
+      }
+    }
+
+    return { totalFunctions, totalNloc, totalCC, functions };
+  }
+
+  getEmptyResult() {
+    return {
+      totalFunctions: 0,
+      totalNloc: 0,
+      averageFunctionLoc: 0,
+      totalCyclomaticComplexity: 0,
+      averageCyclomaticComplexity: 0,
+      cyclomaticComplexityPerFile: 0,
+      fileDetails: []
+    };
+  }
+
+  // 根据源文件内容，计算函数定义占用的行数
+  countDefinitionLines(fileContent, startLine) {
+    const lines = fileContent.split('\n');
+    const startIndex = startLine - 1;
+    if (startIndex < 0 || startIndex >= lines.length) return 1;
+
+    for (let i = startIndex; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (line.endsWith(':')) {
+        return i - startIndex + 1;
+      }
+      if (line.endsWith('{')) {
+        return i - startIndex + 1;
+      }
+      if (line.endsWith(')') && i + 1 < lines.length && lines[i + 1].trim() === '{') {
+        return i - startIndex + 1;
+      }
+    }
+
+    return 1;
+  }
+
+  // 判断一行是否为有效代码行（非空行、非纯注释行）
+  static isSourceLine(line) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) return false;
+    if (trimmed.startsWith('#')) return false;
+    if (trimmed.startsWith('//')) return false;
+    if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/')) return false;
+    return true;
+  }
+
+  // 从源文件中精确计算函数体的有效代码行数（排除定义行）
+  calculateBodyNloc(fileContent, startLine, endLine, defLines) {
+    const lines = fileContent.split('\n');
+    let bodyNloc = 0;
+
+    const bodyStart = startLine - 1 + defLines;
+    const bodyEnd = endLine;
+
+    for (let i = bodyStart; i < bodyEnd && i < lines.length; i++) {
+      if (LizardDetector.isSourceLine(lines[i])) {
+        bodyNloc++;
+      }
+    }
+
+    return bodyNloc;
+  }
+
+  calculateMetricsFromLizard(results) {
+    let totalFunctions = 0;
+    let totalNloc = 0;
+    let totalCC = 0;
+    const functions = [];
+
+    if (results && results.functions) {
+      for (const func of results.functions) {
+        totalFunctions++;
+        totalCC += func.cyclomatic_complexity || 1;
+
+        // 读取源文件，精确计算函数定义行数，从 nloc 中排除
+        let bodyNloc = func.nloc || 0;
+        if (func.start_line && func.end_line && func.filename) {
+          try {
+            const fileContent = fs.readFileSync(func.filename, 'utf8');
+            const defLines = this.countDefinitionLines(fileContent, func.start_line);
+            bodyNloc = this.calculateBodyNloc(fileContent, func.start_line, func.end_line, defLines);
+          } catch (e) {
+            bodyNloc = Math.max(0, (func.nloc || 0) - 1);
+          }
+        } else {
+          bodyNloc = Math.max(0, (func.nloc || 0) - 1);
+        }
+
+        totalNloc += bodyNloc;
+        functions.push({
+          name: func.name,
+          nloc: bodyNloc,
+          cc: func.cyclomatic_complexity || 1,
+          startLine: func.start_line,
+          endLine: func.end_line,
+          filename: func.filename || ''
+        });
+      }
+    }
+
+    return { totalFunctions, totalNloc, totalCC, functions };
+  }
+
+  // 按文件聚合函数数据，保留每个函数的明细（函数名、行数、开始行、结束行）
+  aggregateFileDetails(functions, sources) {
+    if (!functions || functions.length === 0) return [];
+
+    // 按文件名分组
+    const fileMap = new Map();
+    for (const func of functions) {
+      const filename = func.filename || '';
+      if (!filename) continue;
+      if (!fileMap.has(filename)) {
+        fileMap.set(filename, []);
+      }
+      fileMap.get(filename).push(func);
+    }
+
+    const fileDetails = [];
+    for (const [filename, funcs] of fileMap) {
+      const functionCount = funcs.length;
+      const totalNloc = funcs.reduce((sum, f) => sum + (f.nloc || 0), 0);
+      const totalCC = funcs.reduce((sum, f) => sum + (f.cc || 0), 0);
+
+      // 将绝对路径转为相对路径
+      let filePath = filename;
+      if (sources && sources.length > 0) {
+        for (const src of sources) {
+          const normalizedSrc = src.replace(/\\/g, '/');
+          const normalizedPath = filePath.replace(/\\/g, '/');
+          if (normalizedPath.startsWith(normalizedSrc)) {
+            filePath = path.relative(src, filename);
+            break;
+          }
+        }
+      }
+      filePath = filePath.replace(/\\/g, '/');
+
+      // 保留每个函数的明细信息
+      const functionDetails = funcs.map(f => ({
+        functionName: f.name || '',
+        functionLoc: f.nloc || 0,
+        startLine: f.startLine || 0,
+        endLine: f.endLine || 0
+      }));
+
+      fileDetails.push({
+        filePath: filePath,
+        functionCount: functionCount,
+        avgFunctionLoc: parseFloat((totalNloc / functionCount).toFixed(2)),
+        avgCyclomaticComplexity: parseFloat((totalCC / functionCount).toFixed(2)),
+        functionDetails: functionDetails
+      });
+    }
+
+    return fileDetails;
+  }
+
+  getName() {
+    return 'lizard';
+  }
+}
+
+module.exports = LizardDetector;
+
+
+/***/ }),
+
+/***/ 2034:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { execSync } = __nccwpck_require__(5317);
+const path = __nccwpck_require__(6928);
+const fs = __nccwpck_require__(9896);
+const BaseDetector = __nccwpck_require__(658);
+const FileCollector = __nccwpck_require__(6790);
+
+// scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
+function getSccPath() {
+  // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+  // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
+  // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 dist/detectors
+  const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
+    ? __nccwpck_require2_.ab
+    : null;
+  // 候选顺序：
+  // 1. bundle 根 + bin/（标准 ncc 打包形态，asset 随目录分发）
+  // 2. bundle 根根目录平铺（部分平台分发时把 asset 平铺到 dist/ 根）
+  // 3. 源码结构：__dirname=dist/detectors，上溯一层为 dist/
+  const candidates = [];
+  if (bundleRoot) {
+    candidates.push(path.join(bundleRoot, 'bin', 'scc'));
+    candidates.push(path.join(bundleRoot, 'scc'));
+  }
+  candidates.push(path.join(__dirname, 'bin', 'scc'));
+  candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
+  candidates.push(path.join(__dirname, 'scc'));
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755，保证可执行
+      try {
+        fs.chmodSync(candidate, 0o755);
+      } catch (e) {
+        console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
+      }
+      return candidate;
+    }
+  }
+  // PATH 探测：确认 runner 环境本身安装了 scc 才使用裸命令名，
+  // 避免执行注定失败的命令产生误导性报错
+  try {
+    execSync('command -v scc', { stdio: 'ignore' });
+    return 'scc';
+  } catch (e) {
+    console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
+    return null;
+  }
+}
+
+class SlocDetector extends BaseDetector {
+  constructor(config = {}) {
+    super(config);
+    this.allowedExtensions = config.allowedExtensions || [];
+    this.sccPath = getSccPath();
+  }
+
+  async detect(source) {
+    const sources = Array.isArray(source) ? source : [source];
+    const excludeDirs = this.config.excludeDirs || [];
+
+    const sccArgs = this.buildSccArgs(sources, excludeDirs);
+
+    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接回退本地逐文件统计，
+    // 跳过注定失败的命令执行
+    if (!this.sccPath) {
+      return this.fallbackDetect(sources, excludeDirs);
+    }
+
+    try {
+      const result = this.runScc(sccArgs, sources);
+      return result;
+    } catch (error) {
+      console.warn(`[WARN] scc 执行失败: ${error.message}，回退到逐文件统计`);
+      return this.fallbackDetect(sources, excludeDirs);
+    }
+  }
+
+  // 构建 scc 命令行参数
+  buildSccArgs(sources, excludeDirs) {
+    const args = ['-f', 'json', '--no-cocomo', '--no-size', '--by-file'];
+
+    // 不再向 scc 传 --exclude-dir：scc 自身的排除规则不支持 ** 等 glob 通配符，
+    // 无法与 FileCollector 的 exclude-dirs 语义对齐。改为扫描全量后，在 runScc 里
+    // 用 FileCollector.isPathExcluded 对每个文件做后置过滤，保证与其余指标完全一致。
+
+    // 限制文件扩展名
+    if (this.allowedExtensions.length > 0) {
+      const exts = this.allowedExtensions
+        .map(e => e.replace(/^\./, ''))
+        .join(',');
+      args.push('--include-ext', exts);
+    }
+
+    // 源目录
+    for (const src of sources) {
+      args.push(src);
+    }
+
+    return args;
+  }
+
+  // 执行 scc 并解析 JSON 输出
+  runScc(args, sources) {
+    const cmd = `"${this.sccPath}" ${args.join(' ')}`;
+
+    const output = execSync(cmd, {
+      encoding: 'utf8',
+      maxBuffer: 100 * 1024 * 1024,
+      timeout: 300000,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    const sccResult = JSON.parse(output.trim());
+
+    // scc JSON 输出格式: 按语言分组
+    // [{ Name, Code, Comment, Blank, Lines, Complexity, Count, Bytes, Files:[...] }]
+    const excludeDirs = this.config.excludeDirs || [];
+    let totalCode = 0;
+    let totalComment = 0;
+    let totalBlank = 0;
+    let totalLines = 0;
+    let totalComplexity = 0;
+    let totalFiles = 0;
+
+    // 收集文件级指标
+    const fileDetails = [];
+
+    for (const lang of sccResult) {
+      // 注意：不再累加语言级汇总（含被 exclude-dirs 排除的文件），改为逐文件统计并
+      // 过滤后累加，保证 codeScale 等与 FileCollector 收集的文件范围口径一致。
+      const langFiles = lang.Files;
+      if (!langFiles || !Array.isArray(langFiles) || langFiles.length === 0) {
+        // 兜底：若某语言条目缺少/为空按文件明细（Files 缺失或为空数组），无法做文件级
+        // 排除，则按语言级汇总计入，避免该语言整体被丢弃导致总代码量/总文件数/总复杂度偏小。
+        totalCode += lang.Code || 0;
+        totalComment += lang.Comment || 0;
+        totalBlank += lang.Blank || 0;
+        totalLines += lang.Lines || 0;
+        totalComplexity += lang.Complexity || 0;
+        totalFiles += lang.Count || 0;
+        continue;
+      }
+      for (const file of langFiles) {
+          // scc 不同版本的 --by-file JSON 输出字段名可能不同：
+          //   - 旧版：Name 是完整路径
+          //   - 新版（3.x+）：Name 是文件名，Location 是完整路径
+          // 优先取完整路径字段（Location），其次 Name（可能是文件名或完整路径）
+          const fileName = file.Location || file.Name || file.Path || file.File || '';
+          // 过滤掉语言汇总行（字段为空或不含路径分隔符/扩展名的语言名）
+          if (!fileName || !this.isFilePath(fileName)) {
+            console.log(`[DEBUG] 跳过非文件条目: Name="${fileName}", Code=${file.Code || 0}, keys=${Object.keys(file).join(',')}`);
+            continue;
+          }
+          // 将绝对路径转为相对路径
+          let filePath = this.toRelativePath(fileName, sources);
+          // 后置过滤：用 FileCollector 的目录剪枝语义排除命中 exclude-dirs 的文件，
+          // 保证与 FileCollector / lizard / duplication 收集的文件范围完全一致
+          if (excludeDirs.length > 0 && FileCollector.isPathExcluded(filePath, excludeDirs)) {
+            continue;
+          }
+          const code = file.Code || 0;
+          const comment = file.Comment || 0;
+          const blank = file.Blank || 0;
+          totalCode += code;
+          totalComment += comment;
+          totalBlank += blank;
+          totalLines += (file.Lines || (code + comment + blank));
+          totalComplexity += (file.Complexity || 0);
+          totalFiles++;
+          fileDetails.push({
+            filePath: filePath,
+            language: lang.Name || '',
+            loc: code,
+            commentLines: comment
+          });
+        }
+    }
+
+    console.log(`  - Total files: ${totalFiles}`);
+    console.log(`  - Code lines (codeScale): ${totalCode}`);
+    console.log(`  - Comment lines: ${totalComment}`);
+    console.log(`  - Blank lines: ${totalBlank}`);
+    console.log(`  - Total lines: ${totalLines}`);
+    console.log(`  - Complexity: ${totalComplexity}`);
+    console.log(`  - File details count: ${fileDetails.length}`);
+
+    // 如果 scc --by-file 未产出有效文件明细，回退到逐文件统计获取明细
+    if (fileDetails.length === 0) {
+      console.log('[DEBUG] scc --by-file 未产出文件明细，回退到逐文件统计');
+      const FileCollector = __nccwpck_require__(6790);
+      const excludeDirs = this.config.excludeDirs || [];
+      const allFiles = [];
+      for (const src of sources) {
+        const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+        allFiles.push(...files);
+      }
+      const uniqueFiles = [...new Set(allFiles)];
+      for (const file of uniqueFiles) {
+        try {
+          const content = fs.readFileSync(file, 'utf8');
+          let sourceCount = 0;
+          let commentCount = 0;
+          const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('/*') && !trimmed.startsWith('*') && !trimmed.startsWith('#')) {
+              sourceCount++;
+            } else if (trimmed) {
+              commentCount++;
+            }
+          }
+          const filePath = this.toRelativePath(file, sources);
+          const ext = path.extname(file).toLowerCase();
+          const langMap = {
+            '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
+            '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
+            '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
+            '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
+            '.scala': 'Scala', '.swift': 'Swift'
+          };
+          fileDetails.push({
+            filePath: filePath,
+            language: langMap[ext] || ext.replace('.', ''),
+            loc: sourceCount,
+            commentLines: commentCount
+          });
+        } catch (e) {
+          console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
+        }
+      }
+    }
+
+    return {
+      codeScale: totalCode,
+      rawLines: totalLines,
+      commentLines: totalComment,
+      blankLines: totalBlank,
+      sourceLines: totalCode,
+      complexity: totalComplexity,
+      fileDetails: fileDetails
+    };
+  }
+
+  // 判断 Name 是否为文件路径（而非语言名）
+  isFilePath(name) {
+    if (!name) return false;
+    // 文件路径应包含扩展名（含点号）或路径分隔符
+    return name.includes('.') || name.includes('/') || name.includes('\\');
+  }
+
+  // 将绝对路径转为相对路径（统一使用 / 分隔符）
+  toRelativePath(filePath, sources) {
+    if (sources && sources.length > 0) {
+      for (const src of sources) {
+        const normalizedSrc = src.replace(/\\/g, '/');
+        const normalizedPath = filePath.replace(/\\/g, '/');
+        if (normalizedPath.startsWith(normalizedSrc)) {
+          filePath = path.relative(src, filePath);
+          break;
+        }
+      }
+    }
+    return filePath.replace(/\\/g, '/');
+  }
+
+  // 回退方案：当 scc 不可用时，逐文件读取并统计行数
+  fallbackDetect(sources, excludeDirs) {
+    const FileCollector = __nccwpck_require__(6790);
+    const allFiles = [];
+    for (const src of sources) {
+      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+      allFiles.push(...files);
+    }
+    const uniqueFiles = [...new Set(allFiles)];
+
+    if (uniqueFiles.length === 0) {
+      return { codeScale: 0, rawLines: 0, commentLines: 0, blankLines: 0, sourceLines: 0, complexity: 0, fileDetails: [] };
+    }
+
+    let totalSource = 0;
+    let totalAll = 0;
+    let totalComment = 0;
+    let totalEmpty = 0;
+
+    // 收集文件级指标
+    const fileDetails = [];
+
+    for (const file of uniqueFiles) {
+      try {
+        const content = fs.readFileSync(file, 'utf8');
+        let normalized = content.replace(/\r\n|\r/g, '\n');
+        if (normalized.slice(-1) === '\n') normalized = normalized.slice(0, -1);
+        const lines = normalized.split('\n');
+        totalAll += lines.length;
+
+        let fileSourceLines = 0;
+        let fileCommentLines = 0;
+        let inBlock = false;
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (inBlock) {
+            totalComment++;
+            fileCommentLines++;
+            if (trimmed.includes('*/')) inBlock = false;
+            continue;
+          }
+          if (trimmed === '') { totalEmpty++; continue; }
+          if (trimmed.startsWith('/*')) {
+            totalComment++;
+            fileCommentLines++;
+            if (!trimmed.includes('*/')) inBlock = true;
+            continue;
+          }
+          if (trimmed.startsWith('//')) { totalComment++; fileCommentLines++; continue; }
+          totalSource++;
+          fileSourceLines++;
+        }
+
+        // 将绝对路径转为相对路径
+        let filePath = file;
+        for (const src of sources) {
+          const normalizedSrc = src.replace(/\\/g, '/');
+          const normalizedPath = filePath.replace(/\\/g, '/');
+          if (normalizedPath.startsWith(normalizedSrc)) {
+            filePath = path.relative(src, file);
+            break;
+          }
+        }
+        filePath = filePath.replace(/\\/g, '/');
+
+        // 根据扩展名推断语言
+        const ext = path.extname(file).toLowerCase();
+        const langMap = {
+          '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
+          '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
+          '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
+          '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
+          '.scala': 'Scala', '.swift': 'Swift'
+        };
+
+        fileDetails.push({
+          filePath: filePath,
+          language: langMap[ext] || ext.replace('.', ''),
+          loc: fileSourceLines,
+          commentLines: fileCommentLines
+        });
+      } catch (e) {
+        console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
+      }
+    }
+
+    console.log(`[DEBUG] Fallback statistics (scc 不可用):`);
+    console.log(`  - Code scale: ${totalSource}`);
+
+    return {
+      codeScale: totalSource,
+      rawLines: totalAll,
+      commentLines: totalComment,
+      blankLines: totalEmpty,
+      sourceLines: totalSource,
+      complexity: 0,
+      fileDetails: fileDetails
+    };
+  }
+
+  getName() {
+    return 'sloc';
+  }
+}
+
+module.exports = SlocDetector;
+
+
+/***/ }),
+
+/***/ 9863:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const SlocDetector = __nccwpck_require__(2034);
+const LizardDetector = __nccwpck_require__(843);
+const DuplicationDetector = __nccwpck_require__(1223);
+const MetricsCalculator = __nccwpck_require__(5378);
+const CoderepoUploader = __nccwpck_require__(2890);
+const ConfigLoader = __nccwpck_require__(6145);
+const Logger = __nccwpck_require__(8467);
+const FileUtils = __nccwpck_require__(7248);
+const FileCollector = __nccwpck_require__(6790);
+const path = __nccwpck_require__(6928);
+
+// 将日期格式化为 yyyy-MM-dd HH:mm:ss
+function formatDateTime(date) {
+  // 固定按东八区输出：CI runner 容器时区多为 UTC，用本地组件取值会使检测时间比实际早 8 小时
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23'
+  });
+  // en-CA 输出形如 "2026-08-24, 11:05:29"，把逗号替换为空格统一为 yyyy-MM-dd HH:mm:ss
+  return fmt.format(date).replace(',', '');
+}
+
+class MetricsScanner {
+  constructor(config = {}) {
+    this.config = config;
+    this.logger = new Logger({ verbose: config.verbose });
+    this.workingDir = config.workingDir || process.cwd();
+
+    const allowedExtensions = config.allowedExtensions || [];
+
+    this.slocDetector = new SlocDetector({
+      excludeDirs: config.excludeDirs,
+      allowedExtensions: allowedExtensions
+    });
+
+    this.lizardDetector = new LizardDetector({
+      excludeDirs: config.excludeDirs,
+      allowedExtensions: allowedExtensions,
+      lizardPath: config.detectors?.lizard?.path || 'lizard',
+      workingDir: this.workingDir
+    });
+
+    this.duplicationDetector = new DuplicationDetector({
+      excludeDirs: config.excludeDirs,
+      allowedExtensions: allowedExtensions,
+      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"
+      // - minLines=10：连续代码块至少 10 行才算一次重复
+      minLines: config.detectors?.duplication?.minLines || 10
+    });
+
+    this.uploader = new CoderepoUploader({
+      coderepoUrl: config.uploader?.coderepoUrl,
+      timeout: (config.uploader?.timeout || 30) * 1000,
+      useOidc: config.uploader?.useOidc,
+      apigAppKey: config.uploader?.apigAppKey,
+      apigAppSecret: config.uploader?.apigAppSecret,
+      obsAk: config.uploader?.obsAk,
+      obsSk: config.uploader?.obsSk
+    });
+  }
+
+  async scan(options = {}) {
+    const startTime = new Date();
+    const startTimeFormatted = formatDateTime(startTime);
+    this.logger.info('Starting code metrics scan...');
+
+    const sourceInput = options.sourceDir || this.config.sourceDir;
+    const sources = Array.isArray(sourceInput) ? sourceInput : [sourceInput];
+    const resolvedSources = sources.map(src =>
+      path.isAbsolute(src) ? src : path.resolve(this.workingDir, src)
+    );
+
+    const previewFiles = FileCollector.collectFiles(
+      resolvedSources,
+      this.config.excludeDirs || [],
+      this.config.allowedExtensions || []
+    );
+    let slocResult = {};
+    let lizardResult = {};
+    let duplicationResult = {};
+    let status = 0;
+
+    try {
+      if (this.config.detectors?.sloc?.enabled !== false) {
+        this.logger.info('Running scc detector (code size)...');
+        slocResult = await this.slocDetector.detect(resolvedSources);
+      }
+
+      if (this.config.detectors?.lizard?.enabled !== false) {
+        this.logger.info('Running lizard detector (function complexity)...');
+        lizardResult = await this.lizardDetector.detect(resolvedSources);
+      }
+
+      if (this.config.detectors?.duplication?.enabled !== false) {
+        this.logger.info('Running duplication detector (code duplication)...');
+        // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
+        duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
+      }
+
+      const mergedMetrics = MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
+      MetricsCalculator.validate(mergedMetrics);
+      const formattedMetrics = MetricsCalculator.formatForReport(mergedMetrics);
+
+      // 从格式化结果中分离 fileDetails 和总体指标
+      const { fileDetails, ...overallMetrics } = formattedMetrics;
+
+      const endTime = new Date();
+      const endTimeFormatted = formatDateTime(endTime);
+      const durationMs = endTime.getTime() - startTime.getTime();
+
+      const result = {
+        ...overallMetrics,
+        fileDetails: fileDetails,
+        detectionInfo: {
+          startTime: startTimeFormatted,
+          endTime: endTimeFormatted,
+          durationMs: durationMs,
+          sources: resolvedSources,
+          tools: {
+            sloc: this.config.detectors?.sloc?.enabled !== false,
+            lizard: this.config.detectors?.lizard?.enabled !== false,
+            duplication: this.config.detectors?.duplication?.enabled !== false
+          }
+        }
+      };
+
+      this.logger.info(`Scan completed in ${durationMs}ms`);
+
+      // 诊断日志：输出扫描结果规模，用于定位大数据量下的序列化超限问题
+      let snapshotTotal = 0;
+      for (const fd of fileDetails || []) {
+        if (fd.snapshotData) snapshotTotal += fd.snapshotData.length;
+      }
+      this.logger.info(
+        `Result scale: fileDetails=${(fileDetails || []).length}, snapshotDataTotal=${snapshotTotal} bytes, occurrences=${(formattedMetrics.duplicationOccurrences || []).length}`
+      );
+
+      if (options.output || this.config.output) {
+        const outputPath = path.isAbsolute(options.output || this.config.output)
+          ? (options.output || this.config.output)
+          : path.resolve(this.workingDir, options.output || this.config.output);
+        // 本地输出文件剥离大数据字段（snapshotData 与 duplicationOccurrences 的明文 content），
+        // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length。
+        // - snapshotData 仅详情页展示用，DB 上报另有一份
+        // - occurrence 的明文 content 仅上报用（uploader 已 Base64 编码后分批上报），
+        //   本地保留 groupId/filePath/起止行等元数据即可
+        const compactResult = {
+          ...result,
+          fileDetails: (result.fileDetails || []).map(fd => {
+            const { snapshotData, ...rest } = fd;
+            return rest;
+          }),
+          // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
+          // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
+          duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
+            const MAX_CONTENT_CHARS = 15 * 1024;
+            if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
+              return {
+                ...occ,
+                content: this.uploader.clipOversizeContent(occ.content, MAX_CONTENT_CHARS)
+              };
+            }
+            return occ;
+          })
+        };
+        FileUtils.writeJsonFile(outputPath, compactResult);
+        this.logger.info(`Results saved to: ${outputPath}`);
+        this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
+      }
+
+      if (options.upload || this.config.uploader?.enabled) {
+        const uploadResult = await this.uploader.upload(formattedMetrics, {
+          gitUrl: options.gitUrl,
+          branchName: options.branchName,
+          pipelineRunId: options.pipelineRunId,
+          commitId: options.commitId,
+          runNumber: options.runNumber,
+          pipelineName: options.pipelineName,
+          startTime: startTimeFormatted,
+          endTime: endTimeFormatted,
+          status: status
+        });
+
+        if (uploadResult.success) {
+          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
+          this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
+          // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
+          result.uploadInfo = {
+            success: true,
+            obsUrl: uploadResult.obsUrl,
+            detailLink: uploadResult.detailLink || '',
+            tip: uploadResult.tip || ''
+          };
+        } else {
+          this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
+          result.uploadInfo = { success: false, error: uploadResult.error };
+        }
+      }
+
+      return result;
+
+    } catch (error) {
+      this.logger.error(`Scan failed: ${error.message}`);
+      if (error && error.stack) {
+        // 输出堆栈头部，辅助定位是哪个 JSON.stringify / 哪个阶段抛错
+        this.logger.error(`Stack head: ${error.stack.split('\n').slice(0, 12).join('\n')}`);
+      }
+
+      // 失败时也上传报告，附带错误信息
+      if (options.upload || this.config.uploader?.enabled) {
+        const endTimeFormatted = formatDateTime(new Date());
+        try {
+          await this.uploader.upload({}, {
+            gitUrl: options.gitUrl,
+            branchName: options.branchName,
+            pipelineRunId: options.pipelineRunId,
+            commitId: options.commitId,
+            runNumber: options.runNumber,
+            pipelineName: options.pipelineName,
+            startTime: startTimeFormatted,
+            endTime: endTimeFormatted,
+            status: 1,
+            errorMessage: error.message
+          });
+        } catch (uploadError) {
+          this.logger.error(`Failed to upload error report: ${uploadError.message}`);
+        }
+      }
+
+      throw error;
+    }
+  }
+}
+
+module.exports = {
+  MetricsScanner,
+  ConfigLoader,
+  SlocDetector,
+  LizardDetector,
+  DuplicationDetector,
+  MetricsCalculator
+};
+
+
+/***/ }),
+
+/***/ 2890:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const axios = __nccwpck_require__(7269);
+const crypto = __nccwpck_require__(6982);
+const { callApig, getCredentials } = __nccwpck_require__(6239);
+const fs = __nccwpck_require__(9896);
+const os = __nccwpck_require__(857);
+const path = __nccwpck_require__(6928);
+const { execSync, execFileSync } = __nccwpck_require__(5317);
+
+// 上报接口路径前缀：新旧网关接口与认证方式一一对应
+// - OIDC 联邦认证（新）：workflow 声明 permissions: id-token: write 时启用
+// - AK/SK 签名（旧）：存量脚本兼容，接口与认证方式保持不变
+const OIDC_API_PREFIX = '/action-api';
+const AKSK_API_PREFIX = '/openlibing-coderepo';
+
+/**
+ * 华为云 APIG 签名器（SDK-HMAC-SHA256，AK/SK 模式使用）
+ * 基于官方 SDK APIGW-javascript-sdk-2.0.6 的 signer.js 完全对齐
+ * 签名流程：CanonicalRequest → StringToSign → HMAC-SHA256 → Authorization
+ */
+class ApigSigner {
+  constructor(ak, sk) {
+    this.ak = ak;
+    this.sk = sk;
+  }
+
+  /**
+   * 对请求进行签名，返回包含签名头的完整 headers
+   * 与官方 SDK 的 Signer.prototype.Sign() 方法对齐
+   */
+  sign({ method, url, headers = {}, body = '' }) {
+    // 解析 URL，提取 host、pathname、查询参数
+    const parsed = new URL(url);
+    const host = parsed.host;
+
+    // 解析 URI 和查询参数（与官方 SDK 的 HttpRequest 构造函数对齐）
+    const uri = decodeURIComponent(parsed.pathname);
+    const query = {};
+    if (parsed.search) {
+      const searchStr = parsed.search.substring(1);
+      for (const pair of searchStr.split('&')) {
+        const idx = pair.indexOf('=');
+        const key = idx >= 0 ? pair.substring(0, idx) : pair;
+        const value = idx >= 0 ? pair.substring(idx + 1) : '';
+        if (key) {
+          const decodedKey = decodeURIComponent(key);
+          const decodedValue = decodeURIComponent(value);
+          if (query[decodedKey] === undefined) {
+            query[decodedKey] = [decodedValue];
+          } else {
+            query[decodedKey].push(decodedValue);
+          }
+        }
+      }
+    }
+
+    // 设置时间戳（检查是否已有 X-Sdk-Date 头）
+    let datetime = null;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'x-sdk-date') {
+        datetime = headers[k];
+        break;
+      }
+    }
+    if (!datetime) {
+      datetime = this._getDateTime();
+      headers['X-Sdk-Date'] = datetime;
+    }
+
+    // 非 PUT/PATCH/POST 时 body 不参与签名（官方 SDK 规范）
+    if (method !== 'PUT' && method !== 'PATCH' && method !== 'POST') {
+      body = '';
+    }
+
+    // 确保 host 头存在
+    let hasHost = false;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'host') { hasHost = true; break; }
+    }
+    if (!hasHost) {
+      headers['Host'] = host;
+    }
+
+    // 获取参与签名的 header 列表（所有 header 名称小写排序）
+    const signedHeaderNames = Object.keys(headers).map(k => k.toLowerCase()).sort();
+
+    // 构造规范化 URI：每段 URL 编码后用 / 拼接，末尾强制补 /
+    const canonicalUri = this._canonicalUri(uri);
+
+    // 构造规范化查询字符串
+    const canonicalQs = this._canonicalQueryString(query);
+
+    // 构造规范化 Headers
+    const lowerHeaders = {};
+    for (const [k, v] of Object.entries(headers)) {
+      lowerHeaders[k.toLowerCase()] = v;
+    }
+    const canonicalHeaders = signedHeaderNames
+      .map(name => `${name}:${lowerHeaders[name].trim()}`)
+      .join('\n') + '\n';
+
+    const signedHeadersStr = signedHeaderNames.join(';');
+
+    // 计算 body 哈希（如果请求头中有 x-sdk-content-sha256，直接使用其值）
+    let hashedPayload;
+    let hasContentSha256 = false;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'x-sdk-content-sha256') {
+        hashedPayload = headers[k];
+        hasContentSha256 = true;
+        break;
+      }
+    }
+    if (!hasContentSha256) {
+      hashedPayload = this._sha256Hex(body);
+    }
+
+    // 构造规范化请求
+    const canonicalRequest = [
+      method.toUpperCase(),
+      canonicalUri,
+      canonicalQs,
+      canonicalHeaders,
+      signedHeadersStr,
+      hashedPayload
+    ].join('\n');
+
+    // 构造待签名字符串
+    const stringToSign = [
+      'SDK-HMAC-SHA256',
+      datetime,
+      this._sha256Hex(canonicalRequest)
+    ].join('\n');
+
+    // 计算签名
+    const signature = this._hmacSha256Hex(this.sk, stringToSign);
+
+    // 构造 Authorization 头
+    headers['Authorization'] = `SDK-HMAC-SHA256 Access=${this.ak}, SignedHeaders=${signedHeadersStr}, Signature=${signature}`;
+
+    return headers;
+  }
+
+  /**
+   * 构造规范化 URI：每段用 SDK 的 urlEncode 编码，末尾强制补 /
+   * 与官方 SDK 的 CanonicalURI() 函数完全对齐
+   */
+  _canonicalUri(uri) {
+    if (!uri || uri === '') return '/';
+    const parts = uri.split('/');
+    const encoded = parts.map(s => this._urlEncode(s));
+    let urlpath = encoded.join('/');
+    // 末尾强制补 /（官方 SDK 规范，APIG 网关签名校验要求）
+    if (urlpath[urlpath.length - 1] !== '/') {
+      urlpath = urlpath + '/';
+    }
+    return urlpath;
+  }
+
+  /**
+   * 构造规范化查询字符串
+   * 与官方 SDK 的 CanonicalQueryString() 函数对齐
+   */
+  _canonicalQueryString(query) {
+    const keys = Object.keys(query).sort();
+    if (keys.length === 0) return '';
+    const parts = [];
+    for (const key of keys) {
+      const k = this._urlEncode(key);
+      const values = Array.isArray(query[key]) ? [...query[key]].sort() : [query[key]];
+      for (const v of values) {
+        parts.push(`${k}=${this._urlEncode(v)}`);
+      }
+    }
+    return parts.join('&');
+  }
+
+  /**
+   * URL 编码：基于 Node.js querystring 模块改写，与官方 SDK 的 urlEncode() 完全对齐
+   * 不编码字符：A-Z a-z 0-9 - . _ ~
+   * 与 encodeURIComponent 的区别：! * ' ( ) 会被编码（encodeURIComponent 不编码这些）
+   */
+  _urlEncode(str) {
+    if (typeof str !== 'string') {
+      if (typeof str === 'object') str = String(str);
+      else str += '';
+    }
+    const hexTable = [];
+    for (let i = 0; i < 256; ++i) {
+      hexTable[i] = '%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase();
+    }
+    const noEscape = [
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
+      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1,
+      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0
+    ];
+    let out = '';
+    let lastPos = 0;
+    for (let i = 0; i < str.length; ++i) {
+      // 代理对场景下需在下方重新赋值（c = 0x10000 + ...），此处必须用 let
+      let c = str.charCodeAt(i);
+      if (c < 0x80) {
+        if (noEscape[c] === 1) continue;
+        if (lastPos < i) out += str.slice(lastPos, i);
+        lastPos = i + 1;
+        out += hexTable[c];
+        continue;
+      }
+      if (lastPos < i) out += str.slice(lastPos, i);
+      if (c < 0x800) {
+        lastPos = i + 1;
+        out += hexTable[0xC0 | (c >> 6)] + hexTable[0x80 | (c & 0x3F)];
+        continue;
+      }
+      if (c < 0xD800 || c >= 0xE000) {
+        lastPos = i + 1;
+        out += hexTable[0xE0 | (c >> 12)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
+        continue;
+      }
+      ++i;
+      if (i >= str.length) throw new URIError('ERR_INVALID_URI');
+      const c2 = str.charCodeAt(i) & 0x3FF;
+      lastPos = i + 1;
+      c = 0x10000 + (((c & 0x3FF) << 10) | c2);
+      out += hexTable[0xF0 | (c >> 18)] + hexTable[0x80 | ((c >> 12) & 0x3F)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
+    }
+    if (lastPos === 0) return str;
+    if (lastPos < str.length) return out + str.slice(lastPos);
+    return out;
+  }
+
+  _getDateTime() {
+    const now = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}T${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}Z`;
+  }
+
+  _sha256Hex(data) {
+    return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
+  }
+
+  _hmacSha256Hex(key, data) {
+    return crypto.createHmac('sha256', key).update(data, 'utf8').digest('hex');
+  }
+}
+
+class CoderepoUploader {
+  constructor(config = {}) {
+    this.baseUrl = config.coderepoUrl || 'http://localhost:8080';
+    this.timeout = config.timeout || 30000;
+    // 认证模式：useOidc=true 走新接口（/action-api/...）+ OIDC 免密联邦认证；
+    // 否则走旧接口（/openlibing-coderepo/...）+ AK/SK（SDK-HMAC-SHA256）签名，兼容存量脚本
+    this.useOidc = !!config.useOidc;
+    this.apigAppKey = config.apigAppKey || '';
+    this.apigAppSecret = config.apigAppSecret || '';
+    // OBS 上传凭证（AK/SK 模式使用）：复用 openlibing 平台 gitcode-action 统一桶（私有对象，供后端按 objectKey 下载）
+    this.obsAk = config.obsAk || '';
+    this.obsSk = config.obsSk || '';
+    // 平台所有 gitcode-action 插件上报结果的统一桶，code-metrics-action 目录存放代码度量上报
+    this.obsBucket = config.obsBucket || 'openlibing-gitcode-action';
+    // OBS 写/读 endpoint（华为云西南-贵阳一）
+    this.obsEndpoint = config.obsEndpoint || 'obs.cn-southwest-2.myhuaweicloud.com';
+    this.obsutilPath = '';
+  }
+
+  /**
+   * 上报代码度量指标。
+   *
+   * 认证模式（由 workflow 是否声明 permissions: id-token: write 决定）：
+   * - OIDC 联邦认证（新）：APIG 上报走 callApig 自动换证签名；OBS 上传走 STS 临时凭证
+   * - AK/SK 签名（旧）：APIG 上报走 ApigSigner 签名；OBS 上传走 obs-ak/obs-sk 静态凭证
+   *
+   * 流程（OBS 中转 + 单接口，彻底规避 APIG 12MB 请求体上限）：
+   * 1. 组装全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences），写本地临时 json
+   * 2. 上传到 OBS（桶 openlibing-gitcode-action / code-metrics-action/ 前缀，私有对象）
+   * 3. 仅调一次 POST /metrics/code/report：只传元数据 + obsUrl（固定格式下载链接），后端按 objectKey 下载解析入库
+   *
+   * 兜底：即使第 3 步上报失败（网络原因），第 2 步 OBS 文件已完整上传，可通过平台保底定时任务
+   * （入参 objectKey）下载补导入，保证数据不丢失。
+   *
+   * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
+   */
+  async upload(metricsData, options = {}) {
+    // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
+    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
+
+    // 1. 组装全量上报文件：元数据 + 全部指标明细（含 snapshotData / contentB64 等大 payload）
+    const fullPayload = {
+      gitUrl: options.gitUrl,
+      branchName: options.branchName,
+      pipelineRunId: options.pipelineRunId,
+      commitId: options.commitId,
+      runNumber: options.runNumber,
+      // pipelineName：流水线名称（GitCode runner 注入的 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
+      pipelineName: options.pipelineName,
+      metricsData: overallMetrics,
+      detectionStartedAt: options.startTime,
+      detectionCompletedAt: options.endTime,
+      status: options.status || 0,
+      fileDetails: fileDetails || [],
+      identicalFileDetails: identicalFileDetails || [],
+      duplicationOccurrences: this.encodeOccurrences(duplicationOccurrences || [])
+    };
+    if (options.errorMessage) {
+      fullPayload.errorMessage = options.errorMessage;
+    }
+
+    // 2. 上传全量文件到 OBS，得到固定格式下载链接
+    const obsResult = await this.uploadFullPayloadToOBS(fullPayload, options);
+    if (!obsResult.success) {
+      // OBS 上传失败：数据未落盘，直接返回失败（可整体重扫重传）
+      return obsResult;
+    }
+
+    // 3. 单次 /report：只传元数据 + obsUrl（body 恒定极小，远低于 APIG 12MB 上限）
+    const payload = {
+      gitUrl: options.gitUrl,
+      branchName: options.branchName,
+      pipelineRunId: options.pipelineRunId,
+      commitId: options.commitId,
+      runNumber: options.runNumber,
+      detectionStartedAt: options.startTime,
+      detectionCompletedAt: options.endTime,
+      status: options.status || 0,
+      obsUrl: obsResult.obsUrl
+    };
+    if (options.errorMessage) {
+      payload.errorMessage = options.errorMessage;
+    }
+
+    const mainUrl = this.buildUrl('/metrics/code/report');
+    const mainBody = JSON.stringify(payload);
+    console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${obsResult.obsUrl}`);
+    const mainResult = await this.report(mainUrl, mainBody);
+    if (!mainResult.success) {
+      // 上报失败但 OBS 文件已完整上传：打印固定格式链接，提示可走保底定时任务补导入
+      console.warn(
+        `[upload] report failed: ${mainResult.error}. 全量数据已上传 OBS(${obsResult.obsUrl})，` +
+          '可通过平台保底定时任务(入参 objectKey)补导入'
+      );
+      return { ...mainResult, obsUrl: obsResult.obsUrl };
+    }
+
+    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口输出
+    return {
+      success: true,
+      recordId: mainResult.recordId,
+      obsUrl: obsResult.obsUrl,
+      detailLink: mainResult.detailLink,
+      tip: mainResult.tip
+    };
+  }
+
+  /**
+   * 组装全量上报文件并上传到 OBS，返回固定格式下载链接与 objectKey。
+   * OBS 凭证按认证模式选择：
+   * - OIDC 模式：getCredentials 获取 STS 临时凭证（短时效，仅本次流水线运行有效）
+   * - AK/SK 模式：workflow 传入的 obs-ak / obs-sk 静态凭证
+   */
+  async uploadFullPayloadToOBS(fullPayload, options) {
+    let cred;
+    if (this.useOidc) {
+      try {
+        // 获取 STS 临时凭证（SDK 内部缓存，同一次流水线运行内只换证一次）
+        cred = await getCredentials();
+      } catch (e) {
+        return { success: false, error: `获取 OIDC 临时凭证失败: ${e.message}` };
+      }
+    } else if (!this.obsAk || !this.obsSk) {
+      return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
+    }
+    // 写本地临时文件（runner 上临时目录，用完即删）
+    const tmpFile = path.join(os.tmpdir(), `code-metrics-${Date.now()}.json`);
+    fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), 'utf-8');
+
+    const objectKey = this.buildObjectKey(options);
+    try {
+      await this.uploadToOBS(cred, tmpFile, objectKey);
+      const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
+      console.log(`[upload] OBS uploaded: ${obsUrl}`);
+      return { success: true, obsUrl: obsUrl, objectKey: objectKey };
+    } catch (e) {
+      return { success: false, error: `OBS 上传失败: ${e.message}` };
+    } finally {
+      // 清理本地临时文件，避免在 runner 上残留大文件
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch (e) {
+        // 忽略清理失败
+      }
+    }
+  }
+
+  /**
+   * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
+   * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
+   *
+   * 凭证传递（按认证模式）：
+   * - OIDC 模式：STS 临时凭证，经 -e/-i/-k/-t 命令行参数传 endpoint/临时AK/临时SK/SecurityToken
+   * - AK/SK 模式：静态 obs-ak/obs-sk，经 -e/-i/-k 命令行参数传递
+   * CI 平台对 secrets/临时令牌自动掩码，不会明文落日志。
+   *
+   * 安全处理：用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
+   * 外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令。
+   */
+  async uploadToOBS(cred, localFilePath, objectKey) {
+    const obsutil = await this.ensureObsutil();
+    // 记录 obsutil 版本，便于排查 runner 与本地环境差异
+    try {
+      const versionOut = execFileSync(obsutil, ['version'], { encoding: 'utf8' }).trim();
+      console.log(`[upload] obsutil version: ${versionOut}`);
+    } catch (e) {
+      console.log(`[upload] obsutil version check failed: ${e.message}`);
+    }
+    const args = [
+      'cp',
+      localFilePath,
+      `obs://${this.obsBucket}/${objectKey}`,
+      '-f',
+      `-e=${this.obsEndpoint}`
+    ];
+    if (this.useOidc) {
+      // OIDC 模式：STS 临时凭证 + SecurityToken
+      args.push(`-i=${cred.accessKeyId}`, `-k=${cred.secretAccessKey}`, `-t=${cred.securityToken}`);
+    } else {
+      // AK/SK 模式：静态凭证
+      args.push(`-i=${this.obsAk}`, `-k=${this.obsSk}`);
+    }
+    // 打印执行命令（-k/-t 参数脱敏），便于定位上传失败原因
+    const maskedArgs = args.map(a => (a.startsWith('-k=') || a.startsWith('-t=') ? `${a.split('=')[0]}=***` : a));
+    console.log(`[upload] exec obsutil ${maskedArgs.join(' ')}`);
+    execFileSync(obsutil, args, { stdio: 'inherit' });
+  }
+
+  /**
+   * 确保 obsutil 可用：不存在时下载并解压到临时目录（与 upload-sarif-action 一致）。
+   * 下载失败时回退到系统已安装的 obsutil，避免网络抖动导致上传中断。
+   */
+  async ensureObsutil() {
+    if (this.obsutilPath && fs.existsSync(this.obsutilPath)) {
+      return this.obsutilPath;
+    }
+    const tmpDir = os.tmpdir();
+    const downloadUrl =
+      'https://obs-community.obs.cn-north-1.myhuaweicloud.com/obsutil/current/obsutil_linux_amd64.tar.gz';
+    const tarball = path.join(tmpDir, 'obsutil_linux_amd64.tar.gz');
+    const extractedDir = path.join(tmpDir, 'obsutil');
+    try {
+      if (!fs.existsSync(extractedDir)) {
+        execSync(`mkdir -p "${extractedDir}"`, { shell: '/bin/bash' });
+      }
+      execSync(
+        `wget -q "${downloadUrl}" -O "${tarball}" 2>/dev/null || curl -sL "${downloadUrl}" -o "${tarball}"`,
+        { shell: '/bin/bash' }
+      );
+      execSync(`tar zxf "${tarball}" -C "${extractedDir}" --strip-components=1`, { shell: '/bin/bash' });
+      execSync(`chmod 755 "${extractedDir}/obsutil"`, { shell: '/bin/bash' });
+      this.obsutilPath = path.join(extractedDir, 'obsutil');
+    } catch (e) {
+      // 下载失败时尝试使用系统已安装的 obsutil
+      try {
+        const existing = execSync('which obsutil', { encoding: 'utf8', shell: '/bin/bash' }).trim();
+        if (existing) {
+          this.obsutilPath = existing;
+        }
+      } catch (e2) {
+        // 无系统 obsutil，抛错
+      }
+      if (!this.obsutilPath) {
+        throw new Error(`obsutil 安装失败: ${e.message}`);
+      }
+    }
+    return this.obsutilPath;
+  }
+
+  /**
+   * 构造 OBS 对象 key（固定格式，供后端/保底任务按 objectKey 下载解析入库）。
+   * 规则：code-metrics-action/{owner}/{repo}/{pipelineRunId}/{ts}-metrics.json
+   * branchName 不进入路径（远端分支可能含 / 造成路径歧义），只放在文件内元数据中。
+   */
+  buildObjectKey(options) {
+    const ownerRepo = this.extractOwnerRepo(options.gitUrl) || 'unknown';
+    const pipelineRunId = options.pipelineRunId || 'manual';
+    const ts = this.formatDateTime(new Date());
+    return `code-metrics-action/${ownerRepo}/${pipelineRunId}/${ts}-metrics.json`;
+  }
+
+  /**
+   * 从 gitUrl 提取 owner/repo（形如 git@host:owner/repo 或 https://host/owner/repo）。
+   */
+  extractOwnerRepo(gitUrl) {
+    if (!gitUrl) {
+      return '';
+    }
+    const url = String(gitUrl).replace(/\.git$/, '').replace(/\/+$/, '');
+    const match = url.match(/(?:git@[^:]+:|https?:\/\/[^/]+\/)(.+)$/);
+    return match ? match[1] : '';
+  }
+
+  /**
+   * 格式化时间为 yyyyMMddHHmmss（OBS 对象 key 用，UTC）。
+   */
+  formatDateTime(date) {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}`;
+  }
+
+  /**
+   * 把出现位置列表中的明文 content 编码为 contentB64，移除明文字段。
+   * 已编码数据跳过（防二次编码）。
+   * 重复块内容完整编码不做截断：全量上报文件上传 OBS（不受 APIG body 限制），
+   * 入库 code_metrics_duplication_block.content_b64 为 LONGTEXT 可承载。
+   */
+  encodeOccurrences(occurrences) {
+    return occurrences.map(occ => {
+      return {
+        groupId: occ.groupId,
+        contentHash: occ.contentHash,
+        occurrenceIndex: occ.occurrenceIndex,
+        filePath: occ.filePath,
+        startLine: occ.startLine,
+        endLine: occ.endLine,
+        contentB64: this.encodeB64(occ.content)
+      };
+    });
+  }
+
+  /**
+   * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
+   * 按行省略：头/尾各保留若干整行，省略标记显示被省略的行数。
+   * 仅用于本地 metrics.json 输出文件的防护性裁剪（防 V8 单字符串上限）；
+   * 上报链路（encodeOccurrences）不截断，完整内容上传 OBS。
+   */
+  clipOversizeContent(content, maxChars) {
+    if (typeof content !== 'string' || content.length <= maxChars) {
+      return content;
+    }
+    // 按行拆分；头/尾各以预算的 35% 为字符配额累积整行，保证裁剪后总量仍受控
+    const lines = content.split('\n');
+    const totalLines = lines.length;
+    const sideChars = Math.floor(maxChars * 0.35);
+    // 头部：从首行开始累积整行，直到逼近 sideChars
+    let headLines = 0;
+    let headChars = 0;
+    for (let i = 0; i < totalLines; i++) {
+      const len = lines[i].length + 1; // 行内容 + 换行符
+      if (headLines > 0 && headChars + len > sideChars) break;
+      headChars += len;
+      headLines++;
+    }
+    // 尾部：从末行开始累积整行，直到逼近 sideChars
+    let tailLines = 0;
+    let tailChars = 0;
+    for (let i = totalLines - 1; i >= 0; i--) {
+      const len = lines[i].length + 1;
+      if (tailLines > 0 && tailChars + len > sideChars) break;
+      tailChars += len;
+      tailLines++;
+    }
+    const omittedLines = Math.max(0, totalLines - headLines - tailLines);
+    const head = lines.slice(0, headLines).join('\n');
+    const tail = lines.slice(totalLines - tailLines).join('\n');
+    const clipped =
+      (headLines > 0 ? head : '') +
+      (omittedLines > 0 ? `\n... ${omittedLines} lines omitted ...\n` : '') +
+      (tailLines > 0 ? tail : '');
+    // 兜底：单行超长导致按行裁剪后仍超限时，退化为按字符裁剪
+    if (clipped.length > maxChars) {
+      const headChars2 = Math.floor(maxChars * 0.35);
+      const tailChars2 = Math.floor(maxChars * 0.35);
+      const omittedChars = content.length - headChars2 - tailChars2;
+      return (
+        content.slice(0, headChars2) +
+        `\n... ${omittedChars} chars omitted ...\n` +
+        content.slice(content.length - tailChars2)
+      );
+    }
+    return clipped;
+  }
+
+  /**
+   * Base64 编码字符串（UTF-8）。
+   * 已编码数据（通过回检判定）跳过，防二次编码。
+   */
+  encodeB64(str) {
+    if (!str) return '';
+    // 简单回检：若解码后重新编码与原值一致，视为已编码
+    try {
+      const decoded = Buffer.from(str, 'base64').toString('utf8');
+      const reEncoded = Buffer.from(decoded, 'utf8').toString('base64');
+      if (reEncoded === str) return str;
+    } catch (e) {
+      // 解码失败说明是明文，继续编码
+    }
+    return Buffer.from(str, 'utf8').toString('base64');
+  }
+
+  /**
+   * 拼接完整请求 URL：按认证模式选择新旧接口前缀
+   * - OIDC 模式：/action-api/metrics/code/report
+   * - AK/SK 模式：/openlibing-coderepo/metrics/code/report
+   */
+  buildUrl(path) {
+    const prefix = this.useOidc ? OIDC_API_PREFIX : AKSK_API_PREFIX;
+    return this.baseUrl.replace(/\/+$/, '') + prefix + path;
+  }
+
+  /**
+   * 调用 APIG 上报接口并解析 DataResult 响应（按认证模式选择签名方式）。
+   * - OIDC 模式：SDK callApig 免密联邦认证（OIDC ID Token -> STS 临时凭证 ->
+   *   V11-HMAC-SHA256 签名 + X-Security-Token）
+   * - AK/SK 模式：ApigSigner SDK-HMAC-SHA256 签名（原有方式）
+   * 返回 { success, recordId?, detailLink?, tip?, error? }
+   */
+  async report(url, body) {
+    try {
+      let resData;
+      if (this.useOidc) {
+        const res = await callApig('POST', url, { 'Content-Type': 'application/json' }, body);
+        resData = res.data;
+
+        // 非 2xx：HTTP 层失败（网关拒绝、鉴权失败等）
+        if (res.status < 200 || res.status >= 300) {
+          const httpMsg = (resData && (resData.msg || resData.message || resData.error_msg)) || `HTTP ${res.status}`;
+          console.error(`Upload failed: HTTP ${res.status}, URL: ${url}`);
+          return { success: false, error: httpMsg };
+        }
+      } else {
+        // AK/SK 模式：凭证缺失时直接失败并给出明确提示
+        if (!this.apigAppKey || !this.apigAppSecret) {
+          return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 AK/SK 凭证（apig-app-key / apig-app-secret），无法上报' };
+        }
+        const signer = new ApigSigner(this.apigAppKey, this.apigAppSecret);
+        const headers = signer.sign({
+          method: 'POST',
+          url: url,
+          headers: { 'Content-Type': 'application/json' },
+          body: body
+        });
+        const response = await axios.post(url, body, { headers, timeout: this.timeout });
+        resData = response.data;
+      }
+
+      // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功
+      if (resData?.code !== 200) {
+        // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因
+        console.error(
+          `[upload] report business failed: code=${resData?.code}, msg=${resData?.msg}, adviceMsg=${resData?.adviceMsg}`
+        );
+        return { success: false, error: resData?.msg || 'Unknown error' };
+      }
+
+      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象；当前服务端返回 CodeMetricsReportVO
+      const recordId = resData?.data?.recordId
+        || resData?.data?.id
+        || (typeof resData?.data === 'number' || typeof resData?.data === 'string' ? resData.data : null)
+        || resData?.recordId
+        || resData?.id;
+
+      // data.detailLink：平台分支页固定单条跳转链接；data.tip：仓未录入/分支未登记提示（两者互斥，可均为空）
+      const detailLink = typeof resData?.data?.detailLink === 'string' ? resData.data.detailLink : '';
+      const tip = typeof resData?.data?.tip === 'string' ? resData.data.tip : '';
+
+      return { success: true, recordId: recordId, detailLink: detailLink, tip: tip };
+    } catch (error) {
+      // 输出详细错误信息以便排查网络问题
+      console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
+      const resData = error.response?.data;
+      const errorMsg = resData?.msg || resData?.message || error.message;
+      return { success: false, error: errorMsg };
+    }
+  }
+}
+
+module.exports = CoderepoUploader;
+
+
+/***/ }),
+
+/***/ 6790:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+
+class FileCollector {
+  // 缺省代码扩展名白名单（allowed-extensions 未配置时生效，业界惯例为白名单制，
+  // 对齐 scc/cloc 内置语言的常见子集；.gn/.gni/.prelds 为 OHOS 构建体系特有脚本）
+  static DEFAULT_CODE_EXTENSIONS = [
+    // C/C++ 家族
+    '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hxx', '.inl', '.cu', '.cuh',
+    // 主流通用语言
+    '.java', '.cs', '.go', '.rs', '.swift', '.kt', '.kts', '.scala', '.groovy',
+    '.py', '.rb', '.php', '.pl', '.pm', '.lua', '.r', '.jl', '.dart', '.m', '.mm',
+    '.tcl', '.asm', '.s',
+    // 前端
+    '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue', '.svelte',
+    '.html', '.htm', '.css', '.scss', '.less',
+    // 脚本
+    '.sh', '.bash', '.ps1', '.bat', '.cmd', '.gradle',
+    // 数据/配置（scc 亦将这些计入统计）
+    '.json', '.xml', '.yml', '.yaml', '.toml', '.ini', '.cfg', '.conf', '.properties',
+    '.sql', '.proto',
+    // 构建脚本
+    '.cmake', '.mk',
+    // OHOS 构建体系
+    '.gn', '.gni', '.prelds'
+  ];
+
+  // 文件名特例：无扩展名或需按文件名识别的构建/入口文件（对齐 scc/cloc 的文件名识别规则），
+  // 不受扩展名白名单限制，始终放行
+  static SPECIAL_FILE_NAMES = [
+    'cmakelists.txt', 'makefile', 'gnumakefile', 'dockerfile', 'jenkinsfile',
+    'rakefile', 'gemfile', 'build', 'build.bazel', 'workspace'
+  ];
+
+  // 默认跳过的隐藏目录（定向黑名单）：只排版本控制与 IDE 的私有目录，
+  // 不再按「. 开头」一刀切——否则 .gitcode 这类承载流水线配置的正式源码目录会被连带剪枝，
+  // 使本地收集范围（重复率分子）小于 scc 全量扫描范围（分母），重复率被系统性低估。
+  static DEFAULT_EXCLUDED_DIRS = ['.git', '.svn', '.hg', '.idea', '.vscode'];
+
+  /**
+   * 判断目录是否属于默认跳过的隐藏目录（版本控制/IDE 私有目录）
+   *
+   * @param {string} dirName 目录名（不含路径）
+   * @return {boolean} 命中默认跳过名单返回 true，否则返回 false
+   */
+  static isDefaultExcludedDir(dirName) {
+    return FileCollector.DEFAULT_EXCLUDED_DIRS.includes(String(dirName || '').toLowerCase());
+  }
+
+  /**
+   * 判断文件是否放行：文件名特例 > 显式 allowed-extensions > 缺省白名单。
+   * 扩展名统一小写比较；显式配置为覆盖式语义——用户指定扩展名后，
+   * 扫描范围 = 用户指定的扩展名 + 文件名特例（如指定 .h,.cpp 则只扫这两类 + CMakeLists.txt 等），
+   * 不再叠加缺省白名单。
+   */
+  static isAllowedFile(fileName, allowedExtensions) {
+    const lower = (fileName || '').toLowerCase();
+    if (FileCollector.SPECIAL_FILE_NAMES.includes(lower)) {
+      return true;
+    }
+    const normalized = (allowedExtensions || []).map(e => String(e).toLowerCase());
+    const list = normalized.length > 0 ? normalized : FileCollector.DEFAULT_CODE_EXTENSIONS;
+    const ext = path.extname(lower);
+    return list.includes(ext);
+  }
+
+  /**
+   * 判断目录/文件是否被 excludeDirs 命中（大小写敏感）。匹配目标为条目相对扫描根的路径（正斜杠）。
+   * 规则：
+   * 1. 裸名称（不含 /）：
+   *    - 无通配符：仅顶层精确匹配。例：test.ts、docs（不命中 src/test.ts；排任意层级同名文件请用 globstar 路径）
+   *    - 含通配符：任意层级匹配条目名。例：*.test.js、*test*
+   * 2. 路径（含 /）：锚定扫描根，匹配相对路径，命中目录即整棵子树剪枝。
+   *    例：src/opensource/grapesjs、src/opensource/*
+   * 前导斜杠为可选显式写法（/test.ts 仅匹配顶层 test.ts），尾部斜杠忽略（docs/ ≡ docs）。
+   * 通配符：*（单段不含 /）、**（跨目录）、?（单字符）、[abc]/[!abc]（字符类）。
+   * 目录与文件统一适用同一条规则，不按类型区分。
+   */
+  static isExcluded(name, relPath, excludeDirs) {
+    if (!excludeDirs || excludeDirs.length === 0) {
+      return false;
+    }
+    const rel = (relPath || '').replace(/\\/g, '/');
+    for (const raw of excludeDirs) {
+      let d = String(raw).trim().replace(/\\/g, '/');
+      if (!d) continue;
+      // 尾部斜杠忽略（docs/ ≡ docs），先剥离再做通配符/斜杠判定
+      d = d.replace(/\/+$/g, '');
+      if (!d) continue;
+      // 是否含斜杠决定规则：含 /（内部或前导）走路径锚定，不含 / 走名称匹配。
+      // 先判再剥前导斜杠（/i18n 含 / 应锚定顶层，剥掉后匹配串为 i18n）
+      const hasSlash = d.indexOf('/') >= 0;
+      d = d.replace(/^\/+/, '');
+      if (!d) continue;
+      // 是否含 glob 通配符（* ? [）
+      const hasWildcard = d.indexOf('*') >= 0 || d.indexOf('?') >= 0 || d.indexOf('[') >= 0;
+      if (hasSlash) {
+        // 路径规则：锚定扫描根，匹配相对路径
+        if (FileCollector.globToRegExp(d).test(rel)) {
+          return true;
+        }
+      } else if (hasWildcard) {
+        // 裸名称 + 通配符：任意层级匹配条目名
+        if (FileCollector.globToRegExp(d).test(name)) {
+          return true;
+        }
+      } else if (d === rel) {
+        // 裸名称（无通配符）：仅顶层精确匹配（等价锚定根）
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 判断某条相对路径（文件或目录）是否被 excludeDirs 整棵剪枝命中（大小写敏感）。
+   * 与 _walkDir 的目录剪枝语义一致：逐层考察「文件自身 + 所有祖先目录」，
+   * 任一层级被 isExcluded 命中即判定排除。用于对 scc 等外部扫描器的输出做后置过滤，
+   * 保证与 FileCollector 收集的文件范围完全一致。
+   * 例：excludeDirs=['go/','cpp/**'] 时，
+   *   - go/test-codeql.go：祖先目录 go 命中顶层规则 → 排除
+   *   - cpp/part_dup1.cpp：自身命中 cpp/** → 排除
+   *   - src/go/x.go：go 非顶层，不命中 go/ → 保留
+   */
+  static isPathExcluded(relPath, excludeDirs) {
+    const p = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!p) return false;
+    const parts = p.split('/');
+    let prefix = '';
+    for (let i = 0; i < parts.length; i++) {
+      prefix = prefix ? prefix + '/' + parts[i] : parts[i];
+      if (FileCollector.isExcluded(parts[i], prefix, excludeDirs)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // 将单个 glob 模式转为锚定整串匹配的正则（大小写敏感）。
+  // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
+  // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
+  static globToRegExp(glob) {
+    let re = '^';
+    for (let i = 0; i < glob.length; i++) {
+      const c = glob[i];
+      if (c === '*') {
+        // 连续 * 合并为 **（跨目录分隔符）
+        if (glob[i + 1] === '*') {
+          while (glob[i + 1] === '*') i++;
+          if (glob[i + 1] === '/') {
+            // **/：匹配 0 层或多层目录，顶层与任意深层均命中
+            re += '(?:.*/)?';
+            i++;
+          } else {
+            re += '.*';
+          }
+        } else {
+          // *：单段内任意字符（不含 /）
+          re += '[^/]*';
+        }
+      } else if (c === '?') {
+        re += '[^/]';
+      } else if (c === '[') {
+        // 字符类：[abc]、[a-z]、[!abc]（或 [^abc]）；未闭合的 [ 当作普通字符
+        let j = i + 1;
+        let negate = false;
+        if (glob[j] === '!' || glob[j] === '^') {
+          negate = true;
+          j++;
+        }
+        let cls = '';
+        let closed = false;
+        let first = true;
+        while (j < glob.length) {
+          if (glob[j] === ']' && !first) {
+            closed = true;
+            break;
+          }
+          first = false;
+          cls += glob[j];
+          j++;
+        }
+        if (closed) {
+          re += '[' + (negate ? '^' : '') + cls + ']';
+          i = j;
+        } else {
+          re += '\\[';
+        }
+      } else {
+        // 正则元字符转义，其余按字面匹配
+        re += '\\^$.|+(){}'.indexOf(c) >= 0 ? '\\' + c : c;
+      }
+    }
+    return new RegExp(re + '$');
+  }
+
+  /**
+   * 收集文件列表
+   * @param {string|string[]} source - 源代码目录或文件路径（可以是字符串或数组）
+   * @param {string[]} excludeDirs - 排除列表（目录名 / 相对路径 / 文件名，逗号分隔）
+   * @param {string[]} allowedExtensions - 允许的文件扩展名列表（配置后完全覆盖缺省白名单）
+   * @returns {string[]} 文件路径列表
+   */
+  static collectFiles(source, excludeDirs = [], allowedExtensions = []) {
+    const files = [];
+
+    // 支持传入单个路径或路径数组
+    const sources = Array.isArray(source) ? source : [source];
+
+    for (const src of sources) {
+      const absolutePath = path.resolve(src);
+
+      if (!fs.existsSync(absolutePath)) {
+        console.warn(`[WARN] 路径不存在: ${absolutePath}`);
+        continue;
+      }
+
+      const stat = fs.statSync(absolutePath);
+
+      if (stat.isDirectory()) {
+        // 如果是目录，递归遍历
+        FileCollector._walkDir(absolutePath, '', excludeDirs, allowedExtensions, files);
+      } else if (stat.isFile()) {
+        // 单文件输入：文件级排除 + 扩展名白名单双重过滤
+        const name = path.basename(absolutePath);
+        // 相对扫描根的路径取调用方传入路径（正斜杠、剥离前导 ./ 与 /），
+        // 使含斜杠的路径式规则（如 src/opensource/*）在传入相对路径时同样生效；
+        // 两种形态叠加判断，保持与目录扫描的 isExcluded 语义一致。
+        const relInput = String(src).replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
+        if (FileCollector.isPathExcluded(name, excludeDirs) || FileCollector.isPathExcluded(relInput, excludeDirs)) {
+          continue;
+        }
+        if (!FileCollector.isAllowedFile(name, allowedExtensions)) {
+          console.warn(`[WARN] 文件扩展名不在允许列表中: ${absolutePath}`);
+          continue;
+        }
+        files.push(absolutePath);
+      }
+    }
+
+    return files;
+  }
+
+  // 递归遍历目录，根据排除规则和扩展名过滤文件。
+  // relPrefix：当前目录相对扫描根的路径（用于路径式排除匹配），根目录本身为 ''
+  static _walkDir(dir, relPrefix, excludeDirs, allowedExtensions, files) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      // 当前条目相对扫描根的路径（正斜杠），用于路径式排除匹配
+      const relPath = relPrefix ? relPrefix + '/' + entry.name : entry.name;
+
+      if (entry.isDirectory()) {
+        // 跳过默认隐藏目录（版本控制/IDE 私有目录）和 excludeDirs 命中的目录
+        // （纯目录名任意层级生效；相对路径如 src/opensource/grapesjs 命中即整棵子树剪枝）
+        if (FileCollector.isDefaultExcludedDir(entry.name)
+            || FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
+          continue;
+        }
+        FileCollector._walkDir(fullPath, relPath, excludeDirs, allowedExtensions, files);
+      } else if (entry.isFile()) {
+        // 文件级排除（文件名/相对路径命中 excludeDirs 即跳过）
+        if (FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
+          continue;
+        }
+        // 白名单三段式过滤：文件名特例 > 显式扩展名 > 缺省白名单
+        if (!FileCollector.isAllowedFile(entry.name, allowedExtensions)) {
+          continue;
+        }
+        files.push(fullPath);
+      }
+    }
+  }
+}
+
+module.exports = FileCollector;
+
+
+/***/ }),
+
+/***/ 7248:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+
+class FileUtils {
+  static writeJsonFile(filePath, data, pretty = true) {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const content = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
+    fs.writeFileSync(filePath, content, 'utf8');
+  }
+
+  static ensureDirectory(dirPath) {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+    return dirPath;
+  }
+
+  static getExtension(filePath) {
+    return path.extname(filePath);
+  }
+
+  static isFileAllowed(filePath, allowedExtensions) {
+    if (!allowedExtensions || allowedExtensions.length === 0) {
+      return true;
+    }
+    const ext = this.getExtension(filePath).toLowerCase();
+    return allowedExtensions.includes(ext);
+  }
+
+  static isDirectoryExcluded(dirPath, excludeDirs) {
+    if (!excludeDirs || excludeDirs.length === 0) {
+      return false;
+    }
+    const dirName = path.basename(dirPath);
+    return excludeDirs.some(exclude => {
+      return dirName === exclude || dirPath.includes(`/${exclude}/`);
+    });
+  }
+}
+
+module.exports = FileUtils;
+
+
+/***/ }),
+
+/***/ 8467:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const winston = __nccwpck_require__(4240);
+
+class Logger {
+  constructor(config = {}) {
+    this.verbose = config.verbose || false;
+    this.logger = winston.createLogger({
+      level: this.verbose ? 'debug' : 'info',
+      format: winston.format.combine(
+        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+        winston.format.colorize(),
+        winston.format.printf(({ timestamp, level, message }) => {
+          return `${timestamp} [${level}] ${message}`;
+        })
+      ),
+      transports: [
+        new winston.transports.Console()
+      ]
+    });
+  }
+
+  // 支持多参数，拼接为一条消息
+  debug(...args) {
+    if (this.verbose) {
+      this.logger.debug(args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' '));
+    }
+  }
+
+  info(message) {
+    this.logger.info(message);
+  }
+
+  warn(message) {
+    this.logger.warn(message);
+  }
+
+  error(message) {
+    this.logger.error(message);
+  }
+}
+
+module.exports = Logger;
 
 
 /***/ }),
@@ -53598,7 +53746,7 @@ module.exports = eval("require")("supports-color");
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(613);
+module.exports = require("assert");
 
 /***/ }),
 
@@ -53606,7 +53754,7 @@ module.exports = __nccwpck_require__(613);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(290);
+module.exports = require("async_hooks");
 
 /***/ }),
 
@@ -53614,7 +53762,7 @@ module.exports = __nccwpck_require__(290);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(181);
+module.exports = require("buffer");
 
 /***/ }),
 
@@ -53622,7 +53770,7 @@ module.exports = __nccwpck_require__(181);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(317);
+module.exports = require("child_process");
 
 /***/ }),
 
@@ -53630,7 +53778,7 @@ module.exports = __nccwpck_require__(317);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(236);
+module.exports = require("console");
 
 /***/ }),
 
@@ -53638,7 +53786,7 @@ module.exports = __nccwpck_require__(236);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(982);
+module.exports = require("crypto");
 
 /***/ }),
 
@@ -53646,7 +53794,7 @@ module.exports = __nccwpck_require__(982);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(637);
+module.exports = require("diagnostics_channel");
 
 /***/ }),
 
@@ -53654,7 +53802,7 @@ module.exports = __nccwpck_require__(637);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(434);
+module.exports = require("events");
 
 /***/ }),
 
@@ -53662,7 +53810,7 @@ module.exports = __nccwpck_require__(434);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(896);
+module.exports = require("fs");
 
 /***/ }),
 
@@ -53670,7 +53818,7 @@ module.exports = __nccwpck_require__(896);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(611);
+module.exports = require("http");
 
 /***/ }),
 
@@ -53678,7 +53826,7 @@ module.exports = __nccwpck_require__(611);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(675);
+module.exports = require("http2");
 
 /***/ }),
 
@@ -53686,7 +53834,7 @@ module.exports = __nccwpck_require__(675);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(692);
+module.exports = require("https");
 
 /***/ }),
 
@@ -53694,7 +53842,7 @@ module.exports = __nccwpck_require__(692);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(278);
+module.exports = require("net");
 
 /***/ }),
 
@@ -53702,7 +53850,7 @@ module.exports = __nccwpck_require__(278);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(598);
+module.exports = require("node:crypto");
 
 /***/ }),
 
@@ -53710,7 +53858,7 @@ module.exports = __nccwpck_require__(598);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(474);
+module.exports = require("node:events");
 
 /***/ }),
 
@@ -53718,7 +53866,7 @@ module.exports = __nccwpck_require__(474);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(75);
+module.exports = require("node:stream");
 
 /***/ }),
 
@@ -53726,7 +53874,7 @@ module.exports = __nccwpck_require__(75);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(975);
+module.exports = require("node:util");
 
 /***/ }),
 
@@ -53734,7 +53882,7 @@ module.exports = __nccwpck_require__(975);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(857);
+module.exports = require("os");
 
 /***/ }),
 
@@ -53742,7 +53890,7 @@ module.exports = __nccwpck_require__(857);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(928);
+module.exports = require("path");
 
 /***/ }),
 
@@ -53750,7 +53898,7 @@ module.exports = __nccwpck_require__(928);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(987);
+module.exports = require("perf_hooks");
 
 /***/ }),
 
@@ -53758,7 +53906,7 @@ module.exports = __nccwpck_require__(987);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(480);
+module.exports = require("querystring");
 
 /***/ }),
 
@@ -53766,7 +53914,7 @@ module.exports = __nccwpck_require__(480);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(203);
+module.exports = require("stream");
 
 /***/ }),
 
@@ -53774,7 +53922,7 @@ module.exports = __nccwpck_require__(203);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(774);
+module.exports = require("stream/web");
 
 /***/ }),
 
@@ -53782,7 +53930,7 @@ module.exports = __nccwpck_require__(774);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(193);
+module.exports = require("string_decoder");
 
 /***/ }),
 
@@ -53790,7 +53938,7 @@ module.exports = __nccwpck_require__(193);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(557);
+module.exports = require("timers");
 
 /***/ }),
 
@@ -53798,7 +53946,7 @@ module.exports = __nccwpck_require__(557);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(756);
+module.exports = require("tls");
 
 /***/ }),
 
@@ -53806,7 +53954,7 @@ module.exports = __nccwpck_require__(756);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(18);
+module.exports = require("tty");
 
 /***/ }),
 
@@ -53814,7 +53962,7 @@ module.exports = __nccwpck_require__(18);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(16);
+module.exports = require("url");
 
 /***/ }),
 
@@ -53822,7 +53970,7 @@ module.exports = __nccwpck_require__(16);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(23);
+module.exports = require("util");
 
 /***/ }),
 
@@ -53830,7 +53978,7 @@ module.exports = __nccwpck_require__(23);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(253);
+module.exports = require("util/types");
 
 /***/ }),
 
@@ -53838,7 +53986,7 @@ module.exports = __nccwpck_require__(253);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(167);
+module.exports = require("worker_threads");
 
 /***/ }),
 
@@ -53846,23 +53994,23 @@ module.exports = __nccwpck_require__(167);
 /***/ ((module) => {
 
 "use strict";
-module.exports = __nccwpck_require__(106);
+module.exports = require("zlib");
 
 /***/ }),
 
 /***/ 7182:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const WritableStream = (__nccwpck_require2_(7075).Writable)
-const inherits = (__nccwpck_require2_(7975).inherits)
+const WritableStream = (__nccwpck_require__(7075).Writable)
+const inherits = (__nccwpck_require__(7975).inherits)
 
-const StreamSearch = __nccwpck_require2_(4136)
+const StreamSearch = __nccwpck_require__(4136)
 
-const PartStream = __nccwpck_require2_(612)
-const HeaderParser = __nccwpck_require2_(2271)
+const PartStream = __nccwpck_require__(612)
+const HeaderParser = __nccwpck_require__(2271)
 
 const DASH = 45
 const B_ONEDASH = Buffer.from('-')
@@ -54072,16 +54220,16 @@ module.exports = Dicer
 /***/ }),
 
 /***/ 2271:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const EventEmitter = (__nccwpck_require2_(8474).EventEmitter)
-const inherits = (__nccwpck_require2_(7975).inherits)
-const getLimit = __nccwpck_require2_(2393)
+const EventEmitter = (__nccwpck_require__(8474).EventEmitter)
+const inherits = (__nccwpck_require__(7975).inherits)
+const getLimit = __nccwpck_require__(2393)
 
-const StreamSearch = __nccwpck_require2_(4136)
+const StreamSearch = __nccwpck_require__(4136)
 
 const B_DCRLF = Buffer.from('\r\n\r\n')
 const RE_CRLF = /\r\n/g
@@ -54180,13 +54328,13 @@ module.exports = HeaderParser
 /***/ }),
 
 /***/ 612:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const inherits = (__nccwpck_require2_(7975).inherits)
-const ReadableStream = (__nccwpck_require2_(7075).Readable)
+const inherits = (__nccwpck_require__(7975).inherits)
+const ReadableStream = (__nccwpck_require__(7075).Readable)
 
 function PartStream (opts) {
   ReadableStream.call(this, opts)
@@ -54201,7 +54349,7 @@ module.exports = PartStream
 /***/ }),
 
 /***/ 4136:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -54232,8 +54380,8 @@ module.exports = PartStream
  * Based heavily on the Streaming Boyer-Moore-Horspool C++ implementation
  * by Hongli Lai at: https://github.com/FooBarWidget/boyer-moore-horspool
  */
-const EventEmitter = (__nccwpck_require2_(8474).EventEmitter)
-const inherits = (__nccwpck_require2_(7975).inherits)
+const EventEmitter = (__nccwpck_require__(8474).EventEmitter)
+const inherits = (__nccwpck_require__(7975).inherits)
 
 function SBMH (needle) {
   if (typeof needle === 'string') {
@@ -54437,18 +54585,18 @@ module.exports = SBMH
 /***/ }),
 
 /***/ 9581:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const WritableStream = (__nccwpck_require2_(7075).Writable)
-const { inherits } = __nccwpck_require2_(7975)
-const Dicer = __nccwpck_require2_(7182)
+const WritableStream = (__nccwpck_require__(7075).Writable)
+const { inherits } = __nccwpck_require__(7975)
+const Dicer = __nccwpck_require__(7182)
 
-const MultipartParser = __nccwpck_require2_(1192)
-const UrlencodedParser = __nccwpck_require2_(855)
-const parseParams = __nccwpck_require2_(8929)
+const MultipartParser = __nccwpck_require__(1192)
+const UrlencodedParser = __nccwpck_require__(855)
+const parseParams = __nccwpck_require__(8929)
 
 function Busboy (opts) {
   if (!(this instanceof Busboy)) { return new Busboy(opts) }
@@ -54530,7 +54678,7 @@ module.exports.Dicer = Dicer
 /***/ }),
 
 /***/ 1192:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -54542,15 +54690,15 @@ module.exports.Dicer = Dicer
 //  * support limits.fieldNameSize
 //     -- this will require modifications to utils.parseParams
 
-const { Readable } = __nccwpck_require2_(7075)
-const { inherits } = __nccwpck_require2_(7975)
+const { Readable } = __nccwpck_require__(7075)
+const { inherits } = __nccwpck_require__(7975)
 
-const Dicer = __nccwpck_require2_(7182)
+const Dicer = __nccwpck_require__(7182)
 
-const parseParams = __nccwpck_require2_(8929)
-const decodeText = __nccwpck_require2_(2747)
-const basename = __nccwpck_require2_(692)
-const getLimit = __nccwpck_require2_(2393)
+const parseParams = __nccwpck_require__(8929)
+const decodeText = __nccwpck_require__(2747)
+const basename = __nccwpck_require__(692)
+const getLimit = __nccwpck_require__(2393)
 
 const RE_BOUNDARY = /^boundary$/i
 const RE_FIELD = /^form-data$/i
@@ -54844,14 +54992,14 @@ module.exports = Multipart
 /***/ }),
 
 /***/ 855:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const Decoder = __nccwpck_require2_(1496)
-const decodeText = __nccwpck_require2_(2747)
-const getLimit = __nccwpck_require2_(2393)
+const Decoder = __nccwpck_require__(1496)
+const decodeText = __nccwpck_require__(2747)
+const getLimit = __nccwpck_require__(2393)
 
 const RE_CHARSET = /^charset$/i
 
@@ -55272,13 +55420,13 @@ module.exports = function getLimit (limits, name, defaultLimit) {
 /***/ }),
 
 /***/ 8929:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /* eslint-disable object-property-newline */
 
 
-const decodeText = __nccwpck_require2_(2747)
+const decodeText = __nccwpck_require__(2747)
 
 const RE_ENCODED = /%[a-fA-F0-9][a-fA-F0-9]/g
 
@@ -55476,25 +55624,25 @@ module.exports = parseParams
 /***/ }),
 
 /***/ 7269:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require2_) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 /*! Axios v1.20.0 Copyright (c) 2026 Matt Zabriskie and contributors */
 
 
-var FormData$1 = __nccwpck_require2_(6454);
-var crypto = __nccwpck_require2_(6982);
-var url = __nccwpck_require2_(7016);
-var HttpsProxyAgent = __nccwpck_require2_(3669);
-var http = __nccwpck_require2_(8611);
-var https = __nccwpck_require2_(5692);
-var http2 = __nccwpck_require2_(5675);
-var util = __nccwpck_require2_(9023);
-var path = __nccwpck_require2_(6928);
-var followRedirects = __nccwpck_require2_(1573);
-var zlib = __nccwpck_require2_(3106);
-var stream = __nccwpck_require2_(2203);
-var events = __nccwpck_require2_(4434);
+var FormData$1 = __nccwpck_require__(6454);
+var crypto = __nccwpck_require__(6982);
+var url = __nccwpck_require__(7016);
+var HttpsProxyAgent = __nccwpck_require__(3669);
+var http = __nccwpck_require__(8611);
+var https = __nccwpck_require__(5692);
+var http2 = __nccwpck_require__(5675);
+var util = __nccwpck_require__(9023);
+var path = __nccwpck_require__(6928);
+var followRedirects = __nccwpck_require__(1573);
+var zlib = __nccwpck_require__(3106);
+var stream = __nccwpck_require__(2203);
+var events = __nccwpck_require__(4434);
 
 /**
  * Create a bound version of a function with a specified `this` context
@@ -62311,9 +62459,9 @@ module.exports = {"version":"3.19.0"};
 /************************************************************************/
 /******/ 	// The module cache
 /******/ 	var __webpack_module_cache__ = {};
-/******/
+/******/ 	
 /******/ 	// The require function
-/******/ 	function __nccwpck_require2_(moduleId) {
+/******/ 	function __nccwpck_require__(moduleId) {
 /******/ 		// Check if module is in cache
 /******/ 		var cachedModule = __webpack_module_cache__[moduleId];
 /******/ 		if (cachedModule !== undefined) {
@@ -62325,32 +62473,32 @@ module.exports = {"version":"3.19.0"};
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
 /******/ 		};
-/******/
+/******/ 	
 /******/ 		// Execute the module function
 /******/ 		var threw = true;
 /******/ 		try {
-/******/ 			__webpack_modules__[moduleId].call(module.exports, module, module.exports, __nccwpck_require2_);
+/******/ 			__webpack_modules__[moduleId].call(module.exports, module, module.exports, __nccwpck_require__);
 /******/ 			threw = false;
 /******/ 		} finally {
 /******/ 			if(threw) delete __webpack_module_cache__[moduleId];
 /******/ 		}
-/******/
+/******/ 	
 /******/ 		// Return the exports of the module
 /******/ 		return module.exports;
 /******/ 	}
-/******/
+/******/ 	
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat */
-/******/
-/******/ 	if (typeof __nccwpck_require2_ !== 'undefined') __nccwpck_require2_.ab = __dirname + "/";
-/******/
+/******/ 	
+/******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
+/******/ 	
 /************************************************************************/
-var __nested_webpack_exports__ = {};
-const core = __nccwpck_require2_(7484);
-const { MetricsScanner, ConfigLoader } = __nccwpck_require2_(6863);
-const path = __nccwpck_require2_(6928);
-const fs = __nccwpck_require2_(9896);
-const { execSync, execFile } = __nccwpck_require2_(5317);
+var __webpack_exports__ = {};
+const core = __nccwpck_require__(7484);
+const { MetricsScanner, ConfigLoader } = __nccwpck_require__(9863);
+const path = __nccwpck_require__(6928);
+const fs = __nccwpck_require__(9896);
+const { execSync, execFile } = __nccwpck_require__(5317);
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -62669,313 +62817,6 @@ async function run() {
 
 run();
 
-module.exports = __nested_webpack_exports__;
-/******/ })()
-;
-
-
-/***/ }),
-
-/***/ 613:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("assert");
-
-/***/ }),
-
-/***/ 290:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("async_hooks");
-
-/***/ }),
-
-/***/ 181:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("buffer");
-
-/***/ }),
-
-/***/ 317:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("child_process");
-
-/***/ }),
-
-/***/ 236:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("console");
-
-/***/ }),
-
-/***/ 982:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("crypto");
-
-/***/ }),
-
-/***/ 637:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("diagnostics_channel");
-
-/***/ }),
-
-/***/ 434:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("events");
-
-/***/ }),
-
-/***/ 896:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("fs");
-
-/***/ }),
-
-/***/ 611:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("http");
-
-/***/ }),
-
-/***/ 675:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("http2");
-
-/***/ }),
-
-/***/ 692:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("https");
-
-/***/ }),
-
-/***/ 278:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("net");
-
-/***/ }),
-
-/***/ 598:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("node:crypto");
-
-/***/ }),
-
-/***/ 474:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("node:events");
-
-/***/ }),
-
-/***/ 75:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("node:stream");
-
-/***/ }),
-
-/***/ 975:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("node:util");
-
-/***/ }),
-
-/***/ 857:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("os");
-
-/***/ }),
-
-/***/ 928:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("path");
-
-/***/ }),
-
-/***/ 987:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("perf_hooks");
-
-/***/ }),
-
-/***/ 480:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("querystring");
-
-/***/ }),
-
-/***/ 203:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("stream");
-
-/***/ }),
-
-/***/ 774:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("stream/web");
-
-/***/ }),
-
-/***/ 193:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("string_decoder");
-
-/***/ }),
-
-/***/ 557:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("timers");
-
-/***/ }),
-
-/***/ 756:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("tls");
-
-/***/ }),
-
-/***/ 18:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("tty");
-
-/***/ }),
-
-/***/ 16:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("url");
-
-/***/ }),
-
-/***/ 23:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("util");
-
-/***/ }),
-
-/***/ 253:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("util/types");
-
-/***/ }),
-
-/***/ 167:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("worker_threads");
-
-/***/ }),
-
-/***/ 106:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("zlib");
-
-/***/ })
-
-/******/ 	});
-/************************************************************************/
-/******/ 	// The module cache
-/******/ 	var __webpack_module_cache__ = {};
-/******/
-/******/ 	// The require function
-/******/ 	function __nccwpck_require__(moduleId) {
-/******/ 		// Check if module is in cache
-/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
-/******/ 		if (cachedModule !== undefined) {
-/******/ 			return cachedModule.exports;
-/******/ 		}
-/******/ 		// Create a new module (and put it into the cache)
-/******/ 		var module = __webpack_module_cache__[moduleId] = {
-/******/ 			// no module.id needed
-/******/ 			// no module.loaded needed
-/******/ 			exports: {}
-/******/ 		};
-/******/
-/******/ 		// Execute the module function
-/******/ 		var threw = true;
-/******/ 		try {
-/******/ 			__webpack_modules__[moduleId](module, module.exports, __nccwpck_require__);
-/******/ 			threw = false;
-/******/ 		} finally {
-/******/ 			if(threw) delete __webpack_module_cache__[moduleId];
-/******/ 		}
-/******/
-/******/ 		// Return the exports of the module
-/******/ 		return module.exports;
-/******/ 	}
-/******/
-/************************************************************************/
-/******/ 	/* webpack/runtime/compat */
-/******/
-/******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
-/******/
-/************************************************************************/
-/******/
-/******/ 	// startup
-/******/ 	// Load entry module and return exports
-/******/ 	// This entry module is referenced by other modules so it can't be inlined
-/******/ 	var __webpack_exports__ = __nccwpck_require__(137);
-/******/ 	module.exports = __webpack_exports__;
-/******/
+module.exports = __webpack_exports__;
 /******/ })()
 ;

@@ -4,9 +4,8 @@
   "description": "Code metrics scan plugin - detect code scale, avg function LOC, avg cyclomatic complexity, code duplication rate and file duplication rate",
   "main": "dist/index.js",
   "scripts": {
-    "package": "ncc build dist/index.js -o dist",
-    "zip": "node zip.js",
-    "build": "npm run package && npm run zip"
+    "package": "ncc build src/index.js -o dist",
+    "build": "npm run package"
   },
   "author": "openLiBing",
   "license": "ISC",
@@ -21,7 +20,6 @@
     "@eslint/js": "^9.10.0",
     "@microsoft/eslint-formatter-sarif": "3.1.0",
     "@vercel/ncc": "^0.38.1",
-    "adm-zip": "^0.5.16",
     "eslint": "^9.10.0",
     "globals": "^16.5.0",
     "typescript": "^5.4.5",
