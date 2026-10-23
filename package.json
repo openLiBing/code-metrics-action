@@ -4,7 +4,7 @@
   "description": "Code metrics scan plugin - detect code scale, avg function LOC, avg cyclomatic complexity, code duplication rate and file duplication rate",
   "main": "dist/index.js",
   "scripts": {
-    "package": "ncc build src/index.js -o dist",
+    "package": "ncc build src/index.js -o dist && node -e \"require('fs').cpSync('src/bin','dist/bin',{recursive:true})\"",
     "build": "npm run package"
   },
   "author": "openLiBing",
