@@ -4,13 +4,25 @@
 
 ## 功能
 
-| 指标             | 说明                               |
-| ---------------- | ---------------------------------- |
-| 代码规模         | 有效代码行数                       |
-| 平均函数代码行数 | 函数体有效代码行的算术平均值       |
-| 平均圈复杂度     | 函数级圈复杂度的算术平均值         |
-| 代码重复率       | 重复代码行占有效代码行的百分比     |
-| 文件重复率       | 内容完全一致文件占总文件数的百分比 |
+| 指标             | 说明                               | 支持语言             |
+| ---------------- | ---------------------------------- | -------------------- |
+| 代码规模         | 有效代码行数                       | 200+ 种（scc 驱动）  |
+| 平均函数代码行数 | 函数体有效代码行的算术平均值       | 26 种（lizard 驱动） |
+| 平均圈复杂度     | 函数级圈复杂度的算术平均值         | 同上（lizard 驱动）  |
+| 代码重复率       | 重复代码行占有效代码行的百分比     | 语言无关             |
+| 文件重复率       | 内容完全一致文件占总文件数的百分比 | 语言无关             |
+
+> 💡 **语言支持交集说明**：插件的 5 项指标由不同能力驱动——代码规模走 `scc`（200+ 语言），平均函数代码行数 / 平均圈复杂度走 `lizard`，两项重复率走内置文本比对（语言无关）。因此**能完整产出全部 5 项指标的语言**即 `scc 与 lizard` 的支持交集。`lizard` 未覆盖的语言仍可统计代码规模与两项重复率，但无法产出函数级指标。
+
+`lizard` 支持（可完整扫描 5 项指标）的 26 种语言：
+
+```text
+C/C++  C#  Java  JavaScript/JSX  TypeScript/TSX  Python  Ruby  PHP  Go  Rust
+Kotlin  Scala  Swift  Objective-C  Lua  Perl  R  PL/SQL  Vue.js  Erlang
+Fortran  GDScript  Solidity  Structured Text  TTCN-3  Zig
+```
+
+> 上述 26 种语言是缺省扩展名白名单（50+，见「扫描范围」）中能完整产出 5 项指标的子集；白名单中的其他语言（Shell、JSON/XML/YAML 等）仅统计代码规模与重复率。
 
 ## 指标说明
 
@@ -32,34 +44,39 @@
 name: code-metrics-scan
 
 on:
+  # 三种触发方式可按需选择（可组合启用），示例默认只保留手动触发：
+  # 1) workflow_dispatch：手动触发，在流水线页面按需执行
   workflow_dispatch:
-  push:
-    branches:
-      - master
-  schedule:
-    - cron: "0 0 0 * * ?"
+  # 2) push：代码推送触发，推送到指定分支时自动执行（按需启用，示例已注释）
+  # push:
+  #   branches:
+  #     - master
+  # 3) schedule：定时触发，按 cron 表达式定期执行（按需启用，示例已注释）
+  # schedule:
+  #   - cron: "0 0 0 * * ?"
+
+permissions:
+  repository: read
+  id-token: write
 
 jobs:
   code-metrics-scan:
     name: 代码度量指标扫描
+    # 这里使用的是官方默认执行机，请按需切换为自定义执行机（如 ["self-hosted", "region=cn"]）
     runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "slim"]
     steps:
       - name: Checkout
         uses: checkout
 
       - name: code-metrics-scan
-        uses: openlibing-code-metrics-action
+        uses: openlibing/code-metrics-action@v1.0.3
         with:
-          # 可选：排除目录/文件，支持 目录名（任意层级）/ 相对路径 / 文件名 / 前导斜杠锚定顶层，逗号分隔
+          # 可选：排除指定目录/文件，不传 exclude-dirs 时除内置排除目录外默认全量扫描
           # exclude-dirs: "node_modules,target,dist,.git,.gitcode,.mvn,.trae,vendor"
           # 可选：指定扫描的文件扩展名（覆盖式：只扫指定扩展名 + 文件名特例，
           # 如 CMakeLists.txt / Makefile 等构建文件始终放行）；
           # 不传时按内置"常见代码扩展名白名单 + 文件名特例"扫描
           # allowed-extensions: ".c,.cpp,.h"
-          apig-app-key: ${{ secrets.OPENLIBING_APIG_KEY }}
-          apig-app-secret: ${{ secrets.OPENLIBING_APIG_SECRET }}
-          obs-ak: ${{ secrets.OPENLIBING_OBS_AK }}
-          obs-sk: ${{ secrets.OPENLIBING_OBS_SK }}
 ```
 
 ## 触发方式
@@ -72,17 +89,26 @@ jobs:
 
 ## 输入参数
 
-| 参数               | 必填 | 默认值                              | 说明                                                                                                                                           |
-| ------------------ | ---- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| exclude-dirs       | 否   | -            | 排除目录/文件列表，逗号分隔，支持 目录名 / 相对路径 / 文件名 / 前导斜杠锚定顶层，<br/>详情见下文 |
-| allowed-extensions | 否   | 50+ 常见代码扩展名，<br/>详情见下文 | 允许的文件扩展名，逗号分隔。                                                                                                                   |
-| output             | 否   | metrics.json                        | 结果输出文件路径                                                                                                                               |
-| apig-app-key       | 是   | -                                   | APIG 网关 AppKey，用于上报检测结果到 openLiBing 平台（上传功能默认开启，此项必填，经 `with` 传入）                                             |
-| apig-app-secret    | 是   | -                                   | APIG 网关 AppSecret，用于上报检测结果到 openLiBing 平台（上传功能默认开启，此项必填，经 `with` 传入）                                          |
-| obs-ak             | 是   | -                                   | OBS 访问密钥 AK，全量上报文件上传到 openLiBing 统一桶（openlibing-gitcode-action/code-metrics-action/），与 upload-sarif-action 复用同一套凭证 |
-| obs-sk             | 是   | -                                   | OBS 访问密钥 SK，与 obs-ak 配套                                                                                                                |
+| 参数               | 必填 | 默认值                                      | 说明                                                                                                |
+| ------------------ | ---- | ------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| exclude-dirs       | 否   | -                                           | 排除目录/文件列表，逗号分隔，支持通配符，不填时除内置排除目录外默认全量扫描                         |
+| allowed-extensions | 否   | 50+ 常见代码扩展名，<br/>详情见「扫描范围」 | 允许的文件扩展名，逗号分隔。                                                                        |
+| output             | 否   | metrics.json                                | 结果输出文件路径                                                                                    |
+| apig-app-key       | 否   | -                                           | **已废弃**：APIG 网关 AppKey（AK）。请使用新的 OIDC 认证方式（见下方「上传认证」），无需任何凭证    |
+| apig-app-secret    | 否   | -                                           | **已废弃**：APIG 网关 AppSecret（SK），与 apig-app-key 配套。请使用新的 OIDC 认证方式，无需任何凭证 |
+| obs-ak             | 否   | -                                           | **已废弃**：OBS 访问密钥 AK。请使用新的 OIDC 认证方式，无需任何凭证                                 |
+| obs-sk             | 否   | -                                           | **已废弃**：OBS 访问密钥 SK，与 obs-ak 配套。请使用新的 OIDC 认证方式，无需任何凭证                 |
 
-上传功能默认开启：全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences）先上传到 OBS，再通过 APIG 接口上报元数据与 OBS 下载链接。凭据通过 `apig-app-key` / `apig-app-secret`（APIG）与 `obs-ak` / `obs-sk`（OBS）传入，请在 workflow 的 `with` 中传入。
+上传功能默认开启：全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences）先上传到 OBS，再通过 APIG 接口上报元数据与 OBS 下载链接。
+
+### 上传认证
+
+上传功能默认开启，插件使用OIDC 联邦认证，无需任何凭证。已适配 OIDC 的 workflow 示例：
+
+```yaml
+permissions:
+  id-token: write
+```
 
 ### 扫描范围（文件过滤规则）
 
@@ -92,12 +118,21 @@ jobs:
 2. **`allowed-extensions` 显式指定（覆盖式）**：用户指定扩展名后，扫描范围 = 指定扩展名 + 文件名特例，**不再叠加缺省白名单**。例如指定 `.h,.cpp`，则只扫描这两类扩展名的文件（外加 CMakeLists.txt 等特例文件）。
 3. **缺省代码扩展名白名单（未配置 `allowed-extensions` 时生效）**：内置 50+ 常见代码扩展名（C/C++、Java、Python、JS/TS、Go、Rust、Shell、JSON/XML/YAML 等数据配置，以及 `.gn`/`.gni`/`.prelds` 等 OHOS 构建体系脚本），避免二进制、文档等非代码文件干扰度量。
 
-在上述放行规则之前，`exclude-dirs` 优先排除（命中即跳过，目录命中时整棵子树剪枝）。支持四种形式（逗号分隔，大小写敏感）：
+**目录剪枝**：上述规则只针对文件；目录层面默认自动排除版本控制与 IDE 私有目录（`.git`、`.svn`、`.hg`、`.idea`、`.vscode`），其下文件不参与任何指标计算；其余隐藏目录（如平台流水线的 `.gitcode`、`.github`）正常参与扫描。需要排除更多目录请使用 `exclude-dirs`。
 
-1. **目录名**（`docs`、`.gitcode`）：任意层级的同名目录均排除。
-2. **相对路径**（`src/resources`）：相对仓库根精确匹配；同时按路径段后缀命中任意位置（如配置 `resources/mapper` 可命中 `src/resources/mapper`），兜住从子目录视角抄写的相对路径。
-3. **文件名**（`test.ts`）：任意层级的同名文件均排除。
-4. **前导斜杠锚定**（`/test.ts`、`/docs`）：仅匹配仓库根下的顶层路径，不影响子目录同名条目（对齐 `.gitignore` 的 `/` 语义；`/test.ts` 不会排除 `src/test.ts`）。
+### 排除规则（exclude-dirs）
+
+`exclude-dirs` 用逗号分隔，支持通配符，大小写敏感，匹配目标为条目相对扫描根的路径：
+
+| 写法                                                     | 匹配范围                                         |
+| -------------------------------------------------------- | ------------------------------------------------ |
+| 裸名称（如 `test.ts`、`docs`）                           | 仅扫描根顶层同名条目                             |
+| 通配符名称（如 `*.test.js`、`*test*`）                   | 任意层级同名条目                                 |
+| 路径（如 `src/opensource/grapesjs`、`src/opensource/*`） | 锚定扫描根，匹配相对路径，命中目录即整棵子树剪枝 |
+
+通配符说明：`*` 匹配单段内任意字符（不含 `/`）、`**` 跨目录、`?` 单字符、`[abc]`/`[!abc]` 字符类。前导 `/` 为可选锚定写法（`/test.ts` 仅匹配顶层），尾部 `/` 忽略（`docs/` ≡ `docs`）。目录与文件统一适用同一条规则。
+
+示例：`exclude-dirs: "*.test.js,src/opensource/*"` 排除任意层级的 `.test.js` 文件和 `src/opensource` 直属子目录。
 
 ## 输出
 
@@ -108,6 +143,44 @@ jobs:
 | avg-cyclomatic-complexity   | 平均圈复杂度             |
 | total-code-duplication-rate | 代码重复率（%）          |
 | total-file-duplication-rate | 文件重复率（%）          |
+
+### 概览输出（ATOMGIT_OUTPUT）
+
+扫描完成后，插件会将每项指标通过 `ATOMGIT_OUTPUT` 输出为独立的键值对，便于工作流页面直接查看概览（不含明细）。每项指标的标识为 中文名（英文名），按顺序排列为：代码规模（codeScale）、平均代码行数（avgFunctionLoc）、平均圈复杂度（avgCyclomaticComplexity）、总代码重复率（totalCodeDuplicationRate）、总文件重复率（totalFileDuplicationRate）。重复率指标为带 `%` 的百分数。
+
+| 输出标识                                   | 值     |
+| ------------------------------------------ | ------ |
+| `代码规模（codeScale）`                    | `2025` |
+| `平均代码行数（avgFunctionLoc）`           | `12.5` |
+| `平均圈复杂度（avgCyclomaticComplexity）`  | `3.2`  |
+| `总代码重复率（totalCodeDuplicationRate）` | `0.5%` |
+| `总文件重复率（totalFileDuplicationRate）` | `1.2%` |
+
+#### 平台详情链接输出
+
+上报成功后，插件输出 1 条该扫描仓在 openLiBing 平台分支管理页的跳转链接（固定 1 行）；运行日志（`core.info`）同时打印实际链接便于查看。
+
+输出标识为`扫描结果url`，示例：
+
+```text
+扫描结果url=https://www.openlibing.com/apps/repos?projectId=3&platforms=gitcode&repoUrlLike=test%2Frepo&branchNameLike=master
+```
+
+仓未录入 openLiBing 平台或分支未登记时，不输出链接，改为输出提示行（文案由服务端返回，插件不硬编码）：
+
+```text
+扫描结果=当前仓未录入openLiBing平台，无法生成跳转链接，请先联系SRE完成代码仓录入。
+```
+
+```text
+扫描结果=当前分支未录入openLiBing平台，请前往openLiBing平台同步最新分支
+```
+
+> **说明**
+>
+> - 链接由服务端拼接，同一代码仓关联多个项目时，固定输出查询第一个项目对应的 1 条链接（不输出多链接）。
+> - 链接落地页展示的指标数据恒为该分支**最新一次成功检测结果**，非历史流水线运行数据。
+> - 上报失败或链接构建异常时既不输出链接也不输出提示；写入失败时跳过输出，不影响上报结果。
 
 ## 依赖
 

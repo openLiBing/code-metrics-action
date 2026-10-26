@@ -53,9 +53,9 @@ class MetricsScanner {
     this.uploader = new CoderepoUploader({
       coderepoUrl: config.uploader?.coderepoUrl,
       timeout: (config.uploader?.timeout || 30) * 1000,
+      useOidc: config.uploader?.useOidc,
       apigAppKey: config.uploader?.apigAppKey,
       apigAppSecret: config.uploader?.apigAppSecret,
-      // OBS 上传凭证（复用 upload-sarif-action 同一套 OBS AK/SK）
       obsAk: config.uploader?.obsAk,
       obsSk: config.uploader?.obsSk
     });
@@ -175,15 +175,24 @@ class MetricsScanner {
           gitUrl: options.gitUrl,
           branchName: options.branchName,
           pipelineRunId: options.pipelineRunId,
+          commitId: options.commitId,
           runNumber: options.runNumber,
+          pipelineName: options.pipelineName,
           startTime: startTimeFormatted,
           endTime: endTimeFormatted,
           status: status
         });
 
         if (uploadResult.success) {
-          this.logger.info(`Successfully uploaded metrics, recordId: ${uploadResult.recordId}`);
-          result.uploadInfo = { success: true, recordId: uploadResult.recordId };
+          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
+          this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
+          // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
+          result.uploadInfo = {
+            success: true,
+            obsUrl: uploadResult.obsUrl,
+            detailLink: uploadResult.detailLink || '',
+            tip: uploadResult.tip || ''
+          };
         } else {
           this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
           result.uploadInfo = { success: false, error: uploadResult.error };
@@ -207,7 +216,9 @@ class MetricsScanner {
             gitUrl: options.gitUrl,
             branchName: options.branchName,
             pipelineRunId: options.pipelineRunId,
+            commitId: options.commitId,
             runNumber: options.runNumber,
+            pipelineName: options.pipelineName,
             startTime: startTimeFormatted,
             endTime: endTimeFormatted,
             status: 1,

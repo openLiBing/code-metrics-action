@@ -1,12 +1,19 @@
 const axios = require('axios');
 const crypto = require('crypto');
+const { callApig, getCredentials } = require('@openlibing/huaweicloud-oidc-client');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execSync, execFileSync } = require('child_process');
 
+// 上报接口路径前缀：新旧网关接口与认证方式一一对应
+// - OIDC 联邦认证（新）：workflow 声明 permissions: id-token: write 时启用
+// - AK/SK 签名（旧）：存量脚本兼容，接口与认证方式保持不变
+const OIDC_API_PREFIX = '/action-api';
+const AKSK_API_PREFIX = '/openlibing-coderepo';
+
 /**
- * 华为云 APIG 签名器（SDK-HMAC-SHA256）
+ * 华为云 APIG 签名器（SDK-HMAC-SHA256，AK/SK 模式使用）
  * 基于官方 SDK APIGW-javascript-sdk-2.0.6 的 signer.js 完全对齐
  * 签名流程：CanonicalRequest → StringToSign → HMAC-SHA256 → Authorization
  */
@@ -187,14 +194,15 @@ class ApigSigner {
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0,
       1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
       0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1,
       0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
       1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0
     ];
     let out = '';
     let lastPos = 0;
     for (let i = 0; i < str.length; ++i) {
-      const c = str.charCodeAt(i);
+      // 代理对场景下需在下方重新赋值（c = 0x10000 + ...），此处必须用 let
+      let c = str.charCodeAt(i);
       if (c < 0x80) {
         if (noEscape[c] === 1) continue;
         if (lastPos < i) out += str.slice(lastPos, i);
@@ -244,9 +252,12 @@ class CoderepoUploader {
   constructor(config = {}) {
     this.baseUrl = config.coderepoUrl || 'http://localhost:8080';
     this.timeout = config.timeout || 30000;
+    // 认证模式：useOidc=true 走新接口（/action-api/...）+ OIDC 免密联邦认证；
+    // 否则走旧接口（/openlibing-coderepo/...）+ AK/SK（SDK-HMAC-SHA256）签名，兼容存量脚本
+    this.useOidc = !!config.useOidc;
     this.apigAppKey = config.apigAppKey || '';
     this.apigAppSecret = config.apigAppSecret || '';
-    // OBS 上传凭证：复用 openlibing 平台 gitcode-action 统一桶（私有对象，供后端按 objectKey 下载）
+    // OBS 上传凭证（AK/SK 模式使用）：复用 openlibing 平台 gitcode-action 统一桶（私有对象，供后端按 objectKey 下载）
     this.obsAk = config.obsAk || '';
     this.obsSk = config.obsSk || '';
     // 平台所有 gitcode-action 插件上报结果的统一桶，code-metrics-action 目录存放代码度量上报
@@ -258,6 +269,10 @@ class CoderepoUploader {
 
   /**
    * 上报代码度量指标。
+   *
+   * 认证模式（由 workflow 是否声明 permissions: id-token: write 决定）：
+   * - OIDC 联邦认证（新）：APIG 上报走 callApig 自动换证签名；OBS 上传走 STS 临时凭证
+   * - AK/SK 签名（旧）：APIG 上报走 ApigSigner 签名；OBS 上传走 obs-ak/obs-sk 静态凭证
    *
    * 流程（OBS 中转 + 单接口，彻底规避 APIG 12MB 请求体上限）：
    * 1. 组装全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences），写本地临时 json
@@ -278,7 +293,10 @@ class CoderepoUploader {
       gitUrl: options.gitUrl,
       branchName: options.branchName,
       pipelineRunId: options.pipelineRunId,
+      commitId: options.commitId,
       runNumber: options.runNumber,
+      // pipelineName：流水线名称（GitCode runner 注入的 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
+      pipelineName: options.pipelineName,
       metricsData: overallMetrics,
       detectionStartedAt: options.startTime,
       detectionCompletedAt: options.endTime,
@@ -303,6 +321,7 @@ class CoderepoUploader {
       gitUrl: options.gitUrl,
       branchName: options.branchName,
       pipelineRunId: options.pipelineRunId,
+      commitId: options.commitId,
       runNumber: options.runNumber,
       detectionStartedAt: options.startTime,
       detectionCompletedAt: options.endTime,
@@ -316,7 +335,7 @@ class CoderepoUploader {
     const mainUrl = this.buildUrl('/metrics/code/report');
     const mainBody = JSON.stringify(payload);
     console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${obsResult.obsUrl}`);
-    const mainResult = await this.sendSignedRequest('POST', mainUrl, mainBody);
+    const mainResult = await this.report(mainUrl, mainBody);
     if (!mainResult.success) {
       // 上报失败但 OBS 文件已完整上传：打印固定格式链接，提示可走保底定时任务补导入
       console.warn(
@@ -326,15 +345,33 @@ class CoderepoUploader {
       return { ...mainResult, obsUrl: obsResult.obsUrl };
     }
 
-    return { success: true, recordId: mainResult.recordId, obsUrl: obsResult.obsUrl };
+    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口输出
+    return {
+      success: true,
+      recordId: mainResult.recordId,
+      obsUrl: obsResult.obsUrl,
+      detailLink: mainResult.detailLink,
+      tip: mainResult.tip
+    };
   }
 
   /**
    * 组装全量上报文件并上传到 OBS，返回固定格式下载链接与 objectKey。
+   * OBS 凭证按认证模式选择：
+   * - OIDC 模式：getCredentials 获取 STS 临时凭证（短时效，仅本次流水线运行有效）
+   * - AK/SK 模式：workflow 传入的 obs-ak / obs-sk 静态凭证
    */
   async uploadFullPayloadToOBS(fullPayload, options) {
-    if (!this.obsAk || !this.obsSk) {
-      return { success: false, error: '缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
+    let cred;
+    if (this.useOidc) {
+      try {
+        // 获取 STS 临时凭证（SDK 内部缓存，同一次流水线运行内只换证一次）
+        cred = await getCredentials();
+      } catch (e) {
+        return { success: false, error: `获取 OIDC 临时凭证失败: ${e.message}` };
+      }
+    } else if (!this.obsAk || !this.obsSk) {
+      return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
     }
     // 写本地临时文件（runner 上临时目录，用完即删）
     const tmpFile = path.join(os.tmpdir(), `code-metrics-${Date.now()}.json`);
@@ -342,7 +379,7 @@ class CoderepoUploader {
 
     const objectKey = this.buildObjectKey(options);
     try {
-      await this.uploadToOBS(tmpFile, objectKey);
+      await this.uploadToOBS(cred, tmpFile, objectKey);
       const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
       console.log(`[upload] OBS uploaded: ${obsUrl}`);
       return { success: true, obsUrl: obsUrl, objectKey: objectKey };
@@ -362,14 +399,15 @@ class CoderepoUploader {
    * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
    * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
    *
-   * 凭证传递：与 upload-sarif-action 生产验证一致，用 -e/-i/-k 命令行参数传 endpoint/AK/SK。
-   * （曾改为临时 .obsutilconfig + -config 方式，但 runner 上无法正确应用 AK/SK 导致鉴权失败，
-   * 已回退为命令行参数方式。AK/SK 会出现在进程参数中，CI 平台对 secrets 会自动掩码，不会明文落日志。）
+   * 凭证传递（按认证模式）：
+   * - OIDC 模式：STS 临时凭证，经 -e/-i/-k/-t 命令行参数传 endpoint/临时AK/临时SK/SecurityToken
+   * - AK/SK 模式：静态 obs-ak/obs-sk，经 -e/-i/-k 命令行参数传递
+   * CI 平台对 secrets/临时令牌自动掩码，不会明文落日志。
    *
    * 安全处理：用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
    * 外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令。
    */
-  async uploadToOBS(localFilePath, objectKey) {
+  async uploadToOBS(cred, localFilePath, objectKey) {
     const obsutil = await this.ensureObsutil();
     // 记录 obsutil 版本，便于排查 runner 与本地环境差异
     try {
@@ -383,12 +421,17 @@ class CoderepoUploader {
       localFilePath,
       `obs://${this.obsBucket}/${objectKey}`,
       '-f',
-      `-e=${this.obsEndpoint}`,
-      `-i=${this.obsAk}`,
-      `-k=${this.obsSk}`
+      `-e=${this.obsEndpoint}`
     ];
-    // 打印执行命令（-k 参数脱敏），便于定位上传失败原因
-    const maskedArgs = args.map(a => (a.startsWith('-k=') ? '-k=***' : a));
+    if (this.useOidc) {
+      // OIDC 模式：STS 临时凭证 + SecurityToken
+      args.push(`-i=${cred.accessKeyId}`, `-k=${cred.secretAccessKey}`, `-t=${cred.securityToken}`);
+    } else {
+      // AK/SK 模式：静态凭证
+      args.push(`-i=${this.obsAk}`, `-k=${this.obsSk}`);
+    }
+    // 打印执行命令（-k/-t 参数脱敏），便于定位上传失败原因
+    const maskedArgs = args.map(a => (a.startsWith('-k=') || a.startsWith('-t=') ? `${a.split('=')[0]}=***` : a));
     console.log(`[upload] exec obsutil ${maskedArgs.join(' ')}`);
     execFileSync(obsutil, args, { stdio: 'inherit' });
   }
@@ -557,34 +600,50 @@ class CoderepoUploader {
   }
 
   /**
-   * 拼接完整请求 URL：baseUrl 已包含 /openlibing-coderepo 前缀
+   * 拼接完整请求 URL：按认证模式选择新旧接口前缀
+   * - OIDC 模式：/action-api/metrics/code/report
+   * - AK/SK 模式：/openlibing-coderepo/metrics/code/report
    */
   buildUrl(path) {
-    return this.baseUrl.replace(/\/+$/, '') + '/openlibing-coderepo' + path;
+    const prefix = this.useOidc ? OIDC_API_PREFIX : AKSK_API_PREFIX;
+    return this.baseUrl.replace(/\/+$/, '') + prefix + path;
   }
 
   /**
-   * 发送 APIG 签名请求，解析 DataResult 响应。
-   * 返回 { success, recordId?, error? }
+   * 调用 APIG 上报接口并解析 DataResult 响应（按认证模式选择签名方式）。
+   * - OIDC 模式：SDK callApig 免密联邦认证（OIDC ID Token -> STS 临时凭证 ->
+   *   V11-HMAC-SHA256 签名 + X-Security-Token）
+   * - AK/SK 模式：ApigSigner SDK-HMAC-SHA256 签名（原有方式）
+   * 返回 { success, recordId?, detailLink?, tip?, error? }
    */
-  async sendSignedRequest(method, url, body) {
-    let headers = { 'Content-Type': 'application/json' };
-    if (this.apigAppKey && this.apigAppSecret) {
-      const signer = new ApigSigner(this.apigAppKey, this.apigAppSecret);
-      headers = signer.sign({
-        method: method,
-        url: url,
-        headers: headers,
-        body: body
-      });
-    }
-
+  async report(url, body) {
     try {
-      const response = await axios.post(url, body, {
-        headers,
-        timeout: this.timeout,
-      });
-      const resData = response.data;
+      let resData;
+      if (this.useOidc) {
+        const res = await callApig('POST', url, { 'Content-Type': 'application/json' }, body);
+        resData = res.data;
+
+        // 非 2xx：HTTP 层失败（网关拒绝、鉴权失败等）
+        if (res.status < 200 || res.status >= 300) {
+          const httpMsg = (resData && (resData.msg || resData.message || resData.error_msg)) || `HTTP ${res.status}`;
+          console.error(`Upload failed: HTTP ${res.status}, URL: ${url}`);
+          return { success: false, error: httpMsg };
+        }
+      } else {
+        // AK/SK 模式：凭证缺失时直接失败并给出明确提示
+        if (!this.apigAppKey || !this.apigAppSecret) {
+          return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 AK/SK 凭证（apig-app-key / apig-app-secret），无法上报' };
+        }
+        const signer = new ApigSigner(this.apigAppKey, this.apigAppSecret);
+        const headers = signer.sign({
+          method: 'POST',
+          url: url,
+          headers: { 'Content-Type': 'application/json' },
+          body: body
+        });
+        const response = await axios.post(url, body, { headers, timeout: this.timeout });
+        resData = response.data;
+      }
 
       // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功
       if (resData?.code !== 200) {
@@ -595,25 +654,21 @@ class CoderepoUploader {
         return { success: false, error: resData?.msg || 'Unknown error' };
       }
 
-      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象
+      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象；当前服务端返回 CodeMetricsReportVO
       const recordId = resData?.data?.recordId
         || resData?.data?.id
         || (typeof resData?.data === 'number' || typeof resData?.data === 'string' ? resData.data : null)
         || resData?.recordId
         || resData?.id;
 
-      return { success: true, recordId: recordId };
+      // data.detailLink：平台分支页固定单条跳转链接；data.tip：仓未录入/分支未登记提示（两者互斥，可均为空）
+      const detailLink = typeof resData?.data?.detailLink === 'string' ? resData.data.detailLink : '';
+      const tip = typeof resData?.data?.tip === 'string' ? resData.data.tip : '';
+
+      return { success: true, recordId: recordId, detailLink: detailLink, tip: tip };
     } catch (error) {
       // 输出详细错误信息以便排查网络问题
-      if (error.code === 'ECONNABORTED') {
-        console.error(`Upload timeout after ${this.timeout}ms, URL: ${url}`);
-      } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-        console.error(`Connection failed: ${error.code}, URL: ${url}`);
-      } else if (error.response) {
-        console.error(`HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`);
-      } else {
-        console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
-      }
+      console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
       const resData = error.response?.data;
       const errorMsg = resData?.msg || resData?.message || error.message;
       return { success: false, error: errorMsg };

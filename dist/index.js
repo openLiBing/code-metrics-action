@@ -1,3227 +1,6 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 7386:
-/***/ ((module) => {
-
-class MetricsCalculator {
-  static mergeResults(slocResult, lizardResult, duplicationResult) {
-    // 合并总体指标（排除 fileDetails / identicalFileDetails / duplicationOccurrences，单独处理）
-    const { fileDetails: slocFileDetails, ...slocMetrics } = slocResult;
-    const { fileDetails: lizardFileDetails, ...lizardMetrics } = lizardResult;
-    // 显式提取 duplicationOccurrences，避免被 ...duplicationMetrics 散开混入总体指标
-    const {
-      fileDetails: duplicationFileDetails,
-      identicalFileDetails,
-      duplicationOccurrences,
-      ...duplicationMetrics
-    } = duplicationResult;
-
-    // 合并文件级指标：以 sloc 的 fileDetails 为基础
-    const fileDetails = MetricsCalculator.mergeFileDetails(
-      slocFileDetails || [],
-      lizardFileDetails || [],
-      duplicationFileDetails || []
-    );
-
-    return {
-      ...slocMetrics,
-      ...lizardMetrics,
-      ...duplicationMetrics,
-      fileDetails: fileDetails,
-      identicalFileDetails: identicalFileDetails || [],
-      // 重复块出现位置列表（含每块的明文 content，由 uploader 做 Base64 编码后分批上报）
-      duplicationOccurrences: duplicationOccurrences || []
-    };
-  }
-
-  // 合并三个检测器的 fileDetails
-  static mergeFileDetails(slocFileDetails, lizardFileDetails, duplicationFileDetails) {
-    // 以 sloc 的 fileDetails 为基础（有 filePath, language, loc）
-    const fileMap = new Map();
-
-    for (const detail of slocFileDetails) {
-      fileMap.set(detail.filePath, {
-        filePath: detail.filePath,
-        language: detail.language || '',
-        loc: detail.loc || 0,
-        functionCount: 0,
-        avgFunctionLoc: 0,
-        avgCyclomaticComplexity: 0,
-        functionDetails: [],
-        duplicationRate: 0,
-        duplicationLineCount: 0,
-        duplicatedFiles: []
-      });
-    }
-
-    // 合并 lizard 的 fileDetails（按 filePath 匹配）
-    for (const detail of lizardFileDetails) {
-      const existing = fileMap.get(detail.filePath);
-      if (existing) {
-        existing.functionCount = detail.functionCount || 0;
-        existing.avgFunctionLoc = detail.avgFunctionLoc || 0;
-        existing.avgCyclomaticComplexity = detail.avgCyclomaticComplexity || 0;
-        existing.functionDetails = detail.functionDetails || [];
-      } else {
-        fileMap.set(detail.filePath, {
-          filePath: detail.filePath,
-          language: '',
-          loc: 0,
-          functionCount: detail.functionCount || 0,
-          avgFunctionLoc: detail.avgFunctionLoc || 0,
-          avgCyclomaticComplexity: detail.avgCyclomaticComplexity || 0,
-          functionDetails: detail.functionDetails || [],
-          duplicationRate: 0,
-          duplicationLineCount: 0,
-          duplicatedFiles: []
-        });
-      }
-    }
-
-    // 合并 duplication 的 fileDetails（按 filePath 匹配）
-    for (const detail of duplicationFileDetails) {
-      const existing = fileMap.get(detail.filePath);
-      if (existing) {
-        existing.duplicationRate = detail.duplicationRate || 0;
-        existing.duplicationLineCount = detail.duplicationLineCount || 0;
-        existing.duplicatedFiles = detail.duplicatedFiles || [];
-        // 上下文片段快照（重复块±5行，整体 Base64 编码），由 buildContextSegments 生成
-        existing.snapshotData = detail.snapshotData || null;
-      } else {
-        // duplication 独有文件（scc 不识别其扩展名，如 .prelds）：
-        // loc 用 duplication 检测携带的 totalLines 兜底（本地"非空非注释"口径），
-        // 避免 loc=0 但 duplicationLineCount>0 的矛盾展示
-        fileMap.set(detail.filePath, {
-          filePath: detail.filePath,
-          language: '',
-          loc: detail.totalLines || 0,
-          functionCount: 0,
-          avgFunctionLoc: 0,
-          avgCyclomaticComplexity: 0,
-          functionDetails: [],
-          duplicationRate: detail.duplicationRate || 0,
-          duplicationLineCount: detail.duplicationLineCount || 0,
-          duplicatedFiles: detail.duplicatedFiles || [],
-          snapshotData: detail.snapshotData || null
-        });
-      }
-    }
-
-    return [...fileMap.values()];
-  }
-
-  static validate(metrics) {
-    const required = [
-      'codeScale',
-      'averageFunctionLoc',
-      'averageCyclomaticComplexity',
-      'totalCodeDuplicationRate',
-      'totalFileDuplicationRate'
-    ];
-
-    for (const key of required) {
-      if (metrics[key] === undefined || metrics[key] === null) {
-        throw new Error(`Missing required metric: ${key}`);
-      }
-    }
-
-    return true;
-  }
-
-  static formatForReport(metrics) {
-    // 分离 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
-    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metrics;
-
-    return {
-      codeScale: Number(overallMetrics.codeScale) || 0,
-      avgFunctionLoc: Number(overallMetrics.averageFunctionLoc) || 0,
-      avgCyclomaticComplexity: Number(overallMetrics.averageCyclomaticComplexity) || 0,
-      totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,
-      totalFileDuplicationRate: Number(overallMetrics.totalFileDuplicationRate) || 0,
-      fileDetails: fileDetails || [],
-      identicalFileDetails: identicalFileDetails || [],
-      // 重复块出现位置列表（含明文 content），uploader 会 Base64 编码后分批上报
-      duplicationOccurrences: duplicationOccurrences || []
-    };
-  }
-}
-
-module.exports = MetricsCalculator;
-
-
-/***/ }),
-
-/***/ 889:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const fs = __nccwpck_require__(9896);
-const path = __nccwpck_require__(6928);
-const yaml = __nccwpck_require__(4281);
-
-const DEFAULT_CONFIG = {
-  sourceDir: './',
-  output: 'metrics.json',
-  // 排除目录：常见构建产物、依赖目录和 IDE/工具配置目录
-  excludeDirs: [],
-  // 支持的文件扩展名：覆盖主流编程语言
-  allowedExtensions: [],
-  detectors: {
-    sloc: {
-      enabled: true
-    },
-    lizard: {
-      enabled: true
-    },
-    duplication: {
-      enabled: true,
-      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块重复记为一次"
-      minLines: 10,
-      threshold: 0.3
-    }
-  },
-  uploader: {
-    enabled: true,
-    coderepoUrl: '',
-    timeout: 30
-  },
-  verbose: false,
-  parallel: true
-};
-
-class ConfigLoader {
-  static load(configPath) {
-    let config = { ...DEFAULT_CONFIG };
-
-    if (configPath && fs.existsSync(configPath)) {
-      try {
-        const fileContent = fs.readFileSync(configPath, 'utf8');
-        const ext = path.extname(configPath).toLowerCase();
-
-        let userConfig;
-        if (ext === '.yaml' || ext === '.yml') {
-          userConfig = yaml.load(fileContent);
-        } else if (ext === '.json') {
-          userConfig = JSON.parse(fileContent);
-        } else {
-          throw new Error(`Unsupported config file format: ${ext}`);
-        }
-
-        config = this.mergeConfig(config, userConfig);
-      } catch (error) {
-        console.warn(`Warning: Failed to load config file ${configPath}: ${error.message}`);
-      }
-    }
-
-    return config;
-  }
-
-  static mergeConfig(defaultConfig, userConfig) {
-    const merged = { ...defaultConfig };
-
-    for (const key of Object.keys(userConfig)) {
-      if (userConfig[key] === undefined || userConfig[key] === null) {
-        continue;
-      }
-
-      if (Array.isArray(userConfig[key])) {
-        // 如果用户配置了数组，完全替换默认值
-        merged[key] = [...userConfig[key]];
-      } else if (typeof userConfig[key] === 'object' && userConfig[key] !== null) {
-        if (typeof merged[key] === 'object' && merged[key] !== null) {
-          merged[key] = this.mergeConfig(merged[key], userConfig[key]);
-        } else {
-          merged[key] = userConfig[key];
-        }
-      } else {
-        merged[key] = userConfig[key];
-      }
-    }
-
-    return merged;
-  }
-
-  static getDefaultConfig() {
-    return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
-  }
-}
-
-module.exports = ConfigLoader;
-
-
-/***/ }),
-
-/***/ 554:
-/***/ ((module) => {
-
-class BaseDetector {
-  constructor(config = {}) {
-    this.config = config;
-  }
-
-  async detect(sourceDir) {
-    throw new Error('Method detect() must be implemented');
-  }
-
-  getName() {
-    throw new Error('Method getName() must be implemented');
-  }
-}
-
-module.exports = BaseDetector;
-
-
-/***/ }),
-
-/***/ 9263:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const fs = __nccwpck_require__(9896);
-const path = __nccwpck_require__(6928);
-const crypto = __nccwpck_require__(6982);
-const BaseDetector = __nccwpck_require__(554);
-const FileCollector = __nccwpck_require__(4334);
-
-class DuplicationDetector extends BaseDetector {
-  constructor(config = {}) {
-    super(config);
-    // 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
-    // - minLines=10：连续源代码行至少 10 行才算一次重复
-    this.minLines = config.minLines || 10;
-    this.allowedExtensions = config.allowedExtensions || [];
-  }
-
-  async detect(source, slocResult = null) {
-    // 支持单个路径或多个路径
-    const sources = Array.isArray(source) ? source : [source];
-    const excludeDirs = this.config.excludeDirs || [];
-
-    // 相对路径基准：优先用 git 仓库根目录，确保返回的是仓库根的相对全路径
-    // （source-dir 可能是子目录，用 sources 做基准会把子目录前缀也剥掉，只剩文件名）
-    const gitRoot = this.findGitRoot(sources[0]);
-    const pathBase = gitRoot ? [gitRoot] : sources;
-
-    // scc 的总体代码行数（codeScale），作为总重复率的分母
-    const codeScale = slocResult ? slocResult.codeScale : null;
-
-    // scc 每个文件的 loc 作为该文件重复率的权威分母，保证与上报的 loc 完全一致
-    const locByRel = new Map();
-    if (slocResult && Array.isArray(slocResult.fileDetails)) {
-      for (const d of slocResult.fileDetails) {
-        if (d && d.filePath) locByRel.set(d.filePath, Number(d.loc) || 0);
-      }
-    }
-
-    // 收集所有文件
-    const allFiles = [];
-    for (const src of sources) {
-      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-      allFiles.push(...files);
-    }
-    const uniqueFiles = [...new Set(allFiles)];
-
-    if (uniqueFiles.length === 0) {
-      return this.getEmptyResult();
-    }
-
-    // scc 口径有效行 < minLines 的文件不参与重复检测（第二道防线）：
-    // 即使插件注释规则与 scc 口径出现不一致（如历史 bug：CMakeLists.txt 的 #[[ ]]
-    // 注释体被当有效行），纯注释撑起的 10 行窗口也会在文件级被拦截，
-    // 与 cmetrics "≥10 个有效代码行才算重复"的定义对齐。
-    // 仅当 slocResult 中确有该文件的 loc 记录时过滤（路径不匹配/scc 不识别的文件保守放行）。
-    let locFiltered = 0;
-    const effectiveFiles = [];
-    for (const file of uniqueFiles) {
-      const rel = this.toRelativePath(file, pathBase);
-      const loc = locByRel.get(rel);
-      if (loc !== undefined && loc < this.minLines) {
-        locFiltered++;
-        continue;
-      }
-      effectiveFiles.push(file);
-    }
-    if (locFiltered > 0) {
-      console.log(`[duplication] Skipped ${locFiltered} files with scc loc < ${this.minLines}`);
-    }
-
-    const fileContents = new Map();
-    const fileSourceLineMaps = new Map();
-    let totalSourceLines = 0;
-    let binarySkipped = 0;
-    for (const file of effectiveFiles) {
-      try {
-        // 二进制文件嗅探：前 8KB 含 \x00 字节即判定为二进制（与 Git 同款标准），
-        // 跳过重复检测——二进制按 UTF-8 读取会产生 U+FFFD 乱码且大量伪重复块。
-        // 用内容嗅探而非扩展名黑名单：.config/.cfg 等文本配置不能按扩展名误杀。
-        if (DuplicationDetector.isBinaryFile(file)) {
-          binarySkipped++;
-          continue;
-        }
-        const content = fs.readFileSync(file, 'utf8');
-        fileContents.set(file, content);
-        const sourceLineMap = this.buildSourceLineMap(content, file);
-        fileSourceLineMaps.set(file, sourceLineMap);
-        totalSourceLines += sourceLineMap.sourceCount;
-      } catch (error) {
-        console.warn(`[WARN] Failed to read file ${file}: ${error.message}`);
-      }
-    }
-    if (binarySkipped > 0) {
-      console.log(`[duplication] Skipped ${binarySkipped} binary files (NUL byte sniffing)`);
-    }
-
-    // 行级跨文件匹配（与 cmetrics 官方定义对齐："非空非注释行连续 10 行相同"）
-    const lineResult = this.detectWithLineLevel(effectiveFiles, fileSourceLineMaps);
-    // 用 scc 对每个文件的重复行重新计数（分子分母同工具同口径，保证与 loc 完全一致）
-    const sccDupByRel = this.countDuplicatedLinesWithScc(
-        lineResult.fileDuplicatedLines, fileContents, pathBase);
-    // 使用 let 声明：buildContextSegments 会返回带 snapshotData 的新 fileDetails
-    let fileDetails = this.calculateFileDetailsFromLines(
-        lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase, locByRel, sccDupByRel);
-    // 从共享滑动窗口构建重复块出现位置（窗口级 union-find 分组，自动去重）
-    const duplicationOccurrences = this.buildDuplicationOccurrences(
-        lineResult.fileSourceLines, fileContents, pathBase, lineResult.sharedHashWindows);
-
-    // 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData
-    fileDetails = this.buildContextSegments(fileDetails, duplicationOccurrences, fileContents, pathBase);
-
-    const duplicatedLines = fileDetails.reduce((sum, d) => sum + d.duplicationLineCount, 0);
-
-    // 分母：优先用传入的 codeScale（与 cmetrics 和华为云保持一致）
-    // 如果没有 codeScale，则用本地统计的源代码行总数
-    const denominator = codeScale || totalSourceLines;
-
-    const duplicationRate = denominator > 0
-      ? parseFloat(((duplicatedLines / denominator) * 100).toFixed(2))
-      : 0;
-
-    // 完全一致文件计数（用于总文件重复率）
-    const identicalFileCount = this.calculateFileDuplication(fileContents);
-    const fileDuplicationRate = uniqueFiles.length > 0
-      ? parseFloat(((identicalFileCount / uniqueFiles.length) * 100).toFixed(2))
-      : 0;
-
-    // 计算完全一致文件的详情（用于总文件重复率下钻）
-    const identicalFileDetails = this.calculateIdenticalFileDetails(fileContents, pathBase);
-
-    return {
-      totalCodeDuplicationRate: duplicationRate,
-      totalFileDuplicationRate: fileDuplicationRate,
-      duplicatedLines: duplicatedLines,
-      totalLines: denominator,
-      duplicatedFiles: identicalFileCount,
-      totalFiles: uniqueFiles.length,
-      fileDetails: fileDetails,
-      identicalFileDetails: identicalFileDetails,
-      // 重复块出现位置列表（同一代码内容的所有出现位置归为同一 group_id），供后端入库 code_metrics_duplication_block
-      duplicationOccurrences: duplicationOccurrences
-    };
-  }
-
-  /**
-   * 行级跨文件重复检测（主路径）
-   * 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
-   *
-   * 算法：
-   * 1. 提取每个文件的源代码行（非空非注释，含 import 行），保留原始行号
-   * 2. 10 源代码行滑动窗口，md5 哈希每个窗口
-   * 3. 同一 hash 有 2+ 个窗口即计为重复（含同文件内重复）
-   * 4. 标记所有被匹配窗口覆盖的源代码行索引
-   * 5. 合并连续的源代码行索引为最大区间 → 每个区间是一个重复块出现位置
-   *
-   * 相比 token 级窗口的优势：
-   * - 按行对齐，30 行连续重复只产生 1 个块（而非多个 19 行碎片）
-   * - 合并后同一 (file, startLine, endLine) 只产生一条记录（避免重复入库）
-   *
-   * @param {string[]} files 文件绝对路径列表
-   * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（含 sourceLines，分类口径与 scc 一致）
-   * @returns {Object} {fileDuplicatedLines, fileSourceLines, sharedHashWindows}
-   */
-  detectWithLineLevel(files, fileSourceLineMaps) {
-    const WINDOW_SIZE = this.minLines; // 10
-
-    // Step 1: 提取每个文件的源代码行（与 scc 有效代码行语义一致），保留原始行号
-    // 直接复用 buildSourceLineMap 已计算好的 sourceLines，避免分类口径不一致
-    const fileSourceLines = new Map();
-    for (const file of files) {
-      const sourceLineMap = fileSourceLineMaps.get(file)
-        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
-      if (!sourceLineMap || !sourceLineMap.sourceLines) continue;
-      fileSourceLines.set(file.replace(/\\/g, '/'), sourceLineMap.sourceLines);
-    }
-
-    // Step 2: 10 源代码行滑动窗口，md5 哈希
-    const hashToWindows = new Map();
-    for (const [normalizedFile, sourceLines] of fileSourceLines) {
-      if (sourceLines.length < WINDOW_SIZE) continue;
-      for (let i = 0; i <= sourceLines.length - WINDOW_SIZE; i++) {
-        const windowText = sourceLines.slice(i, i + WINDOW_SIZE)
-          .map(l => l.text).join('\n');
-        const hash = crypto.createHash('md5').update(windowText).digest('hex');
-        if (!hashToWindows.has(hash)) hashToWindows.set(hash, []);
-        hashToWindows.get(hash).push({
-          file: normalizedFile,
-          startIdx: i,
-          endIdx: i + WINDOW_SIZE - 1
-        });
-      }
-    }
-
-    // Step 3: 标记重复行 + 收集共享 hash 的滑动窗口（供分组使用）
-    const fileDuplicatedLines = new Map();
-    // 仅含跨 2+ 个窗口的共享 hash：hash -> [{file, startIdx, endIdx}]
-    const sharedHashWindows = new Map();
-
-    for (const [hash, windows] of hashToWindows) {
-      if (windows.length < 2) continue;
-      sharedHashWindows.set(hash, windows);
-
-      for (const win of windows) {
-        const sourceLines = fileSourceLines.get(win.file);
-        if (!sourceLines) continue;
-
-        if (!fileDuplicatedLines.has(win.file)) fileDuplicatedLines.set(win.file, new Set());
-
-        const lineSet = fileDuplicatedLines.get(win.file);
-
-        for (let i = win.startIdx; i <= win.endIdx; i++) {
-          lineSet.add(sourceLines[i].lineNum);
-        }
-      }
-    }
-
-    return { fileDuplicatedLines, fileSourceLines, sharedHashWindows };
-  }
-
-  /**
-   * 把行级匹配得到的「文件→重复行号集合」转为 fileDetails 数组（Step 5）
-   * - 过滤为源代码行（剔除空行/注释行）
-   * - 只含有重复的文件入 fileDetails（无重复文件由 sloc 基础记录覆盖）
-   */
-  calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources, locByRel, sccDupByRel) {
-    const fileDetails = [];
-    for (const [file, lineSet] of fileDuplicatedLines) {
-      // 兼容路径分隔符：detectWithLineLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
-      const sourceLineMap = fileSourceLineMaps.get(file)
-        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
-      if (!sourceLineMap) continue;
-
-      // 分母：优先用 scc 每个文件的 loc（与上报的 loc 完全一致），否则回退到本地分类统计
-      const filePath = this.toRelativePath(file, sources);
-      const sccLoc = locByRel ? locByRel.get(filePath) : undefined;
-      const totalFileSourceLines = (sccLoc !== undefined && sccLoc > 0) ? sccLoc : sourceLineMap.sourceCount;
-
-      // 分子：优先用 scc 对重复行的重数结果（与分母完全同工具同口径，
-      // 保证重复率明细中的有效代码行与代码规模文件级明细一致，杜绝 >100%）；
-      // scc 重数失败（返回 null）时回退到本地 lineMap 口径并做分母封顶保护
-      let duplicatedSourceLines;
-      if (sccDupByRel) {
-        duplicatedSourceLines = sccDupByRel.get(filePath) || 0;
-        // 块注释边界等极端情况下抽取行重数可能略超全集，按分母封顶
-        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
-      } else {
-        duplicatedSourceLines = 0;
-        for (const lineNum of lineSet) {
-          if (sourceLineMap.lineMap.get(lineNum)) {
-            duplicatedSourceLines++;
-          }
-        }
-        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
-      }
-      if (duplicatedSourceLines === 0) continue;  // 全是注释/空行：不入 fileDetails
-
-      const duplicationRate = totalFileSourceLines > 0
-        ? parseFloat(((duplicatedSourceLines / totalFileSourceLines) * 100).toFixed(2))
-        : 0;
-
-      fileDetails.push({
-        filePath: filePath,
-        duplicationRate,
-        duplicationLineCount: duplicatedSourceLines
-      });
-    }
-    return fileDetails;
-  }
-
-  /**
-   * 用 scc 对每个文件的重复行重新计数，保证分子（重复有效行数）与分母（loc）完全同口径。
-   *
-   * <p>实现方式：把每个文件的重复物理行按行号顺序抽取到临时镜像目录（保持原相对路径与扩展名，
-   * 让 scc 用与全量扫描完全相同的语言规则解析），单次 scc 扫描取每文件 Code 即为重复有效行数。
-   * 任何异常返回 null，调用方回退本地 lineMap 口径。
-   *
-   * @param {Map<string, Set<number>>} fileDuplicatedLines 文件 → 重复物理行号集合
-   * @param {Map<string, string>} fileContents 文件 → 内容
-   * @param {string[]} sources 源目录（用于相对路径对齐）
-   * @returns {Map<string, number>|null} 相对路径 → 重复有效行数（scc 口径），失败返回 null
-   */
-  countDuplicatedLinesWithScc(fileDuplicatedLines, fileContents, sources) {
-    if (!fileDuplicatedLines || fileDuplicatedLines.size === 0) {
-      return new Map();
-    }
-    const os = require('os');
-    const { execSync } = require('child_process');
-    const sccPath = DuplicationDetector.getSccBinPath();
-    // 临时镜像目录：mkdtemp 防并发冲突，finally 统一清理
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-scc-'));
-    try {
-      for (const [file, lineSet] of fileDuplicatedLines) {
-        const content = fileContents.get(file);
-        if (!content) continue;
-        const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
-        // 按物理行号升序抽取重复行内容，保持原相对路径与扩展名写入镜像
-        const dupTexts = [...lineSet].sort((a, b) => a - b)
-          .filter(n => lines[n - 1] !== undefined)
-          .map(n => lines[n - 1]);
-        if (dupTexts.length === 0) continue;
-        const relPath = this.toRelativePath(file, sources);
-        const dest = path.join(tmpRoot, ...relPath.split('/'));
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
-      }
-      const cmd = `"${sccPath}" -f json --no-cocomo --no-size --by-file "${tmpRoot}"`;
-      const output = execSync(cmd, {
-        encoding: 'utf8',
-        maxBuffer: 100 * 1024 * 1024,
-        timeout: 300000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-      const sccResult = JSON.parse(output.trim());
-      const dupByRel = new Map();
-      for (const lang of sccResult) {
-        for (const f of (lang.Files || [])) {
-          const name = f.Location || f.Name || '';
-          if (!name) continue;
-          const rel = path.relative(tmpRoot, name).replace(/\\/g, '/');
-          dupByRel.set(rel, f.Code || 0);
-        }
-      }
-      console.log(`[duplication] scc recount done for ${dupByRel.size} duplicated files`);
-      return dupByRel;
-    } catch (error) {
-      console.warn(`[WARN] scc recount of duplicated lines failed, fallback to local line-map: ${error.message}`);
-      return null;
-    } finally {
-      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (e) { /* 忽略清理异常 */ }
-    }
-  }
-
-  /**
-   * 获取 scc 二进制路径，策略与 slocDetector 完全一致：
-   * 优先使用 dist/bin 内置二进制，其次回退 PATH 查找（保证分子分母用同一个 scc）。
-   *
-   * @returns {string} scc 可执行路径
-   */
-  static getSccBinPath() {
-    const os = require('os');
-    // ncc bundle 内模块级 __dirname 指向打包缓存目录，必须用 __nccwpck_require__.ab（bundle 根）
-    // 定位 dist/bin 内置 scc，否则 existsSync 失败回退 PATH 上的裸 scc 导致 "scc: not found"
-    const binDir = path.join(__nccwpck_require__.ab, 'bin');
-    const ext = os.platform() === 'win32' ? '.exe' : '';
-    const localScc = path.join(binDir, `scc${ext}`);
-    if (fs.existsSync(localScc)) {
-      if (os.platform() !== 'win32') {
-        try { fs.chmodSync(localScc, 0o755); } catch (e) { /* 忽略 chmod 异常 */ }
-      }
-      return localScc;
-    }
-    return 'scc';
-  }
-
-  /**
-   * 判断文件是否为二进制文件：读取前 8KB，包含 \x00（NUL）字节即判定为二进制。
-   * 与 Git 的 binary 检测标准一致；UTF-8 文本不可能包含 \x00，因此不会误伤文本文件
-   * （.config/.cfg/.json 等文本配置即使扩展名可疑也能正常参与扫描）。
-   *
-   * @param {string} file 文件绝对路径
-   * @returns {boolean} true 表示二进制文件，应跳过重复检测
-   */
-  static isBinaryFile(file) {
-    const SNIFF_BYTES = 8192;
-    let fd = null;
-    try {
-      fd = fs.openSync(file, 'r');
-      const buf = Buffer.alloc(SNIFF_BYTES);
-      const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
-      return buf.slice(0, bytesRead).includes(0);
-    } catch (error) {
-      // 读取失败按非二进制处理，交给后续 readFileSync 的 catch 统一告警
-      return false;
-    } finally {
-      if (fd !== null) {
-        try { fs.closeSync(fd); } catch (e) { /* 忽略关闭异常 */ }
-      }
-    }
-  }
-
-  // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）
-  // hashIsCode=true：C/C++ 预处理指令（#include/#define 等）计入代码行（scc 计入）
-  // mlStrings：Python 三引号 docstring 按注释处理（scc 不计入代码行）
-  static getLanguageConfig(ext, fileName) {
-    const e = (ext || '').toLowerCase();
-    // CMake 按文件名/扩展名识别（与 scc 一致）：CMakeLists.txt / *.cmake。
-    // 支持行注释 # 与方括号块注释 #[[ ]]（#[==[ 变体罕见，暂不支持）。
-    // 此前 CMakeLists.txt 按 .txt 走 default 规则，#[[ ]] 注释体被当成有效代码行，
-    // 导致纯 license 注释撑起 10 行窗口被判重复块（scc 口径 loc=2 的矛盾现象）。
-    const base = (fileName || '').toLowerCase();
-    if (base === 'cmakelists.txt' || e === '.cmake') {
-      return { lineComments: ['#'], blockStart: null, blockEnd: null,
-        blockComments: [['#[[', ']]']], mlStrings: [], hashIsCode: false };
-    }
-    switch (e) {
-      case '.c': case '.cpp': case '.cc': case '.cxx': case '.h': case '.hpp': case '.cuh':
-        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: true };
-      case '.java': case '.js': case '.mjs': case '.cjs': case '.ts': case '.go': case '.cs':
-      case '.scala': case '.kt': case '.kts': case '.swift': case '.rs':
-        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
-      case '.php':
-        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
-      case '.py':
-        return { lineComments: ['#'], blockStart: null, blockEnd: null, mlStrings: ['"""', "'''"], hashIsCode: false };
-      case '.rb':
-        // Ruby 块注释：=begin ... =end（必须位于行首），行注释为 #
-        return { lineComments: ['#'], blockStart: '=begin', blockEnd: '=end', mlStrings: [], hashIsCode: false };
-      default:
-        // 未知语言：保守兜底，覆盖 C 风格与 # 注释
-        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
-    }
-  }
-
-  static startsWithAny(text, markers) {
-    for (const m of markers) {
-      if (text.startsWith(m)) return true;
-    }
-    return false;
-  }
-
-  // 判断一行是否以某个多行字符串标记开始；若同一行内已闭合则返回 null（不进入状态）
-  static openMlString(text, markers) {
-    for (const m of markers) {
-      if (text.startsWith(m)) {
-        return text.slice(m.length).includes(m) ? null : m;
-      }
-    }
-    return null;
-  }
-
-  // 判断一行中（非行首）是否出现三引号字符串标记。
-  // 与 scc 语义对齐：行首的三引号是 docstring（注释），行中的三引号是字符串字面量（计入代码行）。
-  // 返回 { marker, open }：open=true 表示该行打开了未在同行闭合的多行字符串；open=false 表示同行已闭合。
-  static findMidLineMlString(line, markers) {
-    for (const m of markers) {
-      const idx = line.indexOf(m);
-      // 只处理出现在行中的标记；行首由调用方走 docstring 分支
-      if (idx > 0) {
-        const after = line.slice(idx + m.length);
-        return { marker: m, open: !after.includes(m) };
-      }
-    }
-    return null;
-  }
-
-  // 逐文件构建"有效代码行"分析：与 scc 口径完全一致
-  // - 剔除空行、行注释、块注释、行首三引号 docstring（注释）
-  // - 行中三引号多行字符串（如 x = '''...'''）整块计入代码行（含内部空白行）
-  // - C/C++ 预处理指令（#include/#define 等）计入代码行
-  // 返回 { lineMap: 行号→是否有效代码行, sourceCount, sourceLines: [{lineNum,text}] }
-  buildSourceLineMap(content, filePath) {
-    const lines = content.split('\n');
-    const lang = DuplicationDetector.getLanguageConfig(
-        filePath ? path.extname(filePath) : '',
-        filePath ? path.basename(filePath) : '');
-    const lineMap = new Map();
-    const sourceLines = [];
-    let sourceCount = 0;
-    let inBlock = null;       // 块注释结束标记（null=不在块注释中；支持多组标记，如 CMake #[[ ]]）
-    let inDocstring = null;   // 行首三引号 docstring（注释）的结束标记
-    let inMlStringCode = null; // 行中三引号多行字符串（代码）的结束标记
-
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      let isCode = false;
-
-      if (inBlock !== null) {
-        // 块注释中：查找当前组的结束标记
-        if (trimmed.includes(inBlock)) inBlock = null;
-      } else if (inDocstring) {
-        // docstring（注释）中：查找结束标记
-        if (trimmed.includes(inDocstring)) inDocstring = null;
-      } else if (inMlStringCode) {
-        // 行中多行字符串中：整块计入代码行（含空白行），查找结束标记
-        isCode = true;
-        if (trimmed.includes(inMlStringCode)) inMlStringCode = null;
-      } else if (trimmed.length === 0) {
-        // 空行
-      } else if (lang.mlStrings.length > 0 && DuplicationDetector.startsWithAny(trimmed, lang.mlStrings)) {
-        // 行首三引号 → docstring，视为注释不计入代码行；未闭合则进入状态
-        const marker = DuplicationDetector.openMlString(trimmed, lang.mlStrings);
-        if (marker !== null) inDocstring = marker;
-      } else if (lang.blockComments
-          && DuplicationDetector.startsWithAny(trimmed, lang.blockComments.map(p => p[0]))) {
-        // 多组块注释开始行（如 CMake #[[ ]]）：进入后直到对应结束标记出现
-        for (const [bs, be] of lang.blockComments) {
-          if (trimmed.startsWith(bs)) {
-            if (!trimmed.slice(bs.length).includes(be)) inBlock = be;
-            break;
-          }
-        }
-      } else if (lang.blockStart && trimmed.startsWith(lang.blockStart)) {
-        // 块注释开始行
-        if (!trimmed.includes(lang.blockEnd)) inBlock = lang.blockEnd;
-      } else if (DuplicationDetector.startsWithAny(trimmed, lang.lineComments)) {
-        // 纯行注释
-      } else if (lang.hashIsCode && trimmed.startsWith('#')) {
-        // C/C++ 预处理指令：计入代码行
-        isCode = true;
-      } else {
-        // 普通代码行；若行中出现三引号且未同行闭合，则进入"行中多行字符串"状态（仍计入代码行）
-        isCode = true;
-        if (lang.mlStrings.length > 0) {
-          const mm = DuplicationDetector.findMidLineMlString(trimmed, lang.mlStrings);
-          if (mm && mm.open) inMlStringCode = mm.marker;
-        }
-      }
-
-      lineMap.set(i + 1, isCode);
-      if (isCode) {
-        sourceCount++;
-        sourceLines.push({ lineNum: i + 1, text: trimmed });
-      }
-    }
-    return { lineMap, sourceCount, sourceLines };
-  }
-
-  calculateFileDuplication(fileContents) {
-    const hashCount = new Map();
-    for (const content of fileContents.values()) {
-      const normalized = content.trim();
-      const hash = crypto.createHash('md5').update(normalized).digest('hex');
-      if (!hashCount.has(hash)) hashCount.set(hash, 0);
-      hashCount.set(hash, hashCount.get(hash) + 1);
-    }
-
-    let identicalFileCount = 0;
-    for (const count of hashCount.values()) {
-      if (count > 1) identicalFileCount += count;
-    }
-    return identicalFileCount;
-  }
-
-  // 将绝对路径转为相对路径
-  // 修复前缀匹配问题：/repo 会误匹配 /repo-other/test.py，需确保 src 是路径分隔符边界
-  toRelativePath(absolutePath, sources) {
-    if (!sources || sources.length === 0) {
-      return absolutePath.replace(/\\/g, '/');
-    }
-    const normalizedPath = absolutePath.replace(/\\/g, '/');
-    for (const src of sources) {
-      const normalizedSrc = src.replace(/\\/g, '/').replace(/\/+$/, ''); // 去掉尾部斜杠
-      // 精确前缀匹配：src 后必须跟 / 或恰好等于完整路径
-      if (normalizedPath === normalizedSrc
-          || normalizedPath.startsWith(normalizedSrc + '/')) {
-        return path.relative(src, absolutePath).replace(/\\/g, '/');
-      }
-    }
-    return absolutePath.replace(/\\/g, '/');
-  }
-
-  /**
-   * 从起始目录向上查找 git 仓库根目录（包含 .git 的目录）
-   * .git 既可能是目录（普通仓库）也可能是文件（worktree/submodule）
-   * @param {string} startDir 起始目录
-   * @returns {string|null} 仓库根目录绝对路径，找不到返回 null
-   */
-  findGitRoot(startDir) {
-    let cur = path.resolve(startDir);
-    const root = path.parse(cur).root;
-    for (let i = 0; i < 8 && cur && cur !== root; i++) {
-      if (fs.existsSync(path.join(cur, '.git'))) return cur;
-      const parent = path.dirname(cur);
-      if (parent === cur) break;
-      cur = parent;
-    }
-    return null;
-  }
-
-  // 计算完全一致文件的详情（用于总文件重复率下钻）
-  // 只在文件内容完全一致（MD5相同）时才认为是重复文件
-  // 对于一组重复文件 A、B、C，只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
-  // 前端将同一组的所有文件展示在一起，无需区分"原始文件"和"重复副本"
-  calculateIdenticalFileDetails(fileContents, sources) {
-    // 按内容哈希分组
-    const hashGroups = new Map();
-    for (const [file, content] of fileContents) {
-      const normalized = content.trim();
-      const hash = crypto.createHash('md5').update(normalized).digest('hex');
-      if (!hashGroups.has(hash)) {
-        hashGroups.set(hash, []);
-      }
-      hashGroups.get(hash).push(file);
-    }
-
-    const details = [];
-    for (const [hash, files] of hashGroups) {
-      // 只处理有重复的组（2个及以上文件内容一致）
-      if (files.length < 2) continue;
-
-      // 每组只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
-      // 前端展示时将同一组的所有文件列在一起，不再双向展示
-      const duplicatedFiles = files.map(f => this.toRelativePath(f, sources));
-
-      details.push({
-        duplicatedFiles: duplicatedFiles
-      });
-    }
-
-    return details;
-  }
-
-  /**
-   * 从行级检测的共享滑动窗口构建重复块出现位置列表（主路径）
-   *
-   * 分组策略（基于「精确文件集合分桶」+「完全一致文件去重」+「跨组去重」）：
-   * - 每个共享 hash（10 行连续窗口内容）都有一个「出现文件集合」F(hash)，即共同出现该内容的所有文件
-   * - 内容完全一致的文件（trim 后 MD5 相同）视为同一「等价类」，每个等价类选一个代表；
-   *   每个窗口的「代表集合」F' = { rep(f) | f ∈ F(hash) }
-   * - 按 F' 精确分桶：同一 F' 的窗口归入同一「重复关系」，不再做超集匹配
-   *   ——这保证同一代码块只属于一个精确文件集合组，不会被多个子集组重复包含
-   * - 同一 F' 桶内 |F'| ≥ 2 才算重复关系；桶内按代表合并连续索引为出现区间，每个区间一条 occurrence
-   * - 完全一致文件组单独输出：同一等价类 ≥2 个文件时整块成一组
-   * - 跨组去重保险：最终对同一 (file, startLine, endLine) 出现在多个组的情形，
-   *   只保留行覆盖最大的那个组，从其余组删除该 occurrence（不足 2 条的组整组丢弃）
-   *
-   * 最终分组示例（all_dup_cfile.cpp=A, test-codeql-cpp.cpp=T 完全一致，dup_cfile.cpp=D 为 A 的子集）：
-   * - 完全一致组：{A, T}（整块 1-46 行）
-   * - 部分重复组：{A, D}（L14-46 共同部分），T 因与 A 完全一致被折叠为 A，不再单独出现
-   * - apig 三文件完全共同代码 L4-16：F'={anti, codecheck, sca} 精确成一组，
-   *   不会在 {anti,codecheck}、{codecheck,sca} 等子集组重复出现
-   *
-   * 重复代码行数/重复率仍由行级检测（fileDuplicatedLines）取并集计算，与分组无关，不受影响。
-   *
-   * @param {Map} fileSourceLines file → [{lineNum, text}]（key 为 '/' 归一化路径）
-   * @param {Map} fileContents file(原始路径) → 内容
-   * @param {string[]} sources 源目录列表
-   * @param {Map} sharedHashWindows hash → [{file, startIdx, endIdx}]（仅跨 2+ 窗口的共享 hash）
-   * @returns {Array} duplicationOccurrences 列表
-   */
-  buildDuplicationOccurrences(fileSourceLines, fileContents, sources, sharedHashWindows) {
-    if (!sharedHashWindows || sharedHashWindows.size === 0) return [];
-
-    // 1) 计算「完全一致文件」的等价类：内容(trim 后)哈希相同的文件归为一类
-    //    （如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp 完全相同）
-    const contentHashToFiles = new Map(); // hash -> [归一化路径]
-    const fileToRep = new Map();          // 归一化路径 -> 该类代表
-    for (const [file, content] of fileContents) {
-      const norm = file.replace(/\\/g, '/');
-      const hash = crypto.createHash('md5').update(content.trim()).digest('hex');
-      if (!contentHashToFiles.has(hash)) contentHashToFiles.set(hash, []);
-      contentHashToFiles.get(hash).push(norm);
-    }
-    for (const files of contentHashToFiles.values()) {
-      const rep = files[0];
-      for (const f of files) fileToRep.set(f, rep);
-    }
-
-    const occurrences = [];
-    const W = this.minLines;
-
-    // 2) 预计算每个「代表文件」的 10 行滑动窗口哈希数组（每代表一份，供两两匹配复用）
-    //    repInfo: rep -> { src, winHashes: [idx], hashToPos: Map<hash, [idx]> }
-    const repInfo = new Map();
-    const allReps = new Set();
-    for (const f of fileToRep.keys()) allReps.add(fileToRep.get(f));
-    for (const rep of allReps) {
-      const src = fileSourceLines.get(rep);
-      if (!src || src.length < W) continue;
-      const winHashes = new Array(src.length - W + 1);
-      const hashToPos = new Map();
-      for (let i = 0; i <= src.length - W; i++) {
-        const h = crypto.createHash('md5')
-          .update(src.slice(i, i + W).map(l => l.text).join('\n')).digest('hex');
-        winHashes[i] = h;
-        if (!hashToPos.has(h)) hashToPos.set(h, []);
-        hashToPos.get(h).push(i);
-      }
-      repInfo.set(rep, { src, winHashes, hashToPos });
-    }
-
-    // 3) 两两代表文件：枚举所有「最大连续相同源代码行」运行（run）。
-    //    每个 run 代表一条独立的重复关系；对 run 内的两个出现位置建立连接（union），
-    //    再以「文件+索引区间」为节点做 union-find，把多文件共享同一段内容的出现位置合并成一组。
-    //    这样 A-B(1-45) 与 A-B-C(14-45) 作为两条独立关系同时保留，互不截断——
-    //    不再像旧的「按精确文件集合分桶」那样，把长关系中的窗口让给超集关系导致长关系被截断。
-    const parent = new Map();
-    const find = (k) => {
-      let root = k;
-      while (parent.get(root) !== root) root = parent.get(root);
-      while (parent.get(k) !== root) {
-        const next = parent.get(k);
-        parent.set(k, root);
-        k = next;
-      }
-      return root;
-    };
-    const union = (a, b) => {
-      const ra = find(a), rb = find(b);
-      if (ra !== rb) parent.set(ra, rb);
-    };
-    const nodeKey = (rep, s, e) => `${rep}\u0001${s}\u0001${e}`;
-
-    const repList = [...repInfo.keys()];
-    for (let a = 0; a < repList.length; a++) {
-      const A = repInfo.get(repList[a]);
-      for (let b = a + 1; b < repList.length; b++) {
-        const B = repInfo.get(repList[b]);
-        // 以 A 的窗口为基准，逐个匹配 B 中位置，并沿对角线扩展成最大 run
-        const consumed = new Set(); // "i:j" 已归属某个 run，避免重复枚举
-        for (let i = 0; i < A.winHashes.length; i++) {
-          const positions = B.hashToPos.get(A.winHashes[i]) || [];
-          for (const j of positions) {
-            const ck = i + ':' + j;
-            if (consumed.has(ck)) continue;
-            let k = 0;
-            while (i + k < A.winHashes.length && j + k < B.winHashes.length
-                && A.winHashes[i + k] === B.winHashes[j + k]) k++;
-            for (let t = 0; t < k; t++) consumed.add((i + t) + ':' + (j + t));
-            // run 覆盖的源代码索引区间（含窗口内所有行）
-            const sA = i, eA = i + W - 1 + (k - 1);
-            const sB = j, eB = j + W - 1 + (k - 1);
-            const kA = nodeKey(repList[a], sA, eA);
-            const kB = nodeKey(repList[b], sB, eB);
-            if (!parent.has(kA)) parent.set(kA, kA);
-            if (!parent.has(kB)) parent.set(kB, kB);
-            union(kA, kB);
-          }
-        }
-      }
-    }
-
-    // 3.5) 同文件内自重复：同一文件中相同内容出现在 ≥2 个非重叠位置时，这些区间互相 union。
-    //      行级检测（detectWithLineLevel）把同文件内重复计入重复行数，而上面两两匹配只覆盖跨文件，
-    //      会导致"文件内自重复"的文件（如大型 JSON 配置）重复率有值却没有 occurrence 明细。
-    //      按「对角线 run 扩展」合并长重复（8-36/72-100 不再被切成 10 行小块），并做了两项防爆保护：
-    //      a) 不用 Set 标记已处理位置对：V8 的 Set/Map 元素上限为 2^24（nodejs/node#37320），
-    //         大型配置文件的高频模板窗口对数可达千万级，Set.add 会抛
-    //         RangeError: Value undefined out of range for undefined options property undefined。
-    //         改用「对角线连续性剪枝」：若 (i-1, j-1) 处窗口哈希也相等，说明该对已被更早
-    //         起点的 run 覆盖，直接跳过——每个 run 只从其最左端点完整扩展一次。
-    //      b) 同一 hash 的出现段数超过 MAX_SELF_DUP_SEGS 时退回「所有段 union 成一组」：
-    //         超高频模板（同内容出现上百次）两两配对组合爆炸且展示价值低，整组输出即可。
-    const MAX_SELF_DUP_SEGS = 64;
-    for (const [rep, info] of repInfo) {
-      const winHashes = info.winHashes;
-      const len = winHashes.length;
-      for (const positions of info.hashToPos.values()) {
-        if (positions.length < 2) continue;
-        // 分段：连续窗口位置合段（段内为周期性重叠窗口，j-i < W 会被跳过，不参与配对）
-        const segs = [];
-        let segStart = positions[0];
-        for (let p = 1; p <= positions.length; p++) {
-          const cur = positions[p];
-          if (cur === undefined || cur !== positions[p - 1] + 1) {
-            segs.push([segStart, positions[p - 1]]);
-            segStart = cur;
-          }
-        }
-        if (segs.length < 2) continue;
-        if (segs.length > MAX_SELF_DUP_SEGS) {
-          // 超高频模板：所有段整组 union（每段一个节点），避免两两配对组合爆炸
-          const segNodes = segs.map(([a, b]) => {
-            const k = nodeKey(rep, a, b + W - 1);
-            if (!parent.has(k)) parent.set(k, k);
-            return k;
-          });
-          for (let i = 1; i < segNodes.length; i++) union(segNodes[0], segNodes[i]);
-          continue;
-        }
-        // 常规场景：跨段位置对做对角线 run 扩展（段数 ≤ MAX_SELF_DUP_SEGS，组合可控）
-        for (let si = 0; si < segs.length; si++) {
-          for (let sj = si + 1; sj < segs.length; sj++) {
-            for (let i = segs[si][0]; i <= segs[si][1]; i++) {
-              for (let j = segs[sj][0]; j <= segs[sj][1]; j++) {
-                // 只处理非重叠的后向重复位置：j ≥ i+W 保证两段窗口不重叠
-                if (j < i + W) continue;
-                // 对角线连续性剪枝：(i-1, j-1) 也同哈希 → 该对属于已扩展过的 run，跳过
-                if (i > 0 && winHashes[i - 1] === winHashes[j - 1]) continue;
-                // 从 (i, j) 沿对角线扩展最大 run：(i+k, j+k) 窗口内容一致即同属一段重复
-                let k = 0;
-                while (i + k < len && j + k < len
-                    && winHashes[i + k] === winHashes[j + k]) {
-                  k++;
-                }
-                // run 覆盖的源代码索引区间（含窗口内所有行）
-                const kA = nodeKey(rep, i, i + W - 1 + (k - 1));
-                const kB = nodeKey(rep, j, j + W - 1 + (k - 1));
-                if (!parent.has(kA)) parent.set(kA, kA);
-                if (!parent.has(kB)) parent.set(kB, kB);
-                union(kA, kB);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // 按连通分量分组：每个分量 = 一条独立的重复关系组
-    const compNodes = new Map(); // root -> Set<nodeKey>
-    for (const k of parent.keys()) {
-      const r = find(k);
-      if (!compNodes.has(r)) compNodes.set(r, new Set());
-      compNodes.get(r).add(k);
-    }
-    for (const nodes of compNodes.values()) {
-      if (nodes.size < 2) continue;
-      const fileOccs = [];
-      for (const nk of nodes) {
-        const parts = nk.split('\u0001');
-        const rep = parts[0];
-        const s = Number(parts[1]), e = Number(parts[2]);
-        const src = fileSourceLines.get(rep);
-        if (!src) continue;
-        fileOccs.push({
-          file: rep,
-          startLine: src[s].lineNum,
-          endLine: src[e].lineNum
-        });
-      }
-      if (fileOccs.length < 2) continue; // 少于 2 个出现位置不算重复
-      this.pushGroup(occurrences, fileOccs, sources, fileContents);
-    }
-
-    // 4) 处理「完全一致文件」组：同一内容哈希的 ≥2 个文件单独成一组，
-    //    每个成员各占一条出现记录（整文件为重复块）
-    //    只有源代码行数 ≥ minLines(10) 的文件才可能被滑窗检测为重复块，故以此作为阈值
-    for (const files of contentHashToFiles.values()) {
-      if (files.length < 2) continue;
-      const fileOccs = [];
-      for (const f of files) {
-        const sourceLines = fileSourceLines.get(f);
-        if (!sourceLines || sourceLines.length < this.minLines) continue;
-        fileOccs.push({
-          file: f,
-          startLine: sourceLines[0].lineNum,
-          endLine: sourceLines[sourceLines.length - 1].lineNum
-        });
-      }
-      if (fileOccs.length < 2) continue;
-      this.pushGroup(occurrences, fileOccs, sources, fileContents);
-    }
-
-    // 5) 跨组去重保险：同一 (file, startLine, endLine) 若出现在多个组，
-    //    只保留行覆盖最大的那个组中的出现位置，从其余组删除。
-    //    （理论上精确分桶后不应出现，此处作为防御性兜底，避免任何边界情形造成跨组重复）
-    this.dedupOccurrencesAcrossGroups(occurrences);
-
-    return occurrences;
-  }
-
-  // 跨组去重：同一 (filePath, startLine, endLine) 出现在多个组时，
-  // 只保留组内「所有出现位置行覆盖并集」最大的那个组中的该出现位置，从其它组删除。
-  // 删除后若某组不足 2 条出现位置，则整组丢弃。
-  // 注意：此处以 occurrence 自身的 groupId 为分组依据，不依赖外部结构。
-  dedupOccurrencesAcrossGroups(occurrences) {
-    if (!occurrences || occurrences.length === 0) return;
-
-    // 统计每个组的行覆盖并集大小，用于决定保留哪个组
-    const groupLineSpan = new Map(); // groupId -> Set<lineKey>
-    for (const o of occurrences) {
-      if (!groupLineSpan.has(o.groupId)) groupLineSpan.set(o.groupId, new Set());
-      const span = groupLineSpan.get(o.groupId);
-      for (let ln = o.startLine; ln <= o.endLine; ln++) {
-        span.add(`${o.filePath}:${ln}`);
-      }
-    }
-
-    // 对每个 (filePath, startLine, endLine) 找出它所在的所有组，保留 span 最大者
-    const blockToGroups = new Map(); // blockKey -> Set<groupId>
-    for (const o of occurrences) {
-      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
-      if (!blockToGroups.has(k)) blockToGroups.set(k, new Set());
-      blockToGroups.get(k).add(o.groupId);
-    }
-    const dropGroupForBlock = new Map(); // blockKey -> Set<groupId>(要删除的组)
-    for (const [k, gids] of blockToGroups) {
-      if (gids.size < 2) continue;
-      let best = null, bestSize = -1;
-      for (const gid of gids) {
-        const sz = groupLineSpan.get(gid) ? groupLineSpan.get(gid).size : 0;
-        if (sz > bestSize) { bestSize = sz; best = gid; }
-      }
-      const drop = new Set();
-      for (const gid of gids) if (gid !== best) drop.add(gid);
-      dropGroupForBlock.set(k, drop);
-    }
-    if (dropGroupForBlock.size === 0) return;
-
-    // 执行删除：从被标记为删除的 (blockKey, groupId) 对中移除 occurrence
-    for (let i = occurrences.length - 1; i >= 0; i--) {
-      const o = occurrences[i];
-      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
-      const drop = dropGroupForBlock.get(k);
-      if (drop && drop.has(o.groupId)) {
-        occurrences.splice(i, 1);
-      }
-    }
-
-    // 删除后若某组不足 2 条，整组丢弃
-    const groupCount = new Map();
-    for (const o of occurrences) {
-      groupCount.set(o.groupId, (groupCount.get(o.groupId) || 0) + 1);
-    }
-    for (let i = occurrences.length - 1; i >= 0; i--) {
-      if (groupCount.get(occurrences[i].groupId) < 2) {
-        occurrences.splice(i, 1);
-      }
-    }
-  }
-
-  // 把一组出现位置(重复块)统一排序、生成 groupId 并写入 occurrences
-  pushGroup(occurrences, fileOccs, sources, fileContents) {
-    // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
-    fileOccs.sort((a, b) => {
-      const relA = this.toRelativePath(a.file, sources);
-      const relB = this.toRelativePath(b.file, sources);
-      if (relA !== relB) return relA.localeCompare(relB);
-      return a.startLine - b.startLine;
-    });
-
-    // groupId 用组内所有出现位置(文件+起止行)的结构化哈希，保证不同重复关系唯一。
-    // 同一关系内各 occurrence 的内容可能不同（如共同部分与完全一致块），
-    // 因此不能再用「单一内容哈希」作为组 ID，否则不同关系可能因首块内容相同而碰撞。
-    const groupId = crypto.createHash('sha256')
-      .update(fileOccs
-          .map(o => `${this.toRelativePath(o.file, sources)}:${o.startLine}-${o.endLine}`)
-          .sort()
-          .join('\u0001'))
-      .digest('hex');
-
-    fileOccs.forEach((occ, i) => {
-      const content = this.extractBlockContent(occ.file, occ.startLine, occ.endLine, fileContents);
-      occurrences.push({
-        groupId: groupId,
-        contentHash: groupId,
-        occurrenceIndex: i,
-        filePath: this.toRelativePath(occ.file, sources),
-        startLine: occ.startLine,
-        endLine: occ.endLine,
-        content: content
-      });
-    });
-  }
-
-  /**
-   * 提取文件中指定行号区间的代码内容
-   *
-   * @param {string} file 文件路径（可能是正斜杠或反斜杠格式）
-   * @param {number} startLine 起始行（1-based）
-   * @param {number} endLine 结束行（1-based）
-   * @param {Map} fileContents file(原始路径) → 内容
-   * @returns {string} 代码内容，找不到文件时返回空字符串
-   */
-  extractBlockContent(file, startLine, endLine, fileContents) {
-    // 兼容路径分隔符：fileContents 的 key 是原始路径（Windows 下含反斜杠）
-    const content = fileContents.get(file)
-        || fileContents.get(file.replace(/\//g, '\\'));
-    if (!content) return '';
-    const lines = content.split('\n');
-    const start = Math.max(0, startLine - 1);
-    const end = Math.min(lines.length, endLine);
-    return lines.slice(start, end).join('\n');
-  }
-
-  /**
-   * 合并重叠/相邻的行号区间
-   *
-   * @param {Array} intervals [{startLine, endLine}]
-   * @param {boolean} mergeAdjacent 是否合并相邻区间（间隔 ≤1 行），默认 true。
-   *   重复块本身合并传 true（相邻重复块视为一个连续重复区域）；
-   *   扩展 ±contextLines 后的区间合并传 false（只有真正重叠才合并，避免上下文过长）。
-   * @returns {Array} 合并后的区间列表（按 startLine 排序）
-   */
-  mergeIntervals(intervals, mergeAdjacent = true) {
-    if (intervals.length === 0) return [];
-    const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
-    const merged = [Object.assign({}, sorted[0])];
-    // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
-    const overlapThreshold = mergeAdjacent ? 1 : 0;
-    for (let i = 1; i < sorted.length; i++) {
-      const last = merged[merged.length - 1];
-      if (sorted[i].startLine <= last.endLine + overlapThreshold) {
-        last.endLine = Math.max(last.endLine, sorted[i].endLine);
-        // 合并时透传附加属性（如 oversized）：任一子区间为真则合并区间视为真
-        if (sorted[i].oversized) last.oversized = true;
-      } else {
-        merged.push(Object.assign({}, sorted[i]));
-      }
-    }
-    return merged;
-  }
-
-  /**
-   * 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData。
-   *
-   * segments 生成策略：
-   * - 正常重复块：完整保留其代码内容（含 ±contextLines 上下文），无论数量多少都不省略，
-   *   保证前端能展示/高亮所有重复代码块；相邻块的上下文重叠时会合并成一个连续区间。
-   * - 超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多个 segment（分段不丢内容），
-   *   不再对超大块做「头+省略+尾」截断；快照整体随全量上报文件上传 OBS。
-   * - 未覆盖的行段由前端根据相邻片段的行号差用 "... N lines omitted ..." 占位。
-   *
-   * snapshotData 结构（整体 Base64 编码）：
-   * {
-   *   totalLines: 原始文件总行数,
-   *   contextLines: 上下文行数(5),
-   *   segments: [{originalStartLine, originalEndLine, contentB64}]
-   *   // 每个 segment 的 contentB64 为该片段代码内容再次 Base64 编码
-   * }
-   *
-   * @param {Array} fileDetails 文件明细列表
-   * @param {Array} duplicationOccurrences 重复块出现位置列表
-   * @param {Map} fileContents file(原始路径) → 内容
-   * @param {string[]} sources 源目录列表
-   * @param {number} contextLines 上下文行数，默认 5
-   * @returns {Array} 更新后的 fileDetails（每个有重复的 fileDetail 增加 snapshotData 字段）
-   */
-  buildContextSegments(fileDetails, duplicationOccurrences, fileContents, sources, contextLines = 5) {
-    if (!duplicationOccurrences || duplicationOccurrences.length === 0) {
-      return fileDetails;
-    }
-
-    // 按 filePath 分组出现位置，得到每个文件的重复块区间
-    const blocksByFile = new Map(); // relativePath → [{startLine, endLine}]
-    for (const occ of duplicationOccurrences) {
-      if (!blocksByFile.has(occ.filePath)) blocksByFile.set(occ.filePath, []);
-      blocksByFile.get(occ.filePath).push({ startLine: occ.startLine, endLine: occ.endLine });
-    }
-
-    // 构建 relativePath → content 的映射，便于按 fileDetail.filePath 查找
-    const relativeToContent = new Map();
-    for (const [absPath, content] of fileContents) {
-      relativeToContent.set(this.toRelativePath(absPath, sources), content);
-    }
-
-    for (const fileDetail of fileDetails) {
-      // 只有有重复的文件才生成快照
-      if (!fileDetail.duplicationLineCount || fileDetail.duplicationLineCount === 0) continue;
-
-      const blocks = blocksByFile.get(fileDetail.filePath);
-      if (!blocks || blocks.length === 0) continue;
-
-      // 1. 合并重叠的重复块区间
-      const mergedBlocks = this.mergeIntervals(blocks);
-
-      // 2. 获取文件内容和总行数
-      const content = relativeToContent.get(fileDetail.filePath);
-      if (!content) continue;
-      const lines = content.split('\n');
-      const totalLines = lines.length;
-
-      // 3. 每个块扩展 ±contextLines，再次合并重叠的扩展区间
-      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间。
-      const extended = mergedBlocks.map((b) => ({
-        startLine: Math.max(1, b.startLine - contextLines),
-        endLine: b.endLine + contextLines
-      }));
-      const mergedExtended = this.mergeIntervals(extended, false);
-
-      // 4. 构建 segments：所有区间（含超大块）完整保留代码内容，不做任何省略。
-      //    超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多段（分段不丢内容），
-      //    避免 Base64/JSON 单字符串过大影响传输与解析。
-      const MAX_SEGMENT_CHARS = 24 * 1024; // 单段原始内容字符数上限（仅分段用，不截断内容）
-      const segments = [];
-      // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
-      const pushSegment = (segStart, segEnd, contentText) => {
-        segments.push({
-          originalStartLine: segStart,
-          originalEndLine: segEnd,
-          contentB64: Buffer.from(contentText, 'utf8').toString('base64')
-        });
-      };
-      for (const interval of mergedExtended) {
-        const start = Math.max(1, interval.startLine);
-        const end = Math.min(totalLines, interval.endLine);
-        // 完整保留路径：按字符预算切段（分段间行号连续，内容无丢失）
-        let segStart = start;
-        let segChars = 0;
-        for (let ln = start; ln <= end; ln++) {
-          const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
-          const lineLen = lineText.length + 1; // 行内容 + 换行符
-          if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
-            pushSegment(segStart, ln - 1, lines.slice(segStart - 1, ln - 1).join('\n'));
-            segStart = ln;
-            segChars = 0;
-          }
-          segChars += lineLen;
-        }
-        if (segChars > 0) {
-          pushSegment(segStart, end, lines.slice(segStart - 1, end).join('\n'));
-        }
-      }
-
-      // 5. 构建 snapshotData JSON 并整体 Base64 编码（完整内容随全量上报文件上传 OBS，
-      //    DB snapshot_data 为 LONGTEXT 可承载 MB 级快照，不再做 512KB 截断兜底）
-      const snapshotDataObj = {
-        totalLines: totalLines,
-        contextLines: contextLines,
-        segments: segments,
-        truncated: false // 结构兼容字段：现已完整输出，恒为 false
-      };
-      const snapshotJson = JSON.stringify(snapshotDataObj);
-      fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
-    }
-
-    return fileDetails;
-  }
-
-  getEmptyResult() {
-    return {
-      totalCodeDuplicationRate: 0,
-      totalFileDuplicationRate: 0,
-      duplicatedLines: 0,
-      totalLines: 0,
-      duplicatedFiles: 0,
-      totalFiles: 0,
-      fileDetails: [],
-      identicalFileDetails: [],
-      duplicationOccurrences: []
-    };
-  }
-
-  getName() {
-    return 'duplication';
-  }
-}
-
-module.exports = DuplicationDetector;
-
-
-/***/ }),
-
-/***/ 1555:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const { execSync } = __nccwpck_require__(5317);
-const path = __nccwpck_require__(6928);
-const fs = __nccwpck_require__(9896);
-const os = __nccwpck_require__(857);
-const BaseDetector = __nccwpck_require__(554);
-const FileCollector = __nccwpck_require__(4334);
-
-class LizardDetector extends BaseDetector {
-  constructor(config = {}) {
-    super(config);
-    this.tempJsonFile = './lizard_output.json';
-    this.allowedExtensions = config.allowedExtensions || [];
-  }
-
-  async detect(source) {
-    // 支持单个路径或多个路径
-    const sources = Array.isArray(source) ? source : [source];
-    const excludeDirs = this.config.excludeDirs || [];
-
-    // 收集所有文件
-    const allFiles = [];
-    for (const src of sources) {
-      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-      allFiles.push(...files);
-    }
-
-    // 去重
-    const uniqueFiles = [...new Set(allFiles)];
-
-    if (uniqueFiles.length === 0) {
-      return this.getEmptyResult();
-    }
-
-    // Lizard 处理所有文件，统一获取函数数、函数代码行数和圈复杂度
-    let lizardResult = { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-    if (uniqueFiles.length > 0) {
-      lizardResult = this.runLizard(uniqueFiles);
-    }
-
-    const totalFunctions = lizardResult.totalFunctions;
-    const totalNloc = lizardResult.totalNloc;
-    const totalCC = lizardResult.totalCC;
-
-    if (totalFunctions === 0) {
-      return this.getEmptyResult();
-    }
-
-    // 按文件聚合函数数据，计算文件级指标
-    const fileDetails = this.aggregateFileDetails(lizardResult.functions, sources);
-
-    return {
-      totalFunctions,
-      totalNloc,
-      averageFunctionLoc: totalFunctions > 0
-        ? parseFloat((totalNloc / totalFunctions).toFixed(2))
-        : 0,
-      totalCyclomaticComplexity: totalCC,
-      averageCyclomaticComplexity: totalFunctions > 0
-        ? parseFloat((totalCC / totalFunctions).toFixed(2))
-        : 0,
-      fileDetails: fileDetails
-    };
-  }
-
-  // 将文件列表写入临时文件，供 lizard 的 -f 参数读取
-  writeInputFile(files) {
-    const tempInputPath = path.join(os.tmpdir(), `lizard_input_${Date.now()}.txt`);
-    fs.writeFileSync(tempInputPath, files.join('\n'), 'utf8');
-    return tempInputPath;
-  }
-
-  runLizard(files) {
-    const tempJsonPath = path.resolve(this.tempJsonFile);
-    let tempInputPath = null;
-
-    try {
-      if (fs.existsSync(tempJsonPath)) {
-        fs.unlinkSync(tempJsonPath);
-      }
-
-      // 使用 -f 参数从临时文件读取文件列表，避免命令行长度限制
-      tempInputPath = this.writeInputFile(files);
-      const args = ['-f', tempInputPath, '-o', tempJsonPath];
-
-      execSync('python3 -m lizard ' + args.join(' '), {
-        encoding: 'utf8',
-        maxBuffer: 50 * 1024 * 1024,
-        timeout: 300000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-
-      if (tempInputPath) {
-        fs.unlinkSync(tempInputPath);
-        tempInputPath = null;
-      }
-
-      if (!fs.existsSync(tempJsonPath)) {
-        return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-      }
-
-      const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
-      if (fs.existsSync(tempJsonPath)) fs.unlinkSync(tempJsonPath);
-
-      if (!content) {
-        return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-      }
-
-      if (content.startsWith('{')) {
-        const results = JSON.parse(content);
-        return this.calculateMetricsFromLizard(results);
-      } else {
-        return this.parseTextOutput(content);
-      }
-    } catch (error) {
-      if (tempInputPath && fs.existsSync(tempInputPath)) {
-        fs.unlinkSync(tempInputPath);
-        tempInputPath = null;
-      }
-      if (fs.existsSync(tempJsonPath)) {
-        try {
-          const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
-          if (fs.existsSync(tempJsonPath)) fs.unlinkSync(tempJsonPath);
-          if (content) {
-            if (content.startsWith('{')) {
-              return this.calculateMetricsFromLizard(JSON.parse(content));
-            } else {
-              return this.parseTextOutput(content);
-            }
-          }
-        } catch (parseError) {
-          console.warn(`Failed to parse lizard output: ${parseError.message}`);
-        }
-      }
-      console.warn(`Lizard detection warning: ${error.message}`);
-      return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-    }
-  }
-
-  parseTextOutput(content) {
-    let totalFunctions = 0;
-    let totalNloc = 0;
-    let totalCC = 0;
-    const functions = [];
-
-    const lines = content.split('\n');
-    for (const line of lines) {
-      if (!line.trim() || line.includes('NLOC') || line.includes('===') || line.includes('----')) {
-        continue;
-      }
-
-      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+?)@(\d+)-(\d+)@(.+)$/);
-      if (match) {
-        totalFunctions++;
-        const cc = parseInt(match[2], 10);
-        totalCC += cc;
-
-        // 从源文件中计算函数体有效代码行（排除方法签名和参数行）
-        const startLine = parseInt(match[7], 10);
-        const endLine = parseInt(match[8], 10);
-        const filePath = match[9].trim();
-
-        let bodyNloc = parseInt(match[1], 10);
-        try {
-          const fileContent = fs.readFileSync(filePath, 'utf8');
-          const defLines = this.countDefinitionLines(fileContent, startLine);
-          bodyNloc = this.calculateBodyNloc(fileContent, startLine, endLine, defLines);
-        } catch (e) {
-          // 读取源文件失败时，回退到 nloc - 1
-          bodyNloc = Math.max(0, bodyNloc - 1);
-        }
-
-        totalNloc += bodyNloc;
-        // 保留 filename 用于按文件聚合
-        functions.push({
-          // match[6] 是正则捕获的函数名（如 MyClass.myMethod）
-          name: match[6] || '',
-          nloc: bodyNloc,
-          cc: cc,
-          startLine: startLine,
-          endLine: endLine,
-          filename: filePath
-        });
-      }
-    }
-
-    return { totalFunctions, totalNloc, totalCC, functions };
-  }
-
-  getEmptyResult() {
-    return {
-      totalFunctions: 0,
-      totalNloc: 0,
-      averageFunctionLoc: 0,
-      totalCyclomaticComplexity: 0,
-      averageCyclomaticComplexity: 0,
-      fileDetails: []
-    };
-  }
-
-  // 根据源文件内容，计算函数定义占用的行数
-  countDefinitionLines(fileContent, startLine) {
-    const lines = fileContent.split('\n');
-    const startIndex = startLine - 1;
-    if (startIndex < 0 || startIndex >= lines.length) return 1;
-
-    for (let i = startIndex; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.endsWith(':')) {
-        return i - startIndex + 1;
-      }
-      if (line.endsWith('{')) {
-        return i - startIndex + 1;
-      }
-      if (line.endsWith(')') && i + 1 < lines.length && lines[i + 1].trim() === '{') {
-        return i - startIndex + 1;
-      }
-    }
-
-    return 1;
-  }
-
-  // 判断一行是否为有效代码行（非空行、非纯注释行）
-  static isSourceLine(line) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) return false;
-    if (trimmed.startsWith('#')) return false;
-    if (trimmed.startsWith('//')) return false;
-    if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/')) return false;
-    return true;
-  }
-
-  // 从源文件中精确计算函数体的有效代码行数（排除定义行）
-  calculateBodyNloc(fileContent, startLine, endLine, defLines) {
-    const lines = fileContent.split('\n');
-    let bodyNloc = 0;
-
-    const bodyStart = startLine - 1 + defLines;
-    const bodyEnd = endLine;
-
-    for (let i = bodyStart; i < bodyEnd && i < lines.length; i++) {
-      if (LizardDetector.isSourceLine(lines[i])) {
-        bodyNloc++;
-      }
-    }
-
-    return bodyNloc;
-  }
-
-  calculateMetricsFromLizard(results) {
-    let totalFunctions = 0;
-    let totalNloc = 0;
-    let totalCC = 0;
-    const functions = [];
-
-    if (results && results.functions) {
-      for (const func of results.functions) {
-        totalFunctions++;
-        totalCC += func.cyclomatic_complexity || 1;
-
-        // 读取源文件，精确计算函数定义行数，从 nloc 中排除
-        let bodyNloc = func.nloc || 0;
-        if (func.start_line && func.end_line && func.filename) {
-          try {
-            const fileContent = fs.readFileSync(func.filename, 'utf8');
-            const defLines = this.countDefinitionLines(fileContent, func.start_line);
-            bodyNloc = this.calculateBodyNloc(fileContent, func.start_line, func.end_line, defLines);
-          } catch (e) {
-            bodyNloc = Math.max(0, (func.nloc || 0) - 1);
-          }
-        } else {
-          bodyNloc = Math.max(0, (func.nloc || 0) - 1);
-        }
-
-        totalNloc += bodyNloc;
-        functions.push({
-          name: func.name,
-          nloc: bodyNloc,
-          cc: func.cyclomatic_complexity || 1,
-          startLine: func.start_line,
-          endLine: func.end_line,
-          filename: func.filename || ''
-        });
-      }
-    }
-
-    return { totalFunctions, totalNloc, totalCC, functions };
-  }
-
-  // 按文件聚合函数数据，保留每个函数的明细（函数名、行数、开始行、结束行）
-  aggregateFileDetails(functions, sources) {
-    if (!functions || functions.length === 0) return [];
-
-    // 按文件名分组
-    const fileMap = new Map();
-    for (const func of functions) {
-      const filename = func.filename || '';
-      if (!filename) continue;
-      if (!fileMap.has(filename)) {
-        fileMap.set(filename, []);
-      }
-      fileMap.get(filename).push(func);
-    }
-
-    const fileDetails = [];
-    for (const [filename, funcs] of fileMap) {
-      const functionCount = funcs.length;
-      const totalNloc = funcs.reduce((sum, f) => sum + (f.nloc || 0), 0);
-      const totalCC = funcs.reduce((sum, f) => sum + (f.cc || 0), 0);
-
-      // 将绝对路径转为相对路径
-      let filePath = filename;
-      if (sources && sources.length > 0) {
-        for (const src of sources) {
-          const normalizedSrc = src.replace(/\\/g, '/');
-          const normalizedPath = filePath.replace(/\\/g, '/');
-          if (normalizedPath.startsWith(normalizedSrc)) {
-            filePath = path.relative(src, filename);
-            break;
-          }
-        }
-      }
-      filePath = filePath.replace(/\\/g, '/');
-
-      // 保留每个函数的明细信息
-      const functionDetails = funcs.map(f => ({
-        functionName: f.name || '',
-        functionLoc: f.nloc || 0,
-        startLine: f.startLine || 0,
-        endLine: f.endLine || 0
-      }));
-
-      fileDetails.push({
-        filePath: filePath,
-        functionCount: functionCount,
-        avgFunctionLoc: parseFloat((totalNloc / functionCount).toFixed(2)),
-        avgCyclomaticComplexity: parseFloat((totalCC / functionCount).toFixed(2)),
-        functionDetails: functionDetails
-      });
-    }
-
-    return fileDetails;
-  }
-
-  getName() {
-    return 'lizard';
-  }
-}
-
-module.exports = LizardDetector;
-
-
-/***/ }),
-
-/***/ 5722:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const { execSync } = __nccwpck_require__(5317);
-const path = __nccwpck_require__(6928);
-const fs = __nccwpck_require__(9896);
-const os = __nccwpck_require__(857);
-const BaseDetector = __nccwpck_require__(554);
-
-// scc 二进制文件路径：优先使用项目内置的 bin 目录，其次从 PATH 查找
-function getSccPath() {
-  const binDir = __nccwpck_require__.ab + "bin";
-  const ext = os.platform() === 'win32' ? '.exe' : '';
-  const localScc = path.join(binDir, `scc${ext}`);
-  if (fs.existsSync(localScc)) {
-    // 非 Windows 环境：zip 打包 / git clone 在 Linux 解压后可能丢失可执行权限位，
-    // 导致 "Permission denied"。此处运行时强制赋予 0o755，保证可执行。
-    if (os.platform() !== 'win32') {
-      try {
-        fs.chmodSync(localScc, 0o755);
-      } catch (e) {
-        console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
-      }
-    }
-    return localScc;
-  }
-  return 'scc';
-}
-
-class SlocDetector extends BaseDetector {
-  constructor(config = {}) {
-    super(config);
-    this.allowedExtensions = config.allowedExtensions || [];
-    this.sccPath = getSccPath();
-  }
-
-  async detect(source) {
-    const sources = Array.isArray(source) ? source : [source];
-    const excludeDirs = this.config.excludeDirs || [];
-
-    const sccArgs = this.buildSccArgs(sources, excludeDirs);
-
-    try {
-      const result = this.runScc(sccArgs, sources);
-      return result;
-    } catch (error) {
-      console.warn(`[WARN] scc 执行失败: ${error.message}，回退到逐文件统计`);
-      return this.fallbackDetect(sources, excludeDirs);
-    }
-  }
-
-  // 构建 scc 命令行参数
-  buildSccArgs(sources, excludeDirs) {
-    const args = ['-f', 'json', '--no-cocomo', '--no-size', '--by-file'];
-
-    // 排除目录
-    for (const dir of excludeDirs) {
-      args.push('--exclude-dir', dir);
-    }
-
-    // 限制文件扩展名
-    if (this.allowedExtensions.length > 0) {
-      const exts = this.allowedExtensions
-        .map(e => e.replace(/^\./, ''))
-        .join(',');
-      args.push('--include-ext', exts);
-    }
-
-    // 源目录
-    for (const src of sources) {
-      args.push(src);
-    }
-
-    return args;
-  }
-
-  // 执行 scc 并解析 JSON 输出
-  runScc(args, sources) {
-    const cmd = `"${this.sccPath}" ${args.join(' ')}`;
-
-    const output = execSync(cmd, {
-      encoding: 'utf8',
-      maxBuffer: 100 * 1024 * 1024,
-      timeout: 300000,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    const sccResult = JSON.parse(output.trim());
-
-    // scc JSON 输出格式: 按语言分组
-    // [{ Name, Code, Comment, Blank, Lines, Complexity, Count, Bytes, Files:[...] }]
-    let totalCode = 0;
-    let totalComment = 0;
-    let totalBlank = 0;
-    let totalLines = 0;
-    let totalComplexity = 0;
-    let totalFiles = 0;
-
-    // 收集文件级指标
-    const fileDetails = [];
-
-    for (const lang of sccResult) {
-      totalCode += lang.Code || 0;
-      totalComment += lang.Comment || 0;
-      totalBlank += lang.Blank || 0;
-      totalLines += lang.Lines || 0;
-      totalComplexity += lang.Complexity || 0;
-      totalFiles += lang.Count || 0;
-
-      // 解析 --by-file 输出的每个文件
-      if (lang.Files && Array.isArray(lang.Files)) {
-        for (const file of lang.Files) {
-          // scc 不同版本的 --by-file JSON 输出字段名可能不同：
-          //   - 旧版：Name 是完整路径
-          //   - 新版（3.x+）：Name 是文件名，Location 是完整路径
-          // 优先取完整路径字段（Location），其次 Name（可能是文件名或完整路径）
-          const fileName = file.Location || file.Name || file.Path || file.File || '';
-          // 过滤掉语言汇总行（字段为空或不含路径分隔符/扩展名的语言名）
-          if (!fileName || !this.isFilePath(fileName)) {
-            console.log(`[DEBUG] 跳过非文件条目: Name="${fileName}", Code=${file.Code || 0}, keys=${Object.keys(file).join(',')}`);
-            continue;
-          }
-          // 将绝对路径转为相对路径
-          let filePath = this.toRelativePath(fileName, sources);
-          fileDetails.push({
-            filePath: filePath,
-            language: lang.Name || '',
-            loc: file.Code || 0
-          });
-        }
-      }
-    }
-
-    console.log(`  - Total files: ${totalFiles}`);
-    console.log(`  - Code lines (codeScale): ${totalCode}`);
-    console.log(`  - Comment lines: ${totalComment}`);
-    console.log(`  - Blank lines: ${totalBlank}`);
-    console.log(`  - Total lines: ${totalLines}`);
-    console.log(`  - Complexity: ${totalComplexity}`);
-    console.log(`  - File details count: ${fileDetails.length}`);
-
-    // 如果 scc --by-file 未产出有效文件明细，回退到逐文件统计获取明细
-    if (fileDetails.length === 0) {
-      console.log('[DEBUG] scc --by-file 未产出文件明细，回退到逐文件统计');
-      const FileCollector = __nccwpck_require__(4334);
-      const excludeDirs = this.config.excludeDirs || [];
-      const allFiles = [];
-      for (const src of sources) {
-        const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-        allFiles.push(...files);
-      }
-      const uniqueFiles = [...new Set(allFiles)];
-      for (const file of uniqueFiles) {
-        try {
-          const content = fs.readFileSync(file, 'utf8');
-          let sourceCount = 0;
-          const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('/*') && !trimmed.startsWith('*') && !trimmed.startsWith('#')) {
-              sourceCount++;
-            }
-          }
-          const filePath = this.toRelativePath(file, sources);
-          const ext = path.extname(file).toLowerCase();
-          const langMap = {
-            '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
-            '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
-            '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
-            '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
-            '.scala': 'Scala', '.swift': 'Swift'
-          };
-          fileDetails.push({
-            filePath: filePath,
-            language: langMap[ext] || ext.replace('.', ''),
-            loc: sourceCount
-          });
-        } catch (e) {
-          console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
-        }
-      }
-    }
-
-    return {
-      codeScale: totalCode,
-      rawLines: totalLines,
-      commentLines: totalComment,
-      blankLines: totalBlank,
-      sourceLines: totalCode,
-      complexity: totalComplexity,
-      fileDetails: fileDetails
-    };
-  }
-
-  // 判断 Name 是否为文件路径（而非语言名）
-  isFilePath(name) {
-    if (!name) return false;
-    // 文件路径应包含扩展名（含点号）或路径分隔符
-    return name.includes('.') || name.includes('/') || name.includes('\\');
-  }
-
-  // 将绝对路径转为相对路径（统一使用 / 分隔符）
-  toRelativePath(filePath, sources) {
-    if (sources && sources.length > 0) {
-      for (const src of sources) {
-        const normalizedSrc = src.replace(/\\/g, '/');
-        const normalizedPath = filePath.replace(/\\/g, '/');
-        if (normalizedPath.startsWith(normalizedSrc)) {
-          filePath = path.relative(src, filePath);
-          break;
-        }
-      }
-    }
-    return filePath.replace(/\\/g, '/');
-  }
-
-  // 回退方案：当 scc 不可用时，逐文件读取并统计行数
-  fallbackDetect(sources, excludeDirs) {
-    const FileCollector = __nccwpck_require__(4334);
-    const allFiles = [];
-    for (const src of sources) {
-      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-      allFiles.push(...files);
-    }
-    const uniqueFiles = [...new Set(allFiles)];
-
-    if (uniqueFiles.length === 0) {
-      return { codeScale: 0, rawLines: 0, commentLines: 0, blankLines: 0, sourceLines: 0, complexity: 0, fileDetails: [] };
-    }
-
-    let totalSource = 0;
-    let totalAll = 0;
-    let totalComment = 0;
-    let totalEmpty = 0;
-
-    // 收集文件级指标
-    const fileDetails = [];
-
-    for (const file of uniqueFiles) {
-      try {
-        const content = fs.readFileSync(file, 'utf8');
-        let normalized = content.replace(/\r\n|\r/g, '\n');
-        if (normalized.slice(-1) === '\n') normalized = normalized.slice(0, -1);
-        const lines = normalized.split('\n');
-        totalAll += lines.length;
-
-        let fileSourceLines = 0;
-        let inBlock = false;
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (inBlock) {
-            totalComment++;
-            if (trimmed.includes('*/')) inBlock = false;
-            continue;
-          }
-          if (trimmed === '') { totalEmpty++; continue; }
-          if (trimmed.startsWith('/*')) {
-            totalComment++;
-            if (!trimmed.includes('*/')) inBlock = true;
-            continue;
-          }
-          if (trimmed.startsWith('//')) { totalComment++; continue; }
-          totalSource++;
-          fileSourceLines++;
-        }
-
-        // 将绝对路径转为相对路径
-        let filePath = file;
-        for (const src of sources) {
-          const normalizedSrc = src.replace(/\\/g, '/');
-          const normalizedPath = filePath.replace(/\\/g, '/');
-          if (normalizedPath.startsWith(normalizedSrc)) {
-            filePath = path.relative(src, file);
-            break;
-          }
-        }
-        filePath = filePath.replace(/\\/g, '/');
-
-        // 根据扩展名推断语言
-        const ext = path.extname(file).toLowerCase();
-        const langMap = {
-          '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
-          '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
-          '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
-          '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
-          '.scala': 'Scala', '.swift': 'Swift'
-        };
-
-        fileDetails.push({
-          filePath: filePath,
-          language: langMap[ext] || ext.replace('.', ''),
-          loc: fileSourceLines
-        });
-      } catch (e) {
-        console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
-      }
-    }
-
-    console.log(`[DEBUG] Fallback statistics (scc 不可用):`);
-    console.log(`  - Code scale: ${totalSource}`);
-
-    return {
-      codeScale: totalSource,
-      rawLines: totalAll,
-      commentLines: totalComment,
-      blankLines: totalEmpty,
-      sourceLines: totalSource,
-      complexity: 0,
-      fileDetails: fileDetails
-    };
-  }
-
-  getName() {
-    return 'sloc';
-  }
-}
-
-module.exports = SlocDetector;
-
-
-/***/ }),
-
-/***/ 6863:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const SlocDetector = __nccwpck_require__(5722);
-const LizardDetector = __nccwpck_require__(1555);
-const DuplicationDetector = __nccwpck_require__(9263);
-const MetricsCalculator = __nccwpck_require__(7386);
-const CoderepoUploader = __nccwpck_require__(4786);
-const ConfigLoader = __nccwpck_require__(889);
-const Logger = __nccwpck_require__(8555);
-const FileUtils = __nccwpck_require__(4760);
-const FileCollector = __nccwpck_require__(4334);
-const path = __nccwpck_require__(6928);
-
-// 将日期格式化为 yyyy-MM-dd HH:mm:ss
-function formatDateTime(date) {
-  // 固定按东八区输出：CI runner 容器时区多为 UTC，用本地组件取值会使检测时间比实际早 8 小时
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hourCycle: 'h23'
-  });
-  // en-CA 输出形如 "2026-08-24, 11:05:29"，把逗号替换为空格统一为 yyyy-MM-dd HH:mm:ss
-  return fmt.format(date).replace(',', '');
-}
-
-class MetricsScanner {
-  constructor(config = {}) {
-    this.config = config;
-    this.logger = new Logger({ verbose: config.verbose });
-    this.workingDir = config.workingDir || process.cwd();
-
-    const allowedExtensions = config.allowedExtensions || [];
-
-    this.slocDetector = new SlocDetector({
-      excludeDirs: config.excludeDirs,
-      allowedExtensions: allowedExtensions
-    });
-
-    this.lizardDetector = new LizardDetector({
-      excludeDirs: config.excludeDirs,
-      allowedExtensions: allowedExtensions,
-      lizardPath: config.detectors?.lizard?.path || 'lizard',
-      workingDir: this.workingDir
-    });
-
-    this.duplicationDetector = new DuplicationDetector({
-      excludeDirs: config.excludeDirs,
-      allowedExtensions: allowedExtensions,
-      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"
-      // - minLines=10：连续代码块至少 10 行才算一次重复
-      minLines: config.detectors?.duplication?.minLines || 10
-    });
-
-    this.uploader = new CoderepoUploader({
-      coderepoUrl: config.uploader?.coderepoUrl,
-      timeout: (config.uploader?.timeout || 30) * 1000,
-      apigAppKey: config.uploader?.apigAppKey,
-      apigAppSecret: config.uploader?.apigAppSecret,
-      // OBS 上传凭证（复用 upload-sarif-action 同一套 OBS AK/SK）
-      obsAk: config.uploader?.obsAk,
-      obsSk: config.uploader?.obsSk
-    });
-  }
-
-  async scan(options = {}) {
-    const startTime = new Date();
-    const startTimeFormatted = formatDateTime(startTime);
-    this.logger.info('Starting code metrics scan...');
-
-    const sourceInput = options.sourceDir || this.config.sourceDir;
-    const sources = Array.isArray(sourceInput) ? sourceInput : [sourceInput];
-    const resolvedSources = sources.map(src =>
-      path.isAbsolute(src) ? src : path.resolve(this.workingDir, src)
-    );
-
-    const previewFiles = FileCollector.collectFiles(
-      resolvedSources,
-      this.config.excludeDirs || [],
-      this.config.allowedExtensions || []
-    );
-    let slocResult = {};
-    let lizardResult = {};
-    let duplicationResult = {};
-    let status = 0;
-
-    try {
-      if (this.config.detectors?.sloc?.enabled !== false) {
-        this.logger.info('Running scc detector (code size)...');
-        slocResult = await this.slocDetector.detect(resolvedSources);
-      }
-
-      if (this.config.detectors?.lizard?.enabled !== false) {
-        this.logger.info('Running lizard detector (function complexity)...');
-        lizardResult = await this.lizardDetector.detect(resolvedSources);
-      }
-
-      if (this.config.detectors?.duplication?.enabled !== false) {
-        this.logger.info('Running duplication detector (code duplication)...');
-        // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
-        duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
-      }
-
-      const mergedMetrics = MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
-      MetricsCalculator.validate(mergedMetrics);
-      const formattedMetrics = MetricsCalculator.formatForReport(mergedMetrics);
-
-      // 从格式化结果中分离 fileDetails 和总体指标
-      const { fileDetails, ...overallMetrics } = formattedMetrics;
-
-      const endTime = new Date();
-      const endTimeFormatted = formatDateTime(endTime);
-      const durationMs = endTime.getTime() - startTime.getTime();
-
-      const result = {
-        ...overallMetrics,
-        fileDetails: fileDetails,
-        detectionInfo: {
-          startTime: startTimeFormatted,
-          endTime: endTimeFormatted,
-          durationMs: durationMs,
-          sources: resolvedSources,
-          tools: {
-            sloc: this.config.detectors?.sloc?.enabled !== false,
-            lizard: this.config.detectors?.lizard?.enabled !== false,
-            duplication: this.config.detectors?.duplication?.enabled !== false
-          }
-        }
-      };
-
-      this.logger.info(`Scan completed in ${durationMs}ms`);
-
-      // 诊断日志：输出扫描结果规模，用于定位大数据量下的序列化超限问题
-      let snapshotTotal = 0;
-      for (const fd of fileDetails || []) {
-        if (fd.snapshotData) snapshotTotal += fd.snapshotData.length;
-      }
-      this.logger.info(
-        `Result scale: fileDetails=${(fileDetails || []).length}, snapshotDataTotal=${snapshotTotal} bytes, occurrences=${(formattedMetrics.duplicationOccurrences || []).length}`
-      );
-
-      if (options.output || this.config.output) {
-        const outputPath = path.isAbsolute(options.output || this.config.output)
-          ? (options.output || this.config.output)
-          : path.resolve(this.workingDir, options.output || this.config.output);
-        // 本地输出文件剥离大数据字段（snapshotData 与 duplicationOccurrences 的明文 content），
-        // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length。
-        // - snapshotData 仅详情页展示用，DB 上报另有一份
-        // - occurrence 的明文 content 仅上报用（uploader 已 Base64 编码后分批上报），
-        //   本地保留 groupId/filePath/起止行等元数据即可
-        const compactResult = {
-          ...result,
-          fileDetails: (result.fileDetails || []).map(fd => {
-            const { snapshotData, ...rest } = fd;
-            return rest;
-          }),
-          // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
-          // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
-          duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
-            const MAX_CONTENT_CHARS = 15 * 1024;
-            if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
-              return {
-                ...occ,
-                content: this.uploader.clipOversizeContent(occ.content, MAX_CONTENT_CHARS)
-              };
-            }
-            return occ;
-          })
-        };
-        FileUtils.writeJsonFile(outputPath, compactResult);
-        this.logger.info(`Results saved to: ${outputPath}`);
-        this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
-      }
-
-      if (options.upload || this.config.uploader?.enabled) {
-        const uploadResult = await this.uploader.upload(formattedMetrics, {
-          gitUrl: options.gitUrl,
-          branchName: options.branchName,
-          pipelineRunId: options.pipelineRunId,
-          runNumber: options.runNumber,
-          startTime: startTimeFormatted,
-          endTime: endTimeFormatted,
-          status: status
-        });
-
-        if (uploadResult.success) {
-          this.logger.info(`Successfully uploaded metrics, recordId: ${uploadResult.recordId}`);
-          result.uploadInfo = { success: true, recordId: uploadResult.recordId };
-        } else {
-          this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
-          result.uploadInfo = { success: false, error: uploadResult.error };
-        }
-      }
-
-      return result;
-
-    } catch (error) {
-      this.logger.error(`Scan failed: ${error.message}`);
-      if (error && error.stack) {
-        // 输出堆栈头部，辅助定位是哪个 JSON.stringify / 哪个阶段抛错
-        this.logger.error(`Stack head: ${error.stack.split('\n').slice(0, 12).join('\n')}`);
-      }
-
-      // 失败时也上传报告，附带错误信息
-      if (options.upload || this.config.uploader?.enabled) {
-        const endTimeFormatted = formatDateTime(new Date());
-        try {
-          await this.uploader.upload({}, {
-            gitUrl: options.gitUrl,
-            branchName: options.branchName,
-            pipelineRunId: options.pipelineRunId,
-            runNumber: options.runNumber,
-            startTime: startTimeFormatted,
-            endTime: endTimeFormatted,
-            status: 1,
-            errorMessage: error.message
-          });
-        } catch (uploadError) {
-          this.logger.error(`Failed to upload error report: ${uploadError.message}`);
-        }
-      }
-
-      throw error;
-    }
-  }
-}
-
-module.exports = {
-  MetricsScanner,
-  ConfigLoader,
-  SlocDetector,
-  LizardDetector,
-  DuplicationDetector,
-  MetricsCalculator
-};
-
-
-/***/ }),
-
-/***/ 4786:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const axios = __nccwpck_require__(7269);
-const crypto = __nccwpck_require__(6982);
-const fs = __nccwpck_require__(9896);
-const os = __nccwpck_require__(857);
-const path = __nccwpck_require__(6928);
-const { execSync, execFileSync } = __nccwpck_require__(5317);
-
-/**
- * 华为云 APIG 签名器（SDK-HMAC-SHA256）
- * 基于官方 SDK APIGW-javascript-sdk-2.0.6 的 signer.js 完全对齐
- * 签名流程：CanonicalRequest → StringToSign → HMAC-SHA256 → Authorization
- */
-class ApigSigner {
-  constructor(ak, sk) {
-    this.ak = ak;
-    this.sk = sk;
-  }
-
-  /**
-   * 对请求进行签名，返回包含签名头的完整 headers
-   * 与官方 SDK 的 Signer.prototype.Sign() 方法对齐
-   */
-  sign({ method, url, headers = {}, body = '' }) {
-    // 解析 URL，提取 host、pathname、查询参数
-    const parsed = new URL(url);
-    const host = parsed.host;
-
-    // 解析 URI 和查询参数（与官方 SDK 的 HttpRequest 构造函数对齐）
-    const uri = decodeURIComponent(parsed.pathname);
-    const query = {};
-    if (parsed.search) {
-      const searchStr = parsed.search.substring(1);
-      for (const pair of searchStr.split('&')) {
-        const idx = pair.indexOf('=');
-        const key = idx >= 0 ? pair.substring(0, idx) : pair;
-        const value = idx >= 0 ? pair.substring(idx + 1) : '';
-        if (key) {
-          const decodedKey = decodeURIComponent(key);
-          const decodedValue = decodeURIComponent(value);
-          if (query[decodedKey] === undefined) {
-            query[decodedKey] = [decodedValue];
-          } else {
-            query[decodedKey].push(decodedValue);
-          }
-        }
-      }
-    }
-
-    // 设置时间戳（检查是否已有 X-Sdk-Date 头）
-    let datetime = null;
-    for (const k of Object.keys(headers)) {
-      if (k.toLowerCase() === 'x-sdk-date') {
-        datetime = headers[k];
-        break;
-      }
-    }
-    if (!datetime) {
-      datetime = this._getDateTime();
-      headers['X-Sdk-Date'] = datetime;
-    }
-
-    // 非 PUT/PATCH/POST 时 body 不参与签名（官方 SDK 规范）
-    if (method !== 'PUT' && method !== 'PATCH' && method !== 'POST') {
-      body = '';
-    }
-
-    // 确保 host 头存在
-    let hasHost = false;
-    for (const k of Object.keys(headers)) {
-      if (k.toLowerCase() === 'host') { hasHost = true; break; }
-    }
-    if (!hasHost) {
-      headers['Host'] = host;
-    }
-
-    // 获取参与签名的 header 列表（所有 header 名称小写排序）
-    const signedHeaderNames = Object.keys(headers).map(k => k.toLowerCase()).sort();
-
-    // 构造规范化 URI：每段 URL 编码后用 / 拼接，末尾强制补 /
-    const canonicalUri = this._canonicalUri(uri);
-
-    // 构造规范化查询字符串
-    const canonicalQs = this._canonicalQueryString(query);
-
-    // 构造规范化 Headers
-    const lowerHeaders = {};
-    for (const [k, v] of Object.entries(headers)) {
-      lowerHeaders[k.toLowerCase()] = v;
-    }
-    const canonicalHeaders = signedHeaderNames
-      .map(name => `${name}:${lowerHeaders[name].trim()}`)
-      .join('\n') + '\n';
-
-    const signedHeadersStr = signedHeaderNames.join(';');
-
-    // 计算 body 哈希（如果请求头中有 x-sdk-content-sha256，直接使用其值）
-    let hashedPayload;
-    let hasContentSha256 = false;
-    for (const k of Object.keys(headers)) {
-      if (k.toLowerCase() === 'x-sdk-content-sha256') {
-        hashedPayload = headers[k];
-        hasContentSha256 = true;
-        break;
-      }
-    }
-    if (!hasContentSha256) {
-      hashedPayload = this._sha256Hex(body);
-    }
-
-    // 构造规范化请求
-    const canonicalRequest = [
-      method.toUpperCase(),
-      canonicalUri,
-      canonicalQs,
-      canonicalHeaders,
-      signedHeadersStr,
-      hashedPayload
-    ].join('\n');
-
-    // 构造待签名字符串
-    const stringToSign = [
-      'SDK-HMAC-SHA256',
-      datetime,
-      this._sha256Hex(canonicalRequest)
-    ].join('\n');
-
-    // 计算签名
-    const signature = this._hmacSha256Hex(this.sk, stringToSign);
-
-    // 构造 Authorization 头
-    headers['Authorization'] = `SDK-HMAC-SHA256 Access=${this.ak}, SignedHeaders=${signedHeadersStr}, Signature=${signature}`;
-
-    return headers;
-  }
-
-  /**
-   * 构造规范化 URI：每段用 SDK 的 urlEncode 编码，末尾强制补 /
-   * 与官方 SDK 的 CanonicalURI() 函数完全对齐
-   */
-  _canonicalUri(uri) {
-    if (!uri || uri === '') return '/';
-    const parts = uri.split('/');
-    const encoded = parts.map(s => this._urlEncode(s));
-    let urlpath = encoded.join('/');
-    // 末尾强制补 /（官方 SDK 规范，APIG 网关签名校验要求）
-    if (urlpath[urlpath.length - 1] !== '/') {
-      urlpath = urlpath + '/';
-    }
-    return urlpath;
-  }
-
-  /**
-   * 构造规范化查询字符串
-   * 与官方 SDK 的 CanonicalQueryString() 函数对齐
-   */
-  _canonicalQueryString(query) {
-    const keys = Object.keys(query).sort();
-    if (keys.length === 0) return '';
-    const parts = [];
-    for (const key of keys) {
-      const k = this._urlEncode(key);
-      const values = Array.isArray(query[key]) ? [...query[key]].sort() : [query[key]];
-      for (const v of values) {
-        parts.push(`${k}=${this._urlEncode(v)}`);
-      }
-    }
-    return parts.join('&');
-  }
-
-  /**
-   * URL 编码：基于 Node.js querystring 模块改写，与官方 SDK 的 urlEncode() 完全对齐
-   * 不编码字符：A-Z a-z 0-9 - . _ ~
-   * 与 encodeURIComponent 的区别：! * ' ( ) 会被编码（encodeURIComponent 不编码这些）
-   */
-  _urlEncode(str) {
-    if (typeof str !== 'string') {
-      if (typeof str === 'object') str = String(str);
-      else str += '';
-    }
-    const hexTable = [];
-    for (let i = 0; i < 256; ++i) {
-      hexTable[i] = '%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase();
-    }
-    const noEscape = [
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0,
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1,
-      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0
-    ];
-    let out = '';
-    let lastPos = 0;
-    for (let i = 0; i < str.length; ++i) {
-      const c = str.charCodeAt(i);
-      if (c < 0x80) {
-        if (noEscape[c] === 1) continue;
-        if (lastPos < i) out += str.slice(lastPos, i);
-        lastPos = i + 1;
-        out += hexTable[c];
-        continue;
-      }
-      if (lastPos < i) out += str.slice(lastPos, i);
-      if (c < 0x800) {
-        lastPos = i + 1;
-        out += hexTable[0xC0 | (c >> 6)] + hexTable[0x80 | (c & 0x3F)];
-        continue;
-      }
-      if (c < 0xD800 || c >= 0xE000) {
-        lastPos = i + 1;
-        out += hexTable[0xE0 | (c >> 12)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
-        continue;
-      }
-      ++i;
-      if (i >= str.length) throw new URIError('ERR_INVALID_URI');
-      const c2 = str.charCodeAt(i) & 0x3FF;
-      lastPos = i + 1;
-      c = 0x10000 + (((c & 0x3FF) << 10) | c2);
-      out += hexTable[0xF0 | (c >> 18)] + hexTable[0x80 | ((c >> 12) & 0x3F)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
-    }
-    if (lastPos === 0) return str;
-    if (lastPos < str.length) return out + str.slice(lastPos);
-    return out;
-  }
-
-  _getDateTime() {
-    const now = new Date();
-    const p = (n) => String(n).padStart(2, '0');
-    return `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}T${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}Z`;
-  }
-
-  _sha256Hex(data) {
-    return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
-  }
-
-  _hmacSha256Hex(key, data) {
-    return crypto.createHmac('sha256', key).update(data, 'utf8').digest('hex');
-  }
-}
-
-class CoderepoUploader {
-  constructor(config = {}) {
-    this.baseUrl = config.coderepoUrl || 'http://localhost:8080';
-    this.timeout = config.timeout || 30000;
-    this.apigAppKey = config.apigAppKey || '';
-    this.apigAppSecret = config.apigAppSecret || '';
-    // OBS 上传凭证：复用 openlibing 平台 gitcode-action 统一桶（私有对象，供后端按 objectKey 下载）
-    this.obsAk = config.obsAk || '';
-    this.obsSk = config.obsSk || '';
-    // 平台所有 gitcode-action 插件上报结果的统一桶，code-metrics-action 目录存放代码度量上报
-    this.obsBucket = config.obsBucket || 'openlibing-gitcode-action';
-    // OBS 写/读 endpoint（华为云西南-贵阳一）
-    this.obsEndpoint = config.obsEndpoint || 'obs.cn-southwest-2.myhuaweicloud.com';
-    this.obsutilPath = '';
-  }
-
-  /**
-   * 上报代码度量指标。
-   *
-   * 流程（OBS 中转 + 单接口，彻底规避 APIG 12MB 请求体上限）：
-   * 1. 组装全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences），写本地临时 json
-   * 2. 上传到 OBS（桶 openlibing-gitcode-action / code-metrics-action/ 前缀，私有对象）
-   * 3. 仅调一次 POST /metrics/code/report：只传元数据 + obsUrl（固定格式下载链接），后端按 objectKey 下载解析入库
-   *
-   * 兜底：即使第 3 步上报失败（网络原因），第 2 步 OBS 文件已完整上传，可通过平台保底定时任务
-   * （入参 objectKey）下载补导入，保证数据不丢失。
-   *
-   * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
-   */
-  async upload(metricsData, options = {}) {
-    // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
-    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
-
-    // 1. 组装全量上报文件：元数据 + 全部指标明细（含 snapshotData / contentB64 等大 payload）
-    const fullPayload = {
-      gitUrl: options.gitUrl,
-      branchName: options.branchName,
-      pipelineRunId: options.pipelineRunId,
-      runNumber: options.runNumber,
-      metricsData: overallMetrics,
-      detectionStartedAt: options.startTime,
-      detectionCompletedAt: options.endTime,
-      status: options.status || 0,
-      fileDetails: fileDetails || [],
-      identicalFileDetails: identicalFileDetails || [],
-      duplicationOccurrences: this.encodeOccurrences(duplicationOccurrences || [])
-    };
-    if (options.errorMessage) {
-      fullPayload.errorMessage = options.errorMessage;
-    }
-
-    // 2. 上传全量文件到 OBS，得到固定格式下载链接
-    const obsResult = await this.uploadFullPayloadToOBS(fullPayload, options);
-    if (!obsResult.success) {
-      // OBS 上传失败：数据未落盘，直接返回失败（可整体重扫重传）
-      return obsResult;
-    }
-
-    // 3. 单次 /report：只传元数据 + obsUrl（body 恒定极小，远低于 APIG 12MB 上限）
-    const payload = {
-      gitUrl: options.gitUrl,
-      branchName: options.branchName,
-      pipelineRunId: options.pipelineRunId,
-      runNumber: options.runNumber,
-      detectionStartedAt: options.startTime,
-      detectionCompletedAt: options.endTime,
-      status: options.status || 0,
-      obsUrl: obsResult.obsUrl
-    };
-    if (options.errorMessage) {
-      payload.errorMessage = options.errorMessage;
-    }
-
-    const mainUrl = this.buildUrl('/metrics/code/report');
-    const mainBody = JSON.stringify(payload);
-    console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${obsResult.obsUrl}`);
-    const mainResult = await this.sendSignedRequest('POST', mainUrl, mainBody);
-    if (!mainResult.success) {
-      // 上报失败但 OBS 文件已完整上传：打印固定格式链接，提示可走保底定时任务补导入
-      console.warn(
-        `[upload] report failed: ${mainResult.error}. 全量数据已上传 OBS(${obsResult.obsUrl})，` +
-          '可通过平台保底定时任务(入参 objectKey)补导入'
-      );
-      return { ...mainResult, obsUrl: obsResult.obsUrl };
-    }
-
-    return { success: true, recordId: mainResult.recordId, obsUrl: obsResult.obsUrl };
-  }
-
-  /**
-   * 组装全量上报文件并上传到 OBS，返回固定格式下载链接与 objectKey。
-   */
-  async uploadFullPayloadToOBS(fullPayload, options) {
-    if (!this.obsAk || !this.obsSk) {
-      return { success: false, error: '缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
-    }
-    // 写本地临时文件（runner 上临时目录，用完即删）
-    const tmpFile = path.join(os.tmpdir(), `code-metrics-${Date.now()}.json`);
-    fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), 'utf-8');
-
-    const objectKey = this.buildObjectKey(options);
-    try {
-      await this.uploadToOBS(tmpFile, objectKey);
-      const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
-      console.log(`[upload] OBS uploaded: ${obsUrl}`);
-      return { success: true, obsUrl: obsUrl, objectKey: objectKey };
-    } catch (e) {
-      return { success: false, error: `OBS 上传失败: ${e.message}` };
-    } finally {
-      // 清理本地临时文件，避免在 runner 上残留大文件
-      try {
-        fs.unlinkSync(tmpFile);
-      } catch (e) {
-        // 忽略清理失败
-      }
-    }
-  }
-
-  /**
-   * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
-   * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
-   *
-   * 凭证传递：与 upload-sarif-action 生产验证一致，用 -e/-i/-k 命令行参数传 endpoint/AK/SK。
-   * （曾改为临时 .obsutilconfig + -config 方式，但 runner 上无法正确应用 AK/SK 导致鉴权失败，
-   * 已回退为命令行参数方式。AK/SK 会出现在进程参数中，CI 平台对 secrets 会自动掩码，不会明文落日志。）
-   *
-   * 安全处理：用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
-   * 外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令。
-   */
-  async uploadToOBS(localFilePath, objectKey) {
-    const obsutil = await this.ensureObsutil();
-    // 记录 obsutil 版本，便于排查 runner 与本地环境差异
-    try {
-      const versionOut = execFileSync(obsutil, ['version'], { encoding: 'utf8' }).trim();
-      console.log(`[upload] obsutil version: ${versionOut}`);
-    } catch (e) {
-      console.log(`[upload] obsutil version check failed: ${e.message}`);
-    }
-    const args = [
-      'cp',
-      localFilePath,
-      `obs://${this.obsBucket}/${objectKey}`,
-      '-f',
-      `-e=${this.obsEndpoint}`,
-      `-i=${this.obsAk}`,
-      `-k=${this.obsSk}`
-    ];
-    // 打印执行命令（-k 参数脱敏），便于定位上传失败原因
-    const maskedArgs = args.map(a => (a.startsWith('-k=') ? '-k=***' : a));
-    console.log(`[upload] exec obsutil ${maskedArgs.join(' ')}`);
-    execFileSync(obsutil, args, { stdio: 'inherit' });
-  }
-
-  /**
-   * 确保 obsutil 可用：不存在时下载并解压到临时目录（与 upload-sarif-action 一致）。
-   * 下载失败时回退到系统已安装的 obsutil，避免网络抖动导致上传中断。
-   */
-  async ensureObsutil() {
-    if (this.obsutilPath && fs.existsSync(this.obsutilPath)) {
-      return this.obsutilPath;
-    }
-    const tmpDir = os.tmpdir();
-    const downloadUrl =
-      'https://obs-community.obs.cn-north-1.myhuaweicloud.com/obsutil/current/obsutil_linux_amd64.tar.gz';
-    const tarball = path.join(tmpDir, 'obsutil_linux_amd64.tar.gz');
-    const extractedDir = path.join(tmpDir, 'obsutil');
-    try {
-      if (!fs.existsSync(extractedDir)) {
-        execSync(`mkdir -p "${extractedDir}"`, { shell: '/bin/bash' });
-      }
-      execSync(
-        `wget -q "${downloadUrl}" -O "${tarball}" 2>/dev/null || curl -sL "${downloadUrl}" -o "${tarball}"`,
-        { shell: '/bin/bash' }
-      );
-      execSync(`tar zxf "${tarball}" -C "${extractedDir}" --strip-components=1`, { shell: '/bin/bash' });
-      execSync(`chmod 755 "${extractedDir}/obsutil"`, { shell: '/bin/bash' });
-      this.obsutilPath = path.join(extractedDir, 'obsutil');
-    } catch (e) {
-      // 下载失败时尝试使用系统已安装的 obsutil
-      try {
-        const existing = execSync('which obsutil', { encoding: 'utf8', shell: '/bin/bash' }).trim();
-        if (existing) {
-          this.obsutilPath = existing;
-        }
-      } catch (e2) {
-        // 无系统 obsutil，抛错
-      }
-      if (!this.obsutilPath) {
-        throw new Error(`obsutil 安装失败: ${e.message}`);
-      }
-    }
-    return this.obsutilPath;
-  }
-
-  /**
-   * 构造 OBS 对象 key（固定格式，供后端/保底任务按 objectKey 下载解析入库）。
-   * 规则：code-metrics-action/{owner}/{repo}/{pipelineRunId}/{ts}-metrics.json
-   * branchName 不进入路径（远端分支可能含 / 造成路径歧义），只放在文件内元数据中。
-   */
-  buildObjectKey(options) {
-    const ownerRepo = this.extractOwnerRepo(options.gitUrl) || 'unknown';
-    const pipelineRunId = options.pipelineRunId || 'manual';
-    const ts = this.formatDateTime(new Date());
-    return `code-metrics-action/${ownerRepo}/${pipelineRunId}/${ts}-metrics.json`;
-  }
-
-  /**
-   * 从 gitUrl 提取 owner/repo（形如 git@host:owner/repo 或 https://host/owner/repo）。
-   */
-  extractOwnerRepo(gitUrl) {
-    if (!gitUrl) {
-      return '';
-    }
-    const url = String(gitUrl).replace(/\.git$/, '').replace(/\/+$/, '');
-    const match = url.match(/(?:git@[^:]+:|https?:\/\/[^/]+\/)(.+)$/);
-    return match ? match[1] : '';
-  }
-
-  /**
-   * 格式化时间为 yyyyMMddHHmmss（OBS 对象 key 用，UTC）。
-   */
-  formatDateTime(date) {
-    const p = (n) => String(n).padStart(2, '0');
-    return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}`;
-  }
-
-  /**
-   * 把出现位置列表中的明文 content 编码为 contentB64，移除明文字段。
-   * 已编码数据跳过（防二次编码）。
-   * 重复块内容完整编码不做截断：全量上报文件上传 OBS（不受 APIG body 限制），
-   * 入库 code_metrics_duplication_block.content_b64 为 MEDIUMTEXT 可承载。
-   */
-  encodeOccurrences(occurrences) {
-    return occurrences.map(occ => {
-      return {
-        groupId: occ.groupId,
-        contentHash: occ.contentHash,
-        occurrenceIndex: occ.occurrenceIndex,
-        filePath: occ.filePath,
-        startLine: occ.startLine,
-        endLine: occ.endLine,
-        contentB64: this.encodeB64(occ.content)
-      };
-    });
-  }
-
-  /**
-   * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
-   * 按行省略：头/尾各保留若干整行，省略标记显示被省略的行数（与 /file-content 的
-   * segments 省略样式一致）。仅针对超长场景（超过 maxChars）触发；未超长时原样返回。
-   */
-  clipOversizeContent(content, maxChars) {
-    if (typeof content !== 'string' || content.length <= maxChars) {
-      return content;
-    }
-    // 按行拆分；头/尾各以预算的 35% 为字符配额累积整行，保证裁剪后总量仍受控
-    const lines = content.split('\n');
-    const totalLines = lines.length;
-    const sideChars = Math.floor(maxChars * 0.35);
-    // 头部：从首行开始累积整行，直到逼近 sideChars
-    let headLines = 0;
-    let headChars = 0;
-    for (let i = 0; i < totalLines; i++) {
-      const len = lines[i].length + 1; // 行内容 + 换行符
-      if (headLines > 0 && headChars + len > sideChars) break;
-      headChars += len;
-      headLines++;
-    }
-    // 尾部：从末行开始累积整行，直到逼近 sideChars
-    let tailLines = 0;
-    let tailChars = 0;
-    for (let i = totalLines - 1; i >= 0; i--) {
-      const len = lines[i].length + 1;
-      if (tailLines > 0 && tailChars + len > sideChars) break;
-      tailChars += len;
-      tailLines++;
-    }
-    const omittedLines = Math.max(0, totalLines - headLines - tailLines);
-    const head = lines.slice(0, headLines).join('\n');
-    const tail = lines.slice(totalLines - tailLines).join('\n');
-    const clipped =
-      (headLines > 0 ? head : '') +
-      (omittedLines > 0 ? `\n... ${omittedLines} lines omitted ...\n` : '') +
-      (tailLines > 0 ? tail : '');
-    // 兜底：单行超长导致按行裁剪后仍超限时，退化为按字符裁剪
-    if (clipped.length > maxChars) {
-      const headChars2 = Math.floor(maxChars * 0.35);
-      const tailChars2 = Math.floor(maxChars * 0.35);
-      const omittedChars = content.length - headChars2 - tailChars2;
-      return (
-        content.slice(0, headChars2) +
-        `\n... ${omittedChars} chars omitted ...\n` +
-        content.slice(content.length - tailChars2)
-      );
-    }
-    return clipped;
-  }
-
-  /**
-   * Base64 编码字符串（UTF-8）。
-   * 已编码数据（通过回检判定）跳过，防二次编码。
-   */
-  encodeB64(str) {
-    if (!str) return '';
-    // 简单回检：若解码后重新编码与原值一致，视为已编码
-    try {
-      const decoded = Buffer.from(str, 'base64').toString('utf8');
-      const reEncoded = Buffer.from(decoded, 'utf8').toString('base64');
-      if (reEncoded === str) return str;
-    } catch (e) {
-      // 解码失败说明是明文，继续编码
-    }
-    return Buffer.from(str, 'utf8').toString('base64');
-  }
-
-  /**
-   * 拼接完整请求 URL：baseUrl 已包含 /openlibing-coderepo 前缀
-   */
-  buildUrl(path) {
-    return this.baseUrl.replace(/\/+$/, '') + '/openlibing-coderepo' + path;
-  }
-
-  /**
-   * 发送 APIG 签名请求，解析 DataResult 响应。
-   * 返回 { success, recordId?, error? }
-   */
-  async sendSignedRequest(method, url, body) {
-    let headers = { 'Content-Type': 'application/json' };
-    if (this.apigAppKey && this.apigAppSecret) {
-      const signer = new ApigSigner(this.apigAppKey, this.apigAppSecret);
-      headers = signer.sign({
-        method: method,
-        url: url,
-        headers: headers,
-        body: body
-      });
-    }
-
-    try {
-      const response = await axios.post(url, body, {
-        headers,
-        timeout: this.timeout,
-      });
-      const resData = response.data;
-
-      // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功
-      if (resData?.code !== 200) {
-        // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因
-        console.error(
-          `[upload] report business failed: code=${resData?.code}, msg=${resData?.msg}, adviceMsg=${resData?.adviceMsg}`
-        );
-        return { success: false, error: resData?.msg || 'Unknown error' };
-      }
-
-      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象
-      const recordId = resData?.data?.recordId
-        || resData?.data?.id
-        || (typeof resData?.data === 'number' || typeof resData?.data === 'string' ? resData.data : null)
-        || resData?.recordId
-        || resData?.id;
-
-      return { success: true, recordId: recordId };
-    } catch (error) {
-      // 输出详细错误信息以便排查网络问题
-      if (error.code === 'ECONNABORTED') {
-        console.error(`Upload timeout after ${this.timeout}ms, URL: ${url}`);
-      } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-        console.error(`Connection failed: ${error.code}, URL: ${url}`);
-      } else if (error.response) {
-        console.error(`HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`);
-      } else {
-        console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
-      }
-      const resData = error.response?.data;
-      const errorMsg = resData?.msg || resData?.message || error.message;
-      return { success: false, error: errorMsg };
-    }
-  }
-}
-
-module.exports = CoderepoUploader;
-
-/***/ }),
-
-/***/ 4334:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const fs = __nccwpck_require__(9896);
-const path = __nccwpck_require__(6928);
-
-class FileCollector {
-  // 缺省代码扩展名白名单（allowed-extensions 未配置时生效，业界惯例为白名单制，
-  // 对齐 scc/cloc 内置语言的常见子集；.gn/.gni/.prelds 为 OHOS 构建体系特有脚本）
-  static DEFAULT_CODE_EXTENSIONS = [
-    // C/C++ 家族
-    '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hxx', '.inl', '.cu', '.cuh',
-    // 主流通用语言
-    '.java', '.cs', '.go', '.rs', '.swift', '.kt', '.kts', '.scala', '.groovy',
-    '.py', '.rb', '.php', '.pl', '.pm', '.lua', '.r', '.jl', '.dart', '.m', '.mm',
-    '.tcl', '.asm', '.s',
-    // 前端
-    '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue', '.svelte',
-    '.html', '.htm', '.css', '.scss', '.less',
-    // 脚本
-    '.sh', '.bash', '.ps1', '.bat', '.cmd', '.gradle',
-    // 数据/配置（scc 亦将这些计入统计）
-    '.json', '.xml', '.yml', '.yaml', '.toml', '.ini', '.cfg', '.conf', '.properties',
-    '.sql', '.proto',
-    // 构建脚本
-    '.cmake', '.mk',
-    // OHOS 构建体系
-    '.gn', '.gni', '.prelds'
-  ];
-
-  // 文件名特例：无扩展名或需按文件名识别的构建/入口文件（对齐 scc/cloc 的文件名识别规则），
-  // 不受扩展名白名单限制，始终放行
-  static SPECIAL_FILE_NAMES = [
-    'cmakelists.txt', 'makefile', 'gnumakefile', 'dockerfile', 'jenkinsfile',
-    'rakefile', 'gemfile', 'build', 'build.bazel', 'workspace'
-  ];
-
-  /**
-   * 判断文件是否放行：文件名特例 > 显式 allowed-extensions > 缺省白名单。
-   * 扩展名统一小写比较；显式配置优先级最高（完全覆盖缺省白名单）。
-   */
-  static isAllowedFile(fileName, allowedExtensions) {
-    const lower = (fileName || '').toLowerCase();
-    if (FileCollector.SPECIAL_FILE_NAMES.includes(lower)) {
-      return true;
-    }
-    const normalized = (allowedExtensions || []).map(e => String(e).toLowerCase());
-    const list = normalized.length > 0 ? normalized : FileCollector.DEFAULT_CODE_EXTENSIONS;
-    const ext = path.extname(lower);
-    return list.includes(ext);
-  }
-
-  /**
-   * 判断目录/文件是否被 excludeDirs 命中。支持四种形式（大小写敏感）：
-   * 1. 纯名称（docs / .git / jest.config.js）：任意层级的同名目录或文件均排除
-   * 2. 相对路径（src/opensource/grapesjs）：相对扫描根的路径精确匹配，命中即整棵子树剪枝
-   * 3. 路径段后缀（codesize/commonplugin）：命中任意位置的同后缀路径
-   *    （如 src/plugins/codesize/commonplugin），兜住从子目录视角抄写的相对路径
-   * 4. 前导斜杠锚定（/test.ts）：仅匹配扫描根下的顶层路径，不影响子目录同名条目
-   *    （对齐 .gitignore 的 / 语义；/test.ts 不排除 src/test.ts）
-   * 历史行为兼容：旧的纯目录名匹配语义不变；带路径的排除项此前永远无法命中（bug），现按相对路径生效。
-   */
-  static isExcluded(name, relPath, excludeDirs) {
-    if (!excludeDirs || excludeDirs.length === 0) {
-      return false;
-    }
-    const rel = (relPath || '').replace(/\\/g, '/');
-    for (const raw of excludeDirs) {
-      let d = String(raw).trim().replace(/\\/g, '/');
-      if (!d) continue;
-      // 前导斜杠 = 锚定扫描根：仅顶层相对路径精确匹配，跳过名称/后缀匹配
-      if (d.startsWith('/')) {
-        const anchored = d.replace(/^\/+/, '');
-        if (anchored && anchored === rel) {
-          return true;
-        }
-        continue;
-      }
-      d = d.replace(/\/+$/, ''); // 去尾部斜杠（docs/ 等价 docs）
-      if (!d) continue;
-      // 纯名称匹配（任意层级）或 相对路径精确匹配（相对扫描根）
-      if (d === name || d === rel) {
-        return true;
-      }
-      // 路径段后缀匹配：codesize/commonplugin 命中 src/plugins/codesize/commonplugin
-      if (d.indexOf('/') >= 0 && rel.endsWith('/' + d)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * 收集文件列表
-   * @param {string|string[]} source - 源代码目录或文件路径（可以是字符串或数组）
-   * @param {string[]} excludeDirs - 排除列表（目录名 / 相对路径 / 文件名，逗号分隔）
-   * @param {string[]} allowedExtensions - 允许的文件扩展名列表（配置后完全覆盖缺省白名单）
-   * @returns {string[]} 文件路径列表
-   */
-  static collectFiles(source, excludeDirs = [], allowedExtensions = []) {
-    const files = [];
-
-    // 支持传入单个路径或路径数组
-    const sources = Array.isArray(source) ? source : [source];
-
-    for (const src of sources) {
-      const absolutePath = path.resolve(src);
-
-      if (!fs.existsSync(absolutePath)) {
-        console.warn(`[WARN] 路径不存在: ${absolutePath}`);
-        continue;
-      }
-
-      const stat = fs.statSync(absolutePath);
-
-      if (stat.isDirectory()) {
-        // 如果是目录，递归遍历
-        FileCollector._walkDir(absolutePath, '', excludeDirs, allowedExtensions, files);
-      } else if (stat.isFile()) {
-        // 单文件输入：文件级排除 + 扩展名白名单双重过滤
-        const name = path.basename(absolutePath);
-        if (FileCollector.isExcluded(name, name, excludeDirs)) {
-          continue;
-        }
-        if (!FileCollector.isAllowedFile(name, allowedExtensions)) {
-          console.warn(`[WARN] 文件扩展名不在允许列表中: ${absolutePath}`);
-          continue;
-        }
-        files.push(absolutePath);
-      }
-    }
-
-    return files;
-  }
-
-  // 递归遍历目录，根据排除规则和扩展名过滤文件。
-  // relPrefix：当前目录相对扫描根的路径（用于路径式排除匹配），根目录本身为 ''
-  static _walkDir(dir, relPrefix, excludeDirs, allowedExtensions, files) {
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch (error) {
-      return;
-    }
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      // 当前条目相对扫描根的路径（正斜杠），用于路径式排除匹配
-      const relPath = relPrefix ? relPrefix + '/' + entry.name : entry.name;
-
-      if (entry.isDirectory()) {
-        // 跳过以 . 开头的目录（如 .git, .idea）和 excludeDirs 命中的目录
-        // （纯目录名任意层级生效；相对路径如 src/opensource/grapesjs 命中即整棵子树剪枝）
-        if (entry.name.startsWith('.')
-            || FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
-          continue;
-        }
-        FileCollector._walkDir(fullPath, relPath, excludeDirs, allowedExtensions, files);
-      } else if (entry.isFile()) {
-        // 文件级排除（文件名/相对路径命中 excludeDirs 即跳过）
-        if (FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
-          continue;
-        }
-        // 白名单三段式过滤：文件名特例 > 显式扩展名 > 缺省白名单
-        if (!FileCollector.isAllowedFile(entry.name, allowedExtensions)) {
-          continue;
-        }
-        files.push(fullPath);
-      }
-    }
-  }
-}
-
-module.exports = FileCollector;
-
-
-/***/ }),
-
-/***/ 4760:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const fs = __nccwpck_require__(9896);
-const path = __nccwpck_require__(6928);
-
-class FileUtils {
-  static writeJsonFile(filePath, data, pretty = true) {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    const content = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
-    fs.writeFileSync(filePath, content, 'utf8');
-  }
-
-  static ensureDirectory(dirPath) {
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-    }
-    return dirPath;
-  }
-
-  static getExtension(filePath) {
-    return path.extname(filePath);
-  }
-
-  static isFileAllowed(filePath, allowedExtensions) {
-    if (!allowedExtensions || allowedExtensions.length === 0) {
-      return true;
-    }
-    const ext = this.getExtension(filePath).toLowerCase();
-    return allowedExtensions.includes(ext);
-  }
-
-  static isDirectoryExcluded(dirPath, excludeDirs) {
-    if (!excludeDirs || excludeDirs.length === 0) {
-      return false;
-    }
-    const dirName = path.basename(dirPath);
-    return excludeDirs.some(exclude => {
-      return dirName === exclude || dirPath.includes(`/${exclude}/`);
-    });
-  }
-}
-
-module.exports = FileUtils;
-
-
-/***/ }),
-
-/***/ 8555:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-const winston = __nccwpck_require__(4240);
-
-class Logger {
-  constructor(config = {}) {
-    this.verbose = config.verbose || false;
-    this.logger = winston.createLogger({
-      level: this.verbose ? 'debug' : 'info',
-      format: winston.format.combine(
-        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-        winston.format.colorize(),
-        winston.format.printf(({ timestamp, level, message }) => {
-          return `${timestamp} [${level}] ${message}`;
-        })
-      ),
-      transports: [
-        new winston.transports.Console()
-      ]
-    });
-  }
-
-  // 支持多参数，拼接为一条消息
-  debug(...args) {
-    if (this.verbose) {
-      this.logger.debug(args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' '));
-    }
-  }
-
-  info(message) {
-    this.logger.info(message);
-  }
-
-  warn(message) {
-    this.logger.warn(message);
-  }
-
-  error(message) {
-    this.logger.error(message);
-  }
-}
-
-module.exports = Logger;
-
-
-/***/ }),
-
 /***/ 4914:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -6816,6 +3595,916 @@ var diagnostics = create(function prod(namespace, options) {
 // Expose the diagnostics logger.
 //
 module.exports = diagnostics;
+
+
+/***/ }),
+
+/***/ 578:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+/**
+ * APIG 调用封装模块：callApig 一行调用 APIG 接口。
+ * 自动完成：临时凭证获取（带缓存 / force 强制刷新）-> V11-HMAC-SHA256 签名 ->
+ * X-Security-Token 注入 -> 发送请求。需精细控制时可自行组合 V11Signer + sendRequest。
+ */
+
+const { cfg } = __nccwpck_require__(3298);
+const { getCredentials } = __nccwpck_require__(6477);
+const { V11Signer } = __nccwpck_require__(9692);
+const { sendRequest } = __nccwpck_require__(5531);
+
+/**
+ * 调用 APIG 接口：自动换证（带缓存）、V11 签名（自动携带 X-Security-Token）并发送请求。
+ * 需精细控制时可自行组合 V11Signer + sendRequest。
+ *
+ * headers / body / opts 均为可选参数，可同时设置，也可只设置其中几个；
+ * 跳过中间参数时传 null（如仅设置 opts：callApig('GET', url, null, null, { force: true })）。
+ * @param {string} method HTTP 方法（GET/POST 等）
+ * @param {string} url    完整 APIG URL（https://{host}{path}[?query]）
+ * @param {Object} [headers] 附加请求头（与默认 Content-Type 头合并）
+ * @param {string} [body]    请求体（字符串）
+ * @param {Object} [opts]    额外选项：{ force } 强制刷新临时凭证、{ region } 覆盖签名区域
+ * @returns {Promise<{status: number, headers: Object, data: Object|string|null}>} 同 sendRequest 返回
+ */
+async function callApig(method, url, headers, body, opts = {}) {
+  const cred = await getCredentials({ force: !!opts.force });
+  const signer = new V11Signer({ region: opts.region || cfg.region });
+  signer.Key = cred.accessKeyId;
+  signer.Secret = cred.secretAccessKey;
+  // 大小写不敏感地检查用户是否已设置 Content-Type，避免默认 application/json 与用户传入的
+  // content-type（大小写不同）共存导致规范请求重复头、签名校验失败（APIG.0301）
+  const hasContentType = headers && Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
+  const mergedHeaders = {
+    ...(hasContentType ? {} : { 'Content-Type': 'application/json' }),
+    ...(headers || {})
+  };
+  if (cred.securityToken) {
+    mergedHeaders['X-Security-Token'] = cred.securityToken;
+  }
+  const reqBody = body || '';
+  const signedHeaders = signer.sign(method, url, mergedHeaders, reqBody);
+  return sendRequest(method, url, signedHeaders, reqBody);
+}
+
+module.exports = { callApig };
+
+
+/***/ }),
+
+/***/ 3298:
+/***/ ((module) => {
+
+"use strict";
+
+
+/**
+ * 配置模块：内置 openlibing 默认配置 + configure() 覆盖。
+ * 模块级单例 cfg 供 logger / http / oidc / credentials 共享。
+ */
+
+// 内置固定配置（openlibing 账号）
+const CONFIG = {
+  // openlibing 华为云账号 ID
+  accountId: '4d29a984c4fe4e6eb5d404a853d0084e',
+  // OIDC 受众（申请 OIDC ID Token 的 audience，需与身份提供商注册的客户端 ID 一致）
+  audience: 'huawei-cloud-service',
+  // IAM 信任委托名称
+  agencyName: 'gitcode-actions',
+  // OIDC 身份提供商名称（华为云侧按令牌签发平台分别注册：GitHub 平台为 GitHubActions，
+  // GitCode Actions 平台为 GitCodeActions）。取 configure() 配置值，
+  // 可通过显式 configure({ oidcProviderName }) 覆盖
+  oidcProviderName: 'GitCodeActions',
+  // 区域（openlibing 账号固定区域，可显式覆盖）
+  region: 'cn-southwest-2',
+  // STS 换证路径
+  stsAssumePath: '/v5/agencies/assume-with-oidc',
+  // 临时凭证默认有效期（秒）
+  durationSeconds: 3600,
+  // 提前刷新缓冲（秒），避免凭证在边界过期
+  refreshBufferSeconds: 300,
+  // 调试模式：开启后打印关键步骤日志（含每次 HTTP 请求/响应详情，敏感字段自动脱敏）
+  debug: false
+};
+
+// 当前生效配置（可用 configure() 覆盖）
+const cfg = { ...CONFIG };
+
+/**
+ * 覆盖内置配置（如更换账号 / 区域 / 受众 / 委托等）。
+ * @param {Object} overrides 可覆盖字段：accountId/audience/agencyName/oidcProviderName/
+ *                           region/stsAssumePath/durationSeconds/refreshBufferSeconds/debug
+ * @returns {Object} 覆盖后的完整配置（含全部内置默认值）
+ */
+function configure(overrides = {}) {
+  const allowed = [
+    'accountId', 'audience', 'agencyName', 'oidcProviderName',
+    'region', 'stsAssumePath', 'durationSeconds', 'refreshBufferSeconds', 'debug'
+  ];
+  for (const k of allowed) {
+    if (overrides[k] !== undefined) {
+      cfg[k] = overrides[k];
+    }
+  }
+  return { ...cfg };
+}
+
+module.exports = { CONFIG, cfg, configure };
+
+
+/***/ }),
+
+/***/ 6477:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+/**
+ * 临时凭证模块：getCredentials() 获取华为云临时凭证。
+ * 调用链 CI 流水线（GitHub Actions / GitCode Actions 等 Actions 兼容平台）OIDC ID Token
+ * -> 华为云 STS AssumeAgencyWithOIDC，带缓存自动刷新、force 强制刷新、并发去重。
+ */
+
+const { cfg } = __nccwpck_require__(3298);
+const { info, debug, error, mask, maskBody } = __nccwpck_require__(9463);
+const { sendRequest } = __nccwpck_require__(5531);
+const { getOidcToken } = __nccwpck_require__(8790);
+
+let _credentials = null; // { accessKeyId, secretAccessKey, securityToken, expiresAt, expiresAtISO }
+let _credentialPromise = null; // 进行中的换证 Promise（并发去重）
+
+/** 判断缓存凭证是否仍有效（未过期且留有缓冲时间）。 */
+function _isValid(cred) {
+  if (!cred || !cred.expiresAt) {
+    return false;
+  }
+  return Date.now() < cred.expiresAt - cfg.refreshBufferSeconds * 1000;
+}
+
+/**
+ * 获取 openlibing 账号下的华为云临时凭证。
+ * 优先级：有效缓存 > OIDC+STS 换证。
+ * @param {Object} [opts]
+ * @param {boolean} [opts.force] 为 true 时强制重新换证（忽略缓存）
+ * @returns {Promise<{accessKeyId: string, secretAccessKey: string,
+ *                     securityToken: string|null, expiresAt: string|null, expiresIn: number|null}>}
+ */
+async function getCredentials(opts = {}) {
+  if (!opts.force && _isValid(_credentials)) {
+    const expiresIn = Math.max(0, Math.round((_credentials.expiresAt - Date.now()) / 1000));
+    debug(`-- 临时凭证缓存有效，直接复用（剩余约 ${expiresIn} 秒）--`);
+    return {
+      accessKeyId: _credentials.accessKeyId,
+      secretAccessKey: _credentials.secretAccessKey,
+      securityToken: _credentials.securityToken,
+      expiresAt: _credentials.expiresAtISO,
+      expiresIn
+    };
+  }
+  if (_credentials) {
+    debug('-- 临时凭证缓存缺失或已过期，重新换取 --');
+  }
+  const cred = await _exchangeCredentials();
+  return {
+    accessKeyId: cred.accessKeyId,
+    secretAccessKey: cred.secretAccessKey,
+    securityToken: cred.securityToken,
+    expiresAt: cred.expiresAtISO,
+    expiresIn: Math.max(0, Math.round((cred.expiresAt - Date.now()) / 1000))
+  };
+}
+
+/** 解析 OIDC Token payload 中的关键声明（失败返回 null）。 */
+function _parseTokenClaims(idToken) {
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split('.')[1], 'base64url').toString());
+    return { iss: payload.iss, aud: payload.aud, azp: payload.azp, sub: payload.sub };
+  } catch (e) {
+    return null;
+  }
+}
+
+/** 打印 OIDC Token 声明（logFn 传 debug 为调试定位，传 error 为失败定位）。 */
+function _printTokenClaims(claims, logFn) {
+  if (!claims) {
+    logFn('（无法解析 OIDC Token payload）');
+    return;
+  }
+  logFn('-- OIDC Token 声明（用于与华为云信任策略比对）--');
+  logFn(`iss : ${JSON.stringify(claims.iss)}`);
+  logFn(`aud : ${JSON.stringify(claims.aud)}`);
+  logFn(`azp : ${JSON.stringify(claims.azp)}`);
+  logFn(`sub : ${JSON.stringify(claims.sub)}`);
+}
+
+/**
+ * 通过流水线签发的 OIDC JWT 调用 STS AssumeAgencyWithOIDC 换取临时 AK/SK/SecurityToken。
+ * OIDC 提供商取 configure() 配置值（需与华为云 IAM 侧注册名一致）；
+ * iss/aud/azp/sub 声明调试模式下打印、STS 失败时以 error 级补打，用于与信任策略比对排查。
+ * @returns {Promise<{accessKeyId: string, secretAccessKey: string,
+ *                     securityToken: string, expiresAt: number, expiresAtISO: string}>}
+ */
+async function _assumeAgencyWithOIDC() {
+  const agencyUrn = `iam::${cfg.accountId}:agency:${cfg.agencyName}`;
+  const stsEndpoint = `https://sts.${cfg.region}.myhuaweicloud.com${cfg.stsAssumePath}`;
+
+  debug('=== 步骤1：申请 OIDC ID Token ===');
+  debug(`audience=${cfg.audience}`);
+  const idToken = await getOidcToken();
+  if (!idToken) {
+    throw new Error('获取 OIDC ID Token 为空（请确认流水线已声明 permissions: id-token: write）');
+  }
+  debug(`OIDC Token 获取成功，长度 ${idToken.length}`);
+
+  const claims = _parseTokenClaims(idToken);
+  _printTokenClaims(claims, debug);
+
+  const providerName = cfg.oidcProviderName;
+  const providerUrn = `iam::${cfg.accountId}:oidcProvider:${providerName}`;
+
+  const body = {
+    provider_urn: providerUrn,
+    agency_urn: agencyUrn,
+    agency_session_name: cfg.agencyName,
+    id_token: idToken,
+    duration_seconds: cfg.durationSeconds
+  };
+
+  info(`-- OIDC 免密换证开始：区域 ${cfg.region}，提供商 ${providerName}，委托 ${cfg.agencyName} --`);
+  debug('=== 步骤2：调用 STS AssumeAgencyWithOIDC ===');
+  debug(`provider_urn        : ${body.provider_urn}`);
+  debug(`agency_urn          : ${body.agency_urn}`);
+  debug(`agency_session_name : ${body.agency_session_name}`);
+  debug(`duration_seconds    : ${body.duration_seconds}`);
+
+  const res = await sendRequest('POST', stsEndpoint, { 'Content-Type': 'application/json' }, JSON.stringify(body));
+
+  if (res.status !== 200) {
+    const code = res.data && (res.data.error_code || res.data.code);
+    const msg = res.data && (res.data.error_msg || res.data.message);
+    error(`STS 失败详情 : ${maskBody(res.data)}`);
+    // 失败定位：非调试模式下也补打 Token 声明与换证配置，供与信任策略逐项比对
+    _printTokenClaims(claims, error);
+    error(`provider_urn : ${providerUrn}`);
+    error('=== 排查提示 ===');
+    error('STS5.1001/403：多为信任策略条件不匹配，请将上方 OIDC Token 的 iss/aud/azp/sub 与华为云信任策略逐项比对。');
+    error('  - iss 必须与所选 OIDC 提供商注册的颁发者 URL 严格一致（GitHub 平台为 https://token.actions.githubusercontent.com，GitCode Actions 平台以其流水线签发地址为准）');
+    error('  - aud/azp 必须与策略中 oidc:aud 一致（且身份提供商客户端 ID 已注册）');
+    error('  - sub 必须能被策略中 oidc:sub 的通配符匹配');
+    throw new Error(`STS auth failed (${res.status})${code ? ' [' + code + ']' : ''}: ${msg || '未知错误'}`);
+  }
+
+  const cred = res.data.credentials;
+  if (!cred || !cred.access_key_id || !cred.secret_access_key || !cred.security_token) {
+    error(`STS 响应体 : ${maskBody(res.data)}`);
+    throw new Error('STS auth failed: 响应中缺少临时凭证字段');
+  }
+
+  const expiresAt = new Date(cred.expiration).getTime();
+  info(`-- 临时凭证获取成功：AK ${mask(cred.access_key_id)}，有效期约 ${Math.max(0, Math.round((expiresAt - Date.now()) / 1000))} 秒 --`);
+  debug('=== 步骤3：成功获取临时安全凭证 ===');
+  debug(`SecurityToken    : ${mask(cred.security_token, 10, 10)}`);
+  debug(`凭证过期时间     : ${cred.expiration}`);
+
+  const result = {
+    accessKeyId: cred.access_key_id,
+    secretAccessKey: cred.secret_access_key,
+    securityToken: cred.security_token,
+    expiresAt,
+    expiresAtISO: cred.expiration
+  };
+  _credentials = result;
+  _credentialPromise = null;
+  return result;
+}
+
+/**
+ * 换取临时凭证（带并发去重：同一时刻只发起一次 STS 换证，其余等待同一结果）。
+ * @returns {Promise<Object>} 同 _assumeAgencyWithOIDC 返回
+ */
+async function _exchangeCredentials() {
+  if (_credentialPromise) {
+    debug('-- 检测到进行中的换证请求，复用同一结果（并发去重）--');
+    return _credentialPromise;
+  }
+  _credentialPromise = _assumeAgencyWithOIDC();
+  try {
+    return await _credentialPromise;
+  } catch (err) {
+    _credentialPromise = null;
+    error(`-- OIDC 免密换证失败：${err.message} --`);
+    throw err;
+  }
+}
+
+module.exports = { getCredentials };
+
+
+/***/ }),
+
+/***/ 5531:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+/**
+ * HTTP 请求工具模块：sendRequest 发送请求并解析 JSON 响应。
+ * 基于 Node 内置 fetch（Node 18+），零第三方依赖。
+ * 调试模式打印完整请求/响应日志（敏感字段自动脱敏），非调试模式不打印请求详情。
+ */
+
+const { debug, maskHeaders, maskBody, clip } = __nccwpck_require__(9463);
+
+// Node 18+ 有内置全局 fetch；在只支持 node16 运行时的 CI 平台（如 GitCode Action）下
+// 回退到 undici（作为 Action 产物时由 @actions/core 的传递依赖随 ncc 一并内联）。
+// 运行时动态判断而非模块加载时固化，保证测试拦截器替换全局 fetch 后仍生效。
+
+/**
+ * 发送 HTTPS 请求并解析 JSON 响应（通用基础能力，供调用 APIG 等接口使用）。
+ * 调试模式（configure({ debug: true })）下打印完整请求/响应日志，敏感字段自动脱敏。
+ * @param {string} method  HTTP 方法（GET/POST/...）
+ * @param {string} url     完整 URL（https://{host}{path}[?query]）
+ * @param {Object} [headers] 请求头
+ * @param {string|Buffer} [body] 请求体（字符串或二进制 Buffer，均可选）
+ * @returns {Promise<{status: number, headers: Object, data: Object|string}>}
+ *          JSON 解析失败时 data = { raw }
+ */
+async function sendRequest(method, url, headers, body) {
+  debug(`--> ${String(method).toUpperCase()} ${url}`);
+  debug(`--> 请求头: ${JSON.stringify(maskHeaders(headers))}`);
+  if (body !== undefined && body !== null && body !== '') {
+    debug(`--> 请求体: ${_describeBody(body)}`);
+  }
+
+  let res;
+  try {
+    const fetchImpl = typeof fetch === 'function' ? fetch : (...args) => (__nccwpck_require__(6752).fetch)(...args);
+    res = await fetchImpl(url, {
+      method,
+      headers,
+      body: body || undefined
+    });
+  } catch (err) {
+    throw new Error(`网络请求失败 ${method} ${url}: ${err.message}`);
+  }
+
+  const raw = await res.text();
+  debug(`<-- HTTP 状态码: ${res.status}`);
+  debug(`<-- 响应头: ${JSON.stringify(_headersToObject(res.headers))}`);
+  debug(`<-- 响应体: ${raw ? clip(maskBody(raw)) : '(空)'}`);
+
+  let data = {};
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      data = { raw };
+    }
+  }
+  return { status: res.status, headers: _headersToObject(res.headers), data };
+}
+
+/**
+ * 调试日志的请求体描述：二进制按类型与长度描述（不读内容），字符串/普通对象脱敏后截断，
+ * 避免大体积或非文本内容拖慢处理、刷屏或序列化异常。
+ */
+function _describeBody(body) {
+  if (typeof body === 'string') return clip(maskBody(body));
+  if (Buffer.isBuffer(body) || body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+    return `(二进制，${body.byteLength ?? body.length} 字节)`;
+  }
+  try {
+    return clip(maskBody(JSON.stringify(body)));
+  } catch (e) {
+    return '(对象，无法序列化)';
+  }
+}
+
+/** 将 fetch 的 Headers 对象转换为普通对象。 */
+function _headersToObject(headers) {
+  const out = {};
+  headers.forEach((value, key) => {
+    out[key] = value;
+  });
+  return out;
+}
+
+module.exports = { sendRequest };
+
+
+/***/ }),
+
+/***/ 6239:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+/**
+ * @openlibing/huaweicloud-oidc-client：openlibing 平台与华为云的交互 SDK（npm 包入口）
+ *
+ * 本包封装 openlibing 平台对接华为云的通用基础能力：
+ *   1. OIDC 认证：getCredentials() 获取华为云临时凭证（AK/SK/SecurityToken），调用链为
+ *      CI 流水线 OIDC ID Token（GitHub Actions / GitCode Actions 等 Actions 兼容平台，
+ *      audience = huawei-cloud-service）-> 华为云 STS AssumeAgencyWithOIDC 换证，带缓存
+ *      自动刷新、force 强制刷新、并发去重；OIDC 提供商取 configure() 配置值。
+ *   2. APIG 调用：callApig() 一行调用 APIG 接口（自动换证 + V11 签名 + X-Security-Token）；
+ *      V11Signer 对 APIG 请求做 V11-HMAC-SHA256 签名（严格复刻华为云官方 APIG Python SDK
+ *      的 V11 算法，仅适用于 APIG 网关，作用域服务名固定为 apic），供精细控制场景使用。
+ *   3. HTTPS 请求工具：sendRequest() 发送请求并解析 JSON 响应，供调用 APIG 等接口使用。
+ *
+ * 设计边界：OBS 上传等业务逻辑由使用方基于本 SDK 提供的临时凭证自行实现（OBS 使用自身签名协议）。
+ *
+ * 日志分级：info 关键步骤成功日志（OIDC Token 申请、换证步骤等）与 error 关键步骤失败日志（失败原因、排查
+ * 提示等，输出到 stderr）任何模式下均打印；debug 调试定位日志（每次 HTTP 请求的请求行、请求头、
+ * 请求体与响应状态码、响应头、响应体、OIDC Token 声明等，敏感字段自动脱敏）通过
+ * configure({ debug: true }) 开启，默认关闭。
+ *
+ * 仅依赖 Node 内置模块（https / crypto / url），不依赖 @actions/core；OIDC Token 通过
+ * Actions 兼容流水线（GitHub / GitCode Actions）注入的环境变量自包含申请，任意 Node 环境均可独立使用。
+ *
+ * 模块结构（src/）：
+ *   config.js       内置配置 + configure() 覆盖（模块级单例 cfg）
+ *   logger.js       分级日志（info 关键步骤 / debug 调试定位 / error 失败详情）+ 敏感字段脱敏工具
+ *   http.js         sendRequest HTTPS 请求工具（调试模式打印请求/响应详情）
+ *   oidc.js         OIDC ID Token 申请（GitHub / GitCode Actions 等 Actions 兼容流水线自申请 / 环境变量注入）
+ *   credentials.js  getCredentials：OIDC -> STS 换证（缓存 / force / 并发去重）
+ *   signer-v11.js   V11Signer：APIG V11-HMAC-SHA256 签名器
+ *   apig.js         callApig：一行调用 APIG（自动换证 + V11 签名 + X-Security-Token）
+ *
+ * 用法：
+ *   const openlibing = require('@openlibing/huaweicloud-oidc-client');
+ *
+ *   // 开启调试定位日志（额外打印请求/响应详情等，敏感字段脱敏；关键步骤日志默认已打印）
+ *   openlibing.configure({ debug: true });
+ *
+ *   // 覆盖内置 openlibing 配置（换账号/区域等）
+ *   openlibing.configure({ accountId: 'xxx', region: 'cn-north-4' });
+ *
+ *   // 1) 一行调用 APIG（自动换证 + V11 签名 + X-Security-Token）
+ *   const res = await openlibing.callApig('GET', 'https://{apig-host}/v1/export');
+ *   // => { status, headers, data }
+ *
+ *   // 2) OIDC 认证：获取临时凭证（供 OBS 上传等场景自行使用）
+ *   const cred = await openlibing.getCredentials();
+ *   // => { accessKeyId, secretAccessKey, securityToken, expiresAt, expiresIn }
+ *
+ *   // 强制刷新
+ *   const fresh = await openlibing.getCredentials({ force: true });
+ *
+ *   // 3) 精细控制：自行组合 V11 签名与 HTTPS 请求
+ *   const signer = new openlibing.V11Signer({ region: 'cn-southwest-2' });
+ *   signer.Key = cred.accessKeyId;
+ *   signer.Secret = cred.secretAccessKey;
+ *   const headers = signer.sign('GET', 'https://{apig-host}/v1/export', {}, '');
+ *   const res2 = await openlibing.sendRequest('GET', 'https://{apig-host}/v1/export', headers, '');
+ */
+
+module.exports = {
+  callApig: (__nccwpck_require__(578).callApig),
+  getCredentials: (__nccwpck_require__(6477).getCredentials),
+  configure: (__nccwpck_require__(3298).configure),
+  V11Signer: (__nccwpck_require__(9692).V11Signer),
+  sendRequest: (__nccwpck_require__(5531).sendRequest)
+};
+
+
+/***/ }),
+
+/***/ 9463:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+/**
+ * 日志与脱敏模块：分级日志（info 关键步骤 / debug 调试定位 / error 失败详情）+ 敏感字段脱敏工具。
+ * 各级别日志均带 [INFO] / [DEBUG] / [ERROR] 前缀与 ISO 8601 UTC 时间戳，便于肉眼区分、排序与按级别检索。
+ */
+
+const { cfg } = __nccwpck_require__(3298);
+
+/** 当前时间戳（ISO 8601 UTC，如 2026-08-28T12:03:54.123Z）。 */
+function ts() {
+  return new Date().toISOString();
+}
+
+/** 关键步骤日志（info 级）：任何模式下均打印（普通 Node 环境使用 console.log，不依赖 @actions/core）。 */
+function info(msg) {
+  console.log(`[INFO] ${ts()} ${msg}`);
+}
+
+/** 调试日志（debug 级）：仅在调试模式（configure({ debug: true })）下打印，用于请求/响应详情等定位信息。 */
+function debug(msg) {
+  if (cfg.debug) {
+    console.log(`[DEBUG] ${ts()} ${msg}`);
+  }
+}
+
+/** 错误日志（error 级）：任何模式下均打印，输出到 stderr（失败详情、排查提示等），便于与正常日志区分。 */
+function error(msg) {
+  console.error(`[ERROR] ${ts()} ${msg}`);
+}
+
+/** 脱敏：仅保留首尾若干字符，中间用 * 代替。 */
+function mask(value, head = 6, tail = 4) {
+  if (!value) return '(空)';
+  const s = String(value);
+  if (s.length <= head + tail) return s.slice(0, 2) + '***' + s.slice(-2);
+  return s.slice(0, head) + '***' + s.slice(-tail) + `（长度 ${s.length}）`;
+}
+
+/** 调试日志中需要脱敏的字段名（请求头字段与 JSON 字段名，小写比较）。 */
+const SENSITIVE_KEYS = [
+  'authorization', 'x-security-token', 'x-auth-token', 'password', 'secret',
+  'id_token', 'access_key_id', 'secret_access_key', 'security_token',
+  'accesskeyid', 'secretaccesskey', 'securitytoken', 'client_secret'
+];
+
+/** JWT 特征（三段 base64url，以 eyJ 开头），用于在任意文本中识别并脱敏令牌。 */
+const JWT_RE = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
+
+/** 文本脱敏：将其中的 JWT 令牌整体脱敏。 */
+function maskText(text) {
+  return String(text).replace(JWT_RE, (m) => mask(m, 20, 10));
+}
+
+/** 深度脱敏 JSON 结构：敏感字段名直接脱敏，其余字段递归处理（字符串再做 JWT 识别）。 */
+function maskDeep(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return maskText(value);
+  if (Array.isArray(value)) return value.map(maskDeep);
+  if (typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) {
+      out[k] = SENSITIVE_KEYS.includes(k.toLowerCase()) ? mask(value[k]) : maskDeep(value[k]);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** 请求头脱敏：敏感头字段值脱敏，其余原样。 */
+function maskHeaders(headers) {
+  const out = {};
+  for (const k of Object.keys(headers || {})) {
+    out[k] = SENSITIVE_KEYS.includes(k.toLowerCase()) ? mask(headers[k]) : headers[k];
+  }
+  return out;
+}
+
+/** 请求体/响应体脱敏：JSON 结构做深度脱敏，非 JSON 文本做 JWT 识别脱敏。 */
+function maskBody(body) {
+  const s = typeof body === 'string' ? body : JSON.stringify(body);
+  try {
+    return JSON.stringify(maskDeep(JSON.parse(s)));
+  } catch (e) {
+    return maskText(s);
+  }
+}
+
+/** 调试日志体积保护：超长文本截断，避免大体积请求/响应体拖慢处理或刷屏。 */
+function clip(text, max = 4096) {
+  const s = String(text);
+  if (s.length <= max) return s;
+  return `${s.slice(0, max)}…（截断，总长 ${s.length} 字符）`;
+}
+
+module.exports = { info, debug, error, mask, maskText, maskDeep, maskHeaders, maskBody, clip, SENSITIVE_KEYS };
+
+
+/***/ }),
+
+/***/ 8790:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+/**
+ * OIDC 模块：申请 CI 流水线签发的 OIDC ID Token（自包含，不依赖 @actions/core）。
+ * 支持 GitHub Actions、GitCode Actions 等 Actions 兼容流水线：两者签发 OIDC ID Token 的方式
+ * 一致，均通过运行时注入的 ACTIONS_ID_TOKEN_REQUEST_URL / ACTIONS_ID_TOKEN_REQUEST_TOKEN
+ * 环境变量申请（GitCode Actions 流水线与 GitHub Actions 运行器协议兼容）。
+ */
+
+const { cfg } = __nccwpck_require__(3298);
+const { info, error } = __nccwpck_require__(9463);
+const { sendRequest } = __nccwpck_require__(5531);
+
+/** 申请 OIDC ID Token（自包含，不依赖 @actions/core，GitHub / GitCode Actions 流水线均适用）。 */
+async function getOidcToken() {
+  const fromEnv = process.env.HUAWEICLOUD_OIDC_TOKEN;
+  if (fromEnv) {
+    info('-- OIDC ID Token 获取成功：来自环境变量 HUAWEICLOUD_OIDC_TOKEN 注入 --');
+    return fromEnv;
+  }
+  const fromActions = await getOidcTokenFromActions();
+  if (fromActions) {
+    info('-- OIDC ID Token 申请成功（Actions 兼容流水线 OIDC 接口）--');
+    return fromActions;
+  }
+  error('-- OIDC ID Token 申请失败：缺少 ACTIONS_ID_TOKEN_REQUEST_URL / ACTIONS_ID_TOKEN_REQUEST_TOKEN 环境变量 --');
+  throw new Error(
+    '无法申请 OIDC ID Token：缺少 ACTIONS_ID_TOKEN_REQUEST_URL/ACTIONS_ID_TOKEN_REQUEST_TOKEN。' +
+    '请确认流水线（GitHub Actions / GitCode Actions 等兼容平台）已声明 permissions: id-token: write，' +
+    '或设置环境变量 HUAWEICLOUD_OIDC_TOKEN 直接注入令牌。'
+  );
+}
+
+/**
+ * 通过 Actions 兼容流水线（GitHub Actions / GitCode Actions）注入的环境变量自行申请 OIDC ID Token。
+ * 与 @actions/core 的 getIDToken 实现一致：向 ACTIONS_ID_TOKEN_REQUEST_URL 发起
+ * GET 请求并携带 audience 查询参数，Authorization 头使用 ACTIONS_ID_TOKEN_REQUEST_TOKEN。
+ * @returns {Promise<string|null>}
+ */
+async function getOidcTokenFromActions() {
+  const reqUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const reqToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!reqUrl || !reqToken) {
+    return null;
+  }
+  const url = new URL(reqUrl);
+  url.searchParams.append('audience', cfg.audience);
+  const res = await sendRequest('GET', url.toString(), {
+    Authorization: `Bearer ${reqToken}`,
+    'Content-Type': 'application/json',
+    'User-Agent': 'OpenlibingClient/1.0'
+  }, '');
+  if (res.status !== 200 || !res.data || !res.data.value) {
+    error(`OIDC Token 申请失败（HTTP ${res.status}）: ${JSON.stringify(res.data)}`);
+    return null;
+  }
+  return res.data.value;
+}
+
+module.exports = { getOidcToken };
+
+
+/***/ }),
+
+/***/ 9692:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+/**
+ * APIG V11-HMAC-SHA256 签名模块（严格复刻华为云官方 APIG Python SDK 的 V11 算法）。
+ * 仅适用于 APIG 网关接口，签名作用域服务名固定为 apic。
+ */
+
+const crypto = __nccwpck_require__(6982);
+
+const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const APIC_SERVICE = 'apic';
+
+// 与官方 noEscape 一致的字符表：不可编码字符（字母数字和 - _ . ~）为 1
+const noEscape = [
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
+  0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1,
+  0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0
+];
+
+const hexTable = [];
+for (let i = 0; i < 256; ++i) {
+  hexTable[i] = '%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase();
+}
+
+/** 官方 urlencode 实现（quote(str, safe='~')）。 */
+function urlEncode(str) {
+  if (typeof str !== 'string') {
+    str = str == null ? '' : String(str);
+  }
+  let out = '';
+  let lastPos = 0;
+  for (let i = 0; i < str.length; ++i) {
+    const c = str.charCodeAt(i);
+    if (c < 0x80) {
+      if (noEscape[c] === 1) continue;
+      if (lastPos < i) out += str.slice(lastPos, i);
+      lastPos = i + 1;
+      out += hexTable[c];
+      continue;
+    }
+    if (lastPos < i) out += str.slice(lastPos, i);
+    if (c < 0x800) {
+      lastPos = i + 1;
+      out += hexTable[0xC0 | (c >> 6)] + hexTable[0x80 | (c & 0x3F)];
+      continue;
+    }
+    if (c < 0xD800 || c >= 0xE000) {
+      lastPos = i + 1;
+      out += hexTable[0xE0 | (c >> 12)] +
+        hexTable[0x80 | ((c >> 6) & 0x3F)] +
+        hexTable[0x80 | (c & 0x3F)];
+      continue;
+    }
+    ++i;
+    if (i >= str.length) throw new Error('ERR_INVALID_URI');
+    const c2 = str.charCodeAt(i) & 0x3FF;
+    lastPos = i + 1;
+    const cFull = 0x10000 + (((c & 0x3FF) << 10) | c2);
+    out += hexTable[0xF0 | (cFull >> 18)] +
+      hexTable[0x80 | ((cFull >> 12) & 0x3F)] +
+      hexTable[0x80 | ((cFull >> 6) & 0x3F)] +
+      hexTable[0x80 | (cFull & 0x3F)];
+  }
+  if (lastPos === 0) return str;
+  if (lastPos < str.length) return out + str.slice(lastPos);
+  return out;
+}
+
+/** CanonicalURI：路径按 '/' 分段逐段编码后拼接，末尾补 '/'。 */
+function canonicalURI(pathname) {
+  const input = pathname || '';
+  const uriList = input.split('/');
+  const uri = uriList.map((seg) => urlEncode(seg));
+  let urlpath = uri.join('/');
+  if (urlpath[urlpath.length - 1] !== '/') {
+    urlpath = urlpath + '/';
+  }
+  return urlpath;
+}
+
+/** CanonicalQueryString：查询参数按键排序，值排序后拼接。 */
+function canonicalQueryString(searchParams) {
+  const keys = [];
+  for (const key of searchParams.keys()) keys.push(key);
+  keys.sort();
+  const arr = [];
+  for (const key of keys) {
+    const ke = urlEncode(key);
+    const values = searchParams.getAll(key);
+    values.sort();
+    for (const v of values) {
+      arr.push(ke + '=' + urlEncode(v));
+    }
+  }
+  return arr.join('&');
+}
+
+/**
+ * CanonicalHeaders：按 signed headers 顺序，name:value\n（value 去首尾空格）。
+ * 注意：allHeaders 的 key 可能保留原始大小写，因此先构建小写 key 的查找表，
+ * 否则会取到 undefined，导致规范请求错误、签名不匹配（表现为 APIG.0602 等）。
+ *
+ * 防御性检查：若同一头名以不同大小写重复出现（如 Content-Type 与 content-type），
+ * 规范化时会后值覆盖前值，签名与请求实际头不一致导致 APIG.0301 验签失败。
+ * 此处检测到重复时通过 console.warn 输出提示，便于调用方排查。
+ */
+function canonicalHeaders(allHeaders, signedHeaders) {
+  const normalized = {};
+  const seen = {};
+  const duplicates = [];
+  for (const k of Object.keys(allHeaders)) {
+    const lowerK = k.toLowerCase();
+    if (seen[lowerK] && !duplicates.includes(lowerK)) {
+      duplicates.push(lowerK);
+    }
+    seen[lowerK] = true;
+    normalized[lowerK] = allHeaders[k];
+  }
+  if (duplicates.length > 0) {
+    console.warn(`[V11Signer] 检测到重复请求头（将使用最后出现的值）: ${duplicates.join(', ')}`);
+  }
+  const arr = [];
+  for (const k of signedHeaders) {
+    arr.push(k + ':' + String(normalized[k]).trim());
+  }
+  return arr.join('\n') + '\n';
+}
+
+/** sha256 hex。 */
+function sha256Hex(str) {
+  return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
+}
+
+/** hmac-sha256 hex。 */
+function hmacSha256Hex(key, str) {
+  return crypto.createHmac('sha256', key).update(str, 'utf8').digest('hex');
+}
+
+/**
+ * HKDF-SHA256 派生密钥，返回 hex 字符串。
+ * 严格对齐官方 signer_v11.py 的 _hkdf：salt = AK，ikm = SK，info = credential_scope。
+ */
+function hkdfGetDerKeySha256(accessKey, secretKey, credentialScope) {
+  const salt = Buffer.from(accessKey, 'utf8');
+  const ikm = Buffer.from(secretKey, 'utf8');
+  const info = Buffer.from(credentialScope, 'utf8');
+  const prk = crypto.createHmac('sha256', salt).update(ikm).digest();
+  let okm = Buffer.alloc(0);
+  let t = Buffer.alloc(0);
+  const length = 32;
+  const rounds = Math.ceil((length + 32) / 32);
+  for (let i = 1; i <= rounds; ++i) {
+    const newInfo = Buffer.concat([t, info, Buffer.from([i])]);
+    t = crypto.createHmac('sha256', prk).update(newInfo).digest();
+    okm = Buffer.concat([okm, t], okm.length + t.length);
+  }
+  return okm.slice(0, length).toString('hex').toLowerCase();
+}
+
+/** 当前 GMT 时间，格式 YYYYMMDDTHHMMSSZ。 */
+function getTime() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    d.getUTCFullYear() +
+    pad(d.getUTCMonth() + 1) +
+    pad(d.getUTCDate()) +
+    'T' +
+    pad(d.getUTCHours()) +
+    pad(d.getUTCMinutes()) +
+    pad(d.getUTCSeconds()) +
+    'Z'
+  );
+}
+
+/**
+ * V11Signer：使用 AK/SK 对 APIG 请求做 V11-HMAC-SHA256 签名。
+ * 仅适用于 APIG 网关接口（签名作用域服务名固定为 apic）。
+ */
+class V11Signer {
+  constructor(options = {}) {
+    this.Key = '';
+    this.Secret = '';
+    this.region = options.region || '';
+  }
+
+  /**
+   * 对请求签名，返回签名后的完整请求头（含 Authorization / x-sdk-date / host）。
+   * @param {string} method   HTTP 方法（如 GET/POST）
+   * @param {string} url      完整 URL（https://{apig-host}{path}[?query]）
+   * @param {Object} [headers] 请求头
+   * @param {string} [body]    请求体（字符串）
+   * @returns {Object} 签名后的请求头
+   */
+  sign(method, url, headers = {}, body = '') {
+    const parsedUrl = new URL(url);
+
+    const allHeaders = {};
+    for (const k of Object.keys(headers)) allHeaders[k] = headers[k];
+    if (!Object.keys(allHeaders).some((k) => k.toLowerCase() === 'x-sdk-date')) {
+      allHeaders['x-sdk-date'] = getTime();
+    }
+    if (!Object.keys(allHeaders).some((k) => k.toLowerCase() === 'host')) {
+      allHeaders['host'] = parsedUrl.host;
+    }
+
+    const signedHeaders = Object.keys(allHeaders)
+      .map((k) => k.toLowerCase())
+      .sort();
+
+    const canonicalURIStr = canonicalURI(parsedUrl.pathname);
+    const canonicalQueryStringStr = canonicalQueryString(parsedUrl.searchParams);
+    const canonicalHeadersStr = canonicalHeaders(allHeaders, signedHeaders);
+    const payloadHash = body ? sha256Hex(body) : EMPTY_BODY_SHA256;
+
+    const canonicalRequest = [
+      method.toUpperCase(),
+      canonicalURIStr,
+      canonicalQueryStringStr,
+      canonicalHeadersStr,
+      signedHeaders.join(';'),
+      payloadHash
+    ].join('\n');
+
+    const canonicalRequestHash = sha256Hex(canonicalRequest);
+
+    const time = allHeaders['x-sdk-date'];
+    const formattedDate = time.substring(0, 8);
+    const credentialScope = formattedDate + '/' + this.region + '/' + APIC_SERVICE;
+
+    const stringToSign =
+      'V11-HMAC-SHA256\n' +
+      time + '\n' +
+      credentialScope + '\n' +
+      canonicalRequestHash;
+
+    const realUseSecret = hkdfGetDerKeySha256(this.Key, this.Secret, credentialScope);
+    const signature = hmacSha256Hex(realUseSecret, stringToSign);
+
+    allHeaders['Authorization'] =
+      'V11-HMAC-SHA256 Credential=' + this.Key + '/' + credentialScope +
+      ', SignedHeaders=' + signedHeaders.join(';') +
+      ', Signature=' + signature;
+
+    return allHeaders;
+  }
+}
+
+module.exports = { V11Signer };
 
 
 /***/ }),
@@ -11779,7 +9468,7 @@ exports.colors = [6, 2, 3, 4, 5, 1];
 try {
 	// Optional dependency (as in, doesn't need to be installed, NOT like optionalDependencies in package.json)
 	// eslint-disable-next-line import/no-extraneous-dependencies
-	const supportsColor = __nccwpck_require__(75);
+	const supportsColor = __nccwpck_require__(1450);
 
 	if (supportsColor && (supportsColor.stderr || supportsColor).level >= 2) {
 		exports.colors = [
@@ -13604,6 +11293,18 @@ var hasOwn = __nccwpck_require__(4076);
 var populate = __nccwpck_require__(1835);
 
 /**
+ * Escape CR, LF, and `"` in a multipart `name`/`filename` parameter, so a field
+ * name or filename can not break out of its header line to inject headers or
+ * smuggle additional parts. Matches the WHATWG HTML multipart/form-data encoding.
+ *
+ * @param {string} str - the parameter value to escape
+ * @returns {string} the escaped value
+ */
+function escapeHeaderParam(str) {
+  return String(str).replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/"/g, '%22');
+}
+
+/**
  * Create readable "multipart/form-data" streams.
  * Can be used to submit forms
  * and file uploads to other web applications.
@@ -13768,7 +11469,7 @@ FormData.prototype._multiPartHeader = function (field, value, options) {
   var contents = '';
   var headers = {
     // add custom disposition as third element or keep it two elements if not
-    'Content-Disposition': ['form-data', 'name="' + field + '"'].concat(contentDisposition || []),
+    'Content-Disposition': ['form-data', 'name="' + escapeHeaderParam(field) + '"'].concat(contentDisposition || []),
     // if no content type. allow it to be empty array
     'Content-Type': [].concat(contentType || [])
   };
@@ -13822,7 +11523,7 @@ FormData.prototype._getContentDisposition = function (value, options) { // eslin
   }
 
   if (filename) {
-    return 'filename="' + filename + '"';
+    return 'filename="' + escapeHeaderParam(filename) + '"';
   }
 };
 
@@ -14689,6 +12390,22 @@ module.exports = $gOPD;
 
 /***/ }),
 
+/***/ 3813:
+/***/ ((module) => {
+
+"use strict";
+
+
+module.exports = (flag, argv = process.argv) => {
+	const prefix = flag.startsWith('-') ? '' : (flag.length === 1 ? '-' : '--');
+	const position = argv.indexOf(prefix + flag);
+	const terminatorPosition = argv.indexOf('--');
+	return position !== -1 && (terminatorPosition === -1 || position < terminatorPosition);
+};
+
+
+/***/ }),
+
 /***/ 3336:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -15166,51 +12883,48 @@ module.exports = isStream;
 "use strict";
 
 
+const loader = __nccwpck_require__(1950)
+const dumper = __nccwpck_require__(9980)
 
-var loader = __nccwpck_require__(1950);
-var dumper = __nccwpck_require__(9980);
-
-
-function renamed(from, to) {
+function renamed (from, to) {
   return function () {
     throw new Error('Function yaml.' + from + ' is removed in js-yaml 4. ' +
-      'Use yaml.' + to + ' instead, which is now safe by default.');
-  };
+      'Use yaml.' + to + ' instead, which is now safe by default.')
+  }
 }
 
-
-module.exports.Type = __nccwpck_require__(9557);
-module.exports.Schema = __nccwpck_require__(2046);
-module.exports.FAILSAFE_SCHEMA = __nccwpck_require__(9832);
-module.exports.JSON_SCHEMA = __nccwpck_require__(8927);
-module.exports.CORE_SCHEMA = __nccwpck_require__(5746);
-module.exports.DEFAULT_SCHEMA = __nccwpck_require__(7336);
-module.exports.load                = loader.load;
-module.exports.loadAll             = loader.loadAll;
-module.exports.dump                = dumper.dump;
-module.exports.YAMLException = __nccwpck_require__(1248);
+module.exports.Type = __nccwpck_require__(9557)
+module.exports.Schema = __nccwpck_require__(2046)
+module.exports.FAILSAFE_SCHEMA = __nccwpck_require__(9832)
+module.exports.JSON_SCHEMA = __nccwpck_require__(8927)
+module.exports.CORE_SCHEMA = __nccwpck_require__(5746)
+module.exports.DEFAULT_SCHEMA = __nccwpck_require__(7336)
+module.exports.load = loader.load
+module.exports.loadAll = loader.loadAll
+module.exports.dump = dumper.dump
+module.exports.YAMLException = __nccwpck_require__(1248)
 
 // Re-export all types in case user wants to create custom schema
 module.exports.types = {
-  binary:    __nccwpck_require__(8149),
-  float:     __nccwpck_require__(7584),
-  map:       __nccwpck_require__(7316),
-  null:      __nccwpck_require__(4333),
-  pairs:     __nccwpck_require__(6267),
-  set:       __nccwpck_require__(8758),
+  binary: __nccwpck_require__(8149),
+  float: __nccwpck_require__(7584),
+  map: __nccwpck_require__(7316),
+  null: __nccwpck_require__(4333),
+  pairs: __nccwpck_require__(6267),
+  set: __nccwpck_require__(8758),
   timestamp: __nccwpck_require__(8966),
-  bool:      __nccwpck_require__(7296),
-  int:       __nccwpck_require__(4652),
-  merge:     __nccwpck_require__(6854),
-  omap:      __nccwpck_require__(8649),
-  seq:       __nccwpck_require__(7161),
-  str:       __nccwpck_require__(3929)
-};
+  bool: __nccwpck_require__(7296),
+  int: __nccwpck_require__(4652),
+  merge: __nccwpck_require__(6854),
+  omap: __nccwpck_require__(8649),
+  seq: __nccwpck_require__(7161),
+  str: __nccwpck_require__(3929)
+}
 
 // Removed functions from JS-YAML 3.0.x
-module.exports.safeLoad            = renamed('safeLoad', 'load');
-module.exports.safeLoadAll         = renamed('safeLoadAll', 'loadAll');
-module.exports.safeDump            = renamed('safeDump', 'dump');
+module.exports.safeLoad = renamed('safeLoad', 'load')
+module.exports.safeLoadAll = renamed('safeLoadAll', 'loadAll')
+module.exports.safeDump = renamed('safeDump', 'dump')
 
 
 /***/ }),
@@ -15221,63 +12935,54 @@ module.exports.safeDump            = renamed('safeDump', 'dump');
 "use strict";
 
 
-
-function isNothing(subject) {
-  return (typeof subject === 'undefined') || (subject === null);
+function isNothing (subject) {
+  return (typeof subject === 'undefined') || (subject === null)
 }
 
-
-function isObject(subject) {
-  return (typeof subject === 'object') && (subject !== null);
+function isObject (subject) {
+  return (typeof subject === 'object') && (subject !== null)
 }
 
+function toArray (sequence) {
+  if (Array.isArray(sequence)) return sequence
+  else if (isNothing(sequence)) return []
 
-function toArray(sequence) {
-  if (Array.isArray(sequence)) return sequence;
-  else if (isNothing(sequence)) return [];
-
-  return [ sequence ];
+  return [sequence]
 }
 
-
-function extend(target, source) {
-  var index, length, key, sourceKeys;
-
+function extend (target, source) {
   if (source) {
-    sourceKeys = Object.keys(source);
+    const sourceKeys = Object.keys(source)
 
-    for (index = 0, length = sourceKeys.length; index < length; index += 1) {
-      key = sourceKeys[index];
-      target[key] = source[key];
+    for (let index = 0, length = sourceKeys.length; index < length; index += 1) {
+      const key = sourceKeys[index]
+      target[key] = source[key]
     }
   }
 
-  return target;
+  return target
 }
 
+function repeat (string, count) {
+  let result = ''
 
-function repeat(string, count) {
-  var result = '', cycle;
-
-  for (cycle = 0; cycle < count; cycle += 1) {
-    result += string;
+  for (let cycle = 0; cycle < count; cycle += 1) {
+    result += string
   }
 
-  return result;
+  return result
 }
 
-
-function isNegativeZero(number) {
-  return (number === 0) && (Number.NEGATIVE_INFINITY === 1 / number);
+function isNegativeZero (number) {
+  return (number === 0) && (Number.NEGATIVE_INFINITY === 1 / number)
 }
 
-
-module.exports.isNothing      = isNothing;
-module.exports.isObject       = isObject;
-module.exports.toArray        = toArray;
-module.exports.repeat         = repeat;
-module.exports.isNegativeZero = isNegativeZero;
-module.exports.extend         = extend;
+module.exports.isNothing = isNothing
+module.exports.isObject = isObject
+module.exports.toArray = toArray
+module.exports.repeat = repeat
+module.exports.isNegativeZero = isNegativeZero
+module.exports.extend = extend
 
 
 /***/ }),
@@ -15288,203 +12993,196 @@ module.exports.extend         = extend;
 "use strict";
 
 
-/*eslint-disable no-use-before-define*/
+const common = __nccwpck_require__(9816)
+const YAMLException = __nccwpck_require__(1248)
+const DEFAULT_SCHEMA = __nccwpck_require__(7336)
 
-var common              = __nccwpck_require__(9816);
-var YAMLException       = __nccwpck_require__(1248);
-var DEFAULT_SCHEMA      = __nccwpck_require__(7336);
+const _toString = Object.prototype.toString
+const _hasOwnProperty = Object.prototype.hasOwnProperty
 
-var _toString       = Object.prototype.toString;
-var _hasOwnProperty = Object.prototype.hasOwnProperty;
+const CHAR_BOM = 0xFEFF
+const CHAR_TAB = 0x09 /* Tab */
+const CHAR_LINE_FEED = 0x0A /* LF */
+const CHAR_CARRIAGE_RETURN = 0x0D /* CR */
+const CHAR_SPACE = 0x20 /* Space */
+const CHAR_EXCLAMATION = 0x21 /* ! */
+const CHAR_DOUBLE_QUOTE = 0x22 /* " */
+const CHAR_SHARP = 0x23 /* # */
+const CHAR_PERCENT = 0x25 /* % */
+const CHAR_AMPERSAND = 0x26 /* & */
+const CHAR_SINGLE_QUOTE = 0x27 /* ' */
+const CHAR_ASTERISK = 0x2A /* * */
+const CHAR_COMMA = 0x2C /* , */
+const CHAR_MINUS = 0x2D /* - */
+const CHAR_COLON = 0x3A /* : */
+const CHAR_EQUALS = 0x3D /* = */
+const CHAR_GREATER_THAN = 0x3E /* > */
+const CHAR_QUESTION = 0x3F /* ? */
+const CHAR_COMMERCIAL_AT = 0x40 /* @ */
+const CHAR_LEFT_SQUARE_BRACKET = 0x5B /* [ */
+const CHAR_RIGHT_SQUARE_BRACKET = 0x5D /* ] */
+const CHAR_GRAVE_ACCENT = 0x60 /* ` */
+const CHAR_LEFT_CURLY_BRACKET = 0x7B /* { */
+const CHAR_VERTICAL_LINE = 0x7C /* | */
+const CHAR_RIGHT_CURLY_BRACKET = 0x7D /* } */
 
-var CHAR_BOM                  = 0xFEFF;
-var CHAR_TAB                  = 0x09; /* Tab */
-var CHAR_LINE_FEED            = 0x0A; /* LF */
-var CHAR_CARRIAGE_RETURN      = 0x0D; /* CR */
-var CHAR_SPACE                = 0x20; /* Space */
-var CHAR_EXCLAMATION          = 0x21; /* ! */
-var CHAR_DOUBLE_QUOTE         = 0x22; /* " */
-var CHAR_SHARP                = 0x23; /* # */
-var CHAR_PERCENT              = 0x25; /* % */
-var CHAR_AMPERSAND            = 0x26; /* & */
-var CHAR_SINGLE_QUOTE         = 0x27; /* ' */
-var CHAR_ASTERISK             = 0x2A; /* * */
-var CHAR_COMMA                = 0x2C; /* , */
-var CHAR_MINUS                = 0x2D; /* - */
-var CHAR_COLON                = 0x3A; /* : */
-var CHAR_EQUALS               = 0x3D; /* = */
-var CHAR_GREATER_THAN         = 0x3E; /* > */
-var CHAR_QUESTION             = 0x3F; /* ? */
-var CHAR_COMMERCIAL_AT        = 0x40; /* @ */
-var CHAR_LEFT_SQUARE_BRACKET  = 0x5B; /* [ */
-var CHAR_RIGHT_SQUARE_BRACKET = 0x5D; /* ] */
-var CHAR_GRAVE_ACCENT         = 0x60; /* ` */
-var CHAR_LEFT_CURLY_BRACKET   = 0x7B; /* { */
-var CHAR_VERTICAL_LINE        = 0x7C; /* | */
-var CHAR_RIGHT_CURLY_BRACKET  = 0x7D; /* } */
+const ESCAPE_SEQUENCES = {}
 
-var ESCAPE_SEQUENCES = {};
+ESCAPE_SEQUENCES[0x00] = '\\0'
+ESCAPE_SEQUENCES[0x07] = '\\a'
+ESCAPE_SEQUENCES[0x08] = '\\b'
+ESCAPE_SEQUENCES[0x09] = '\\t'
+ESCAPE_SEQUENCES[0x0A] = '\\n'
+ESCAPE_SEQUENCES[0x0B] = '\\v'
+ESCAPE_SEQUENCES[0x0C] = '\\f'
+ESCAPE_SEQUENCES[0x0D] = '\\r'
+ESCAPE_SEQUENCES[0x1B] = '\\e'
+ESCAPE_SEQUENCES[0x22] = '\\"'
+ESCAPE_SEQUENCES[0x5C] = '\\\\'
+ESCAPE_SEQUENCES[0x85] = '\\N'
+ESCAPE_SEQUENCES[0xA0] = '\\_'
+ESCAPE_SEQUENCES[0x2028] = '\\L'
+ESCAPE_SEQUENCES[0x2029] = '\\P'
 
-ESCAPE_SEQUENCES[0x00]   = '\\0';
-ESCAPE_SEQUENCES[0x07]   = '\\a';
-ESCAPE_SEQUENCES[0x08]   = '\\b';
-ESCAPE_SEQUENCES[0x09]   = '\\t';
-ESCAPE_SEQUENCES[0x0A]   = '\\n';
-ESCAPE_SEQUENCES[0x0B]   = '\\v';
-ESCAPE_SEQUENCES[0x0C]   = '\\f';
-ESCAPE_SEQUENCES[0x0D]   = '\\r';
-ESCAPE_SEQUENCES[0x1B]   = '\\e';
-ESCAPE_SEQUENCES[0x22]   = '\\"';
-ESCAPE_SEQUENCES[0x5C]   = '\\\\';
-ESCAPE_SEQUENCES[0x85]   = '\\N';
-ESCAPE_SEQUENCES[0xA0]   = '\\_';
-ESCAPE_SEQUENCES[0x2028] = '\\L';
-ESCAPE_SEQUENCES[0x2029] = '\\P';
-
-var DEPRECATED_BOOLEANS_SYNTAX = [
+const DEPRECATED_BOOLEANS_SYNTAX = [
   'y', 'Y', 'yes', 'Yes', 'YES', 'on', 'On', 'ON',
   'n', 'N', 'no', 'No', 'NO', 'off', 'Off', 'OFF'
-];
+]
 
-var DEPRECATED_BASE60_SYNTAX = /^[-+]?[0-9_]+(?::[0-9_]+)+(?:\.[0-9_]*)?$/;
+const DEPRECATED_BASE60_SYNTAX = /^[-+]?[0-9_]+(?::[0-9_]+)+(?:\.[0-9_]*)?$/
 
-function compileStyleMap(schema, map) {
-  var result, keys, index, length, tag, style, type;
+function compileStyleMap (schema, map) {
+  if (map === null) return {}
 
-  if (map === null) return {};
+  const result = {}
+  const keys = Object.keys(map)
 
-  result = {};
-  keys = Object.keys(map);
-
-  for (index = 0, length = keys.length; index < length; index += 1) {
-    tag = keys[index];
-    style = String(map[tag]);
+  for (let index = 0, length = keys.length; index < length; index += 1) {
+    let tag = keys[index]
+    let style = String(map[tag])
 
     if (tag.slice(0, 2) === '!!') {
-      tag = 'tag:yaml.org,2002:' + tag.slice(2);
+      tag = 'tag:yaml.org,2002:' + tag.slice(2)
     }
-    type = schema.compiledTypeMap['fallback'][tag];
+    const type = schema.compiledTypeMap['fallback'][tag]
 
     if (type && _hasOwnProperty.call(type.styleAliases, style)) {
-      style = type.styleAliases[style];
+      style = type.styleAliases[style]
     }
 
-    result[tag] = style;
+    result[tag] = style
   }
 
-  return result;
+  return result
 }
 
-function encodeHex(character) {
-  var string, handle, length;
+function encodeHex (character) {
+  let handle
+  let length
 
-  string = character.toString(16).toUpperCase();
+  const string = character.toString(16).toUpperCase()
 
   if (character <= 0xFF) {
-    handle = 'x';
-    length = 2;
+    handle = 'x'
+    length = 2
   } else if (character <= 0xFFFF) {
-    handle = 'u';
-    length = 4;
+    handle = 'u'
+    length = 4
   } else if (character <= 0xFFFFFFFF) {
-    handle = 'U';
-    length = 8;
+    handle = 'U'
+    length = 8
   } else {
-    throw new YAMLException('code point within a string may not be greater than 0xFFFFFFFF');
+    throw new YAMLException('code point within a string may not be greater than 0xFFFFFFFF')
   }
 
-  return '\\' + handle + common.repeat('0', length - string.length) + string;
+  return '\\' + handle + common.repeat('0', length - string.length) + string
 }
 
+const QUOTING_TYPE_SINGLE = 1
+const QUOTING_TYPE_DOUBLE = 2
 
-var QUOTING_TYPE_SINGLE = 1,
-    QUOTING_TYPE_DOUBLE = 2;
+function State (options) {
+  this.schema = options['schema'] || DEFAULT_SCHEMA
+  this.indent = Math.max(1, (options['indent'] || 2))
+  this.noArrayIndent = options['noArrayIndent'] || false
+  this.skipInvalid = options['skipInvalid'] || false
+  this.flowLevel = (common.isNothing(options['flowLevel']) ? -1 : options['flowLevel'])
+  this.styleMap = compileStyleMap(this.schema, options['styles'] || null)
+  this.sortKeys = options['sortKeys'] || false
+  this.lineWidth = options['lineWidth'] || 80
+  this.noRefs = options['noRefs'] || false
+  this.noCompatMode = options['noCompatMode'] || false
+  this.condenseFlow = options['condenseFlow'] || false
+  this.quotingType = options['quotingType'] === '"' ? QUOTING_TYPE_DOUBLE : QUOTING_TYPE_SINGLE
+  this.forceQuotes = options['forceQuotes'] || false
+  this.replacer = typeof options['replacer'] === 'function' ? options['replacer'] : null
 
-function State(options) {
-  this.schema        = options['schema'] || DEFAULT_SCHEMA;
-  this.indent        = Math.max(1, (options['indent'] || 2));
-  this.noArrayIndent = options['noArrayIndent'] || false;
-  this.skipInvalid   = options['skipInvalid'] || false;
-  this.flowLevel     = (common.isNothing(options['flowLevel']) ? -1 : options['flowLevel']);
-  this.styleMap      = compileStyleMap(this.schema, options['styles'] || null);
-  this.sortKeys      = options['sortKeys'] || false;
-  this.lineWidth     = options['lineWidth'] || 80;
-  this.noRefs        = options['noRefs'] || false;
-  this.noCompatMode  = options['noCompatMode'] || false;
-  this.condenseFlow  = options['condenseFlow'] || false;
-  this.quotingType   = options['quotingType'] === '"' ? QUOTING_TYPE_DOUBLE : QUOTING_TYPE_SINGLE;
-  this.forceQuotes   = options['forceQuotes'] || false;
-  this.replacer      = typeof options['replacer'] === 'function' ? options['replacer'] : null;
+  this.implicitTypes = this.schema.compiledImplicit
+  this.explicitTypes = this.schema.compiledExplicit
 
-  this.implicitTypes = this.schema.compiledImplicit;
-  this.explicitTypes = this.schema.compiledExplicit;
+  this.tag = null
+  this.result = ''
 
-  this.tag = null;
-  this.result = '';
-
-  this.duplicates = [];
-  this.usedDuplicates = null;
+  this.duplicates = []
+  this.usedDuplicates = null
 }
 
 // Indents every line in a string. Empty lines (\n only) are not indented.
-function indentString(string, spaces) {
-  var ind = common.repeat(' ', spaces),
-      position = 0,
-      next = -1,
-      result = '',
-      line,
-      length = string.length;
+function indentString (string, spaces) {
+  const ind = common.repeat(' ', spaces)
+  let position = 0
+  let result = ''
+  const length = string.length
 
   while (position < length) {
-    next = string.indexOf('\n', position);
+    let line
+    const next = string.indexOf('\n', position)
     if (next === -1) {
-      line = string.slice(position);
-      position = length;
+      line = string.slice(position)
+      position = length
     } else {
-      line = string.slice(position, next + 1);
-      position = next + 1;
+      line = string.slice(position, next + 1)
+      position = next + 1
     }
 
-    if (line.length && line !== '\n') result += ind;
+    if (line.length && line !== '\n') result += ind
 
-    result += line;
+    result += line
   }
 
-  return result;
+  return result
 }
 
-function generateNextLine(state, level) {
-  return '\n' + common.repeat(' ', state.indent * level);
+function generateNextLine (state, level) {
+  return '\n' + common.repeat(' ', state.indent * level)
 }
 
-function testImplicitResolving(state, str) {
-  var index, length, type;
-
-  for (index = 0, length = state.implicitTypes.length; index < length; index += 1) {
-    type = state.implicitTypes[index];
+function testImplicitResolving (state, str) {
+  for (let index = 0, length = state.implicitTypes.length; index < length; index += 1) {
+    const type = state.implicitTypes[index]
 
     if (type.resolve(str)) {
-      return true;
+      return true
     }
   }
 
-  return false;
+  return false
 }
 
 // [33] s-white ::= s-space | s-tab
-function isWhitespace(c) {
-  return c === CHAR_SPACE || c === CHAR_TAB;
+function isWhitespace (c) {
+  return c === CHAR_SPACE || c === CHAR_TAB
 }
 
 // Returns true if the character can be printed without escaping.
 // From YAML 1.2: "any allowed characters known to be non-printable
 // should also be escaped. [However,] This isn’t mandatory"
 // Derived from nb-char - \t - #x85 - #xA0 - #x2028 - #x2029.
-function isPrintable(c) {
-  return  (0x00020 <= c && c <= 0x00007E)
-      || ((0x000A1 <= c && c <= 0x00D7FF) && c !== 0x2028 && c !== 0x2029)
-      || ((0x0E000 <= c && c <= 0x00FFFD) && c !== CHAR_BOM)
-      ||  (0x10000 <= c && c <= 0x10FFFF);
+function isPrintable (c) {
+  return (c >= 0x00020 && c <= 0x00007E) ||
+    ((c >= 0x000A1 && c <= 0x00D7FF) && c !== 0x2028 && c !== 0x2029) ||
+    ((c >= 0x0E000 && c <= 0x00FFFD) && c !== CHAR_BOM) ||
+    (c >= 0x10000 && c <= 0x10FFFF)
 }
 
 // [34] ns-char ::= nb-char - s-white
@@ -15492,12 +13190,12 @@ function isPrintable(c) {
 // [26] b-char  ::= b-line-feed | b-carriage-return
 // Including s-white (for some reason, examples doesn't match specs in this aspect)
 // ns-char ::= c-printable - b-line-feed - b-carriage-return - c-byte-order-mark
-function isNsCharOrWhitespace(c) {
-  return isPrintable(c)
-    && c !== CHAR_BOM
+function isNsCharOrWhitespace (c) {
+  return isPrintable(c) &&
+    c !== CHAR_BOM &&
     // - b-char
-    && c !== CHAR_CARRIAGE_RETURN
-    && c !== CHAR_LINE_FEED;
+    c !== CHAR_CARRIAGE_RETURN &&
+    c !== CHAR_LINE_FEED
 }
 
 // [127]  ns-plain-safe(c) ::= c = flow-out  ⇒ ns-plain-safe-out
@@ -15509,91 +13207,96 @@ function isNsCharOrWhitespace(c) {
 // [130]  ns-plain-char(c) ::=  ( ns-plain-safe(c) - “:” - “#” )
 //                            | ( /* An ns-char preceding */ “#” )
 //                            | ( “:” /* Followed by an ns-plain-safe(c) */ )
-function isPlainSafe(c, prev, inblock) {
-  var cIsNsCharOrWhitespace = isNsCharOrWhitespace(c);
-  var cIsNsChar = cIsNsCharOrWhitespace && !isWhitespace(c);
+function isPlainSafe (c, prev, inblock) {
+  const cIsNsCharOrWhitespace = isNsCharOrWhitespace(c)
+  const cIsNsChar = cIsNsCharOrWhitespace && !isWhitespace(c)
   return (
-    // ns-plain-safe
-    inblock ? // c = flow-in
-      cIsNsCharOrWhitespace
-      : cIsNsCharOrWhitespace
-        // - c-flow-indicator
-        && c !== CHAR_COMMA
-        && c !== CHAR_LEFT_SQUARE_BRACKET
-        && c !== CHAR_RIGHT_SQUARE_BRACKET
-        && c !== CHAR_LEFT_CURLY_BRACKET
-        && c !== CHAR_RIGHT_CURLY_BRACKET
-  )
+    (
+      // ns-plain-safe
+      inblock // c = flow-in
+        ? cIsNsCharOrWhitespace
+        : cIsNsCharOrWhitespace &&
+          // - c-flow-indicator
+          c !== CHAR_COMMA &&
+          c !== CHAR_LEFT_SQUARE_BRACKET &&
+          c !== CHAR_RIGHT_SQUARE_BRACKET &&
+          c !== CHAR_LEFT_CURLY_BRACKET &&
+          c !== CHAR_RIGHT_CURLY_BRACKET
+    ) &&
     // ns-plain-char
-    && c !== CHAR_SHARP // false on '#'
-    && !(prev === CHAR_COLON && !cIsNsChar) // false on ': '
-    || (isNsCharOrWhitespace(prev) && !isWhitespace(prev) && c === CHAR_SHARP) // change to true on '[^ ]#'
-    || (prev === CHAR_COLON && cIsNsChar); // change to true on ':[^ ]'
+    c !== CHAR_SHARP && // false on '#'
+    !(prev === CHAR_COLON && !cIsNsChar)
+  ) || // false on ': '
+  (isNsCharOrWhitespace(prev) && !isWhitespace(prev) && c === CHAR_SHARP) || // change to true on '[^ ]#'
+  (prev === CHAR_COLON && cIsNsChar) // change to true on ':[^ ]'
 }
 
 // Simplified test for values allowed as the first character in plain style.
-function isPlainSafeFirst(c) {
+function isPlainSafeFirst (c) {
   // Uses a subset of ns-char - c-indicator
   // where ns-char = nb-char - s-white.
   // No support of ( ( “?” | “:” | “-” ) /* Followed by an ns-plain-safe(c)) */ ) part
-  return isPrintable(c) && c !== CHAR_BOM
-    && !isWhitespace(c) // - s-white
+  return isPrintable(c) &&
+    c !== CHAR_BOM &&
+    !isWhitespace(c) && // - s-white
     // - (c-indicator ::=
     // “-” | “?” | “:” | “,” | “[” | “]” | “{” | “}”
-    && c !== CHAR_MINUS
-    && c !== CHAR_QUESTION
-    && c !== CHAR_COLON
-    && c !== CHAR_COMMA
-    && c !== CHAR_LEFT_SQUARE_BRACKET
-    && c !== CHAR_RIGHT_SQUARE_BRACKET
-    && c !== CHAR_LEFT_CURLY_BRACKET
-    && c !== CHAR_RIGHT_CURLY_BRACKET
+    c !== CHAR_MINUS &&
+    c !== CHAR_QUESTION &&
+    c !== CHAR_COLON &&
+    c !== CHAR_COMMA &&
+    c !== CHAR_LEFT_SQUARE_BRACKET &&
+    c !== CHAR_RIGHT_SQUARE_BRACKET &&
+    c !== CHAR_LEFT_CURLY_BRACKET &&
+    c !== CHAR_RIGHT_CURLY_BRACKET &&
     // | “#” | “&” | “*” | “!” | “|” | “=” | “>” | “'” | “"”
-    && c !== CHAR_SHARP
-    && c !== CHAR_AMPERSAND
-    && c !== CHAR_ASTERISK
-    && c !== CHAR_EXCLAMATION
-    && c !== CHAR_VERTICAL_LINE
-    && c !== CHAR_EQUALS
-    && c !== CHAR_GREATER_THAN
-    && c !== CHAR_SINGLE_QUOTE
-    && c !== CHAR_DOUBLE_QUOTE
+    c !== CHAR_SHARP &&
+    c !== CHAR_AMPERSAND &&
+    c !== CHAR_ASTERISK &&
+    c !== CHAR_EXCLAMATION &&
+    c !== CHAR_VERTICAL_LINE &&
+    c !== CHAR_EQUALS &&
+    c !== CHAR_GREATER_THAN &&
+    c !== CHAR_SINGLE_QUOTE &&
+    c !== CHAR_DOUBLE_QUOTE &&
     // | “%” | “@” | “`”)
-    && c !== CHAR_PERCENT
-    && c !== CHAR_COMMERCIAL_AT
-    && c !== CHAR_GRAVE_ACCENT;
+    c !== CHAR_PERCENT &&
+    c !== CHAR_COMMERCIAL_AT &&
+    c !== CHAR_GRAVE_ACCENT
 }
 
 // Simplified test for values allowed as the last character in plain style.
-function isPlainSafeLast(c) {
+function isPlainSafeLast (c) {
   // just not whitespace or colon, it will be checked to be plain character later
-  return !isWhitespace(c) && c !== CHAR_COLON;
+  return !isWhitespace(c) && c !== CHAR_COLON
 }
 
 // Same as 'string'.codePointAt(pos), but works in older browsers.
-function codePointAt(string, pos) {
-  var first = string.charCodeAt(pos), second;
+function codePointAt (string, pos) {
+  const first = string.charCodeAt(pos)
+  let second
+
   if (first >= 0xD800 && first <= 0xDBFF && pos + 1 < string.length) {
-    second = string.charCodeAt(pos + 1);
+    second = string.charCodeAt(pos + 1)
     if (second >= 0xDC00 && second <= 0xDFFF) {
       // https://mathiasbynens.be/notes/javascript-encoding#surrogate-formulae
-      return (first - 0xD800) * 0x400 + second - 0xDC00 + 0x10000;
+      return (first - 0xD800) * 0x400 + second - 0xDC00 + 0x10000
     }
   }
-  return first;
+  return first
 }
 
 // Determines whether block indentation indicator is required.
-function needIndentIndicator(string) {
-  var leadingSpaceRe = /^\n* /;
-  return leadingSpaceRe.test(string);
+function needIndentIndicator (string) {
+  const leadingSpaceRe = /^\n* /
+  return leadingSpaceRe.test(string)
 }
 
-var STYLE_PLAIN   = 1,
-    STYLE_SINGLE  = 2,
-    STYLE_LITERAL = 3,
-    STYLE_FOLDED  = 4,
-    STYLE_DOUBLE  = 5;
+const STYLE_PLAIN = 1
+const STYLE_SINGLE = 2
+const STYLE_LITERAL = 3
+const STYLE_FOLDED = 4
+const STYLE_DOUBLE = 5
 
 // Determines which scalar styles are possible and returns the preferred style.
 // lineWidth = -1 => no limit.
@@ -15602,54 +13305,53 @@ var STYLE_PLAIN   = 1,
 //    STYLE_PLAIN or STYLE_SINGLE => no \n are in the string.
 //    STYLE_LITERAL => no lines are suitable for folding (or lineWidth is -1).
 //    STYLE_FOLDED => a line > lineWidth and can be folded (and lineWidth != -1).
-function chooseScalarStyle(string, singleLineOnly, indentPerLevel, lineWidth,
+function chooseScalarStyle (string, singleLineOnly, indentPerLevel, lineWidth,
   testAmbiguousType, quotingType, forceQuotes, inblock) {
-
-  var i;
-  var char = 0;
-  var prevChar = null;
-  var hasLineBreak = false;
-  var hasFoldableLine = false; // only checked if shouldTrackWidth
-  var shouldTrackWidth = lineWidth !== -1;
-  var previousLineBreak = -1; // count the first line correctly
-  var plain = isPlainSafeFirst(codePointAt(string, 0))
-          && isPlainSafeLast(codePointAt(string, string.length - 1));
+  let i
+  let char = 0
+  let prevChar = null
+  let hasLineBreak = false
+  let hasFoldableLine = false // only checked if shouldTrackWidth
+  const shouldTrackWidth = lineWidth !== -1
+  let previousLineBreak = -1 // count the first line correctly
+  let plain = isPlainSafeFirst(codePointAt(string, 0)) &&
+    isPlainSafeLast(codePointAt(string, string.length - 1))
 
   if (singleLineOnly || forceQuotes) {
     // Case: no block styles.
     // Check for disallowed characters to rule out plain and single.
     for (i = 0; i < string.length; char >= 0x10000 ? i += 2 : i++) {
-      char = codePointAt(string, i);
+      char = codePointAt(string, i)
       if (!isPrintable(char)) {
-        return STYLE_DOUBLE;
+        return STYLE_DOUBLE
       }
-      plain = plain && isPlainSafe(char, prevChar, inblock);
-      prevChar = char;
+      plain = plain && isPlainSafe(char, prevChar, inblock)
+      prevChar = char
     }
   } else {
     // Case: block styles permitted.
     for (i = 0; i < string.length; char >= 0x10000 ? i += 2 : i++) {
-      char = codePointAt(string, i);
+      char = codePointAt(string, i)
       if (char === CHAR_LINE_FEED) {
-        hasLineBreak = true;
+        hasLineBreak = true
         // Check if any line can be folded.
         if (shouldTrackWidth) {
           hasFoldableLine = hasFoldableLine ||
             // Foldable line = too long, and not more-indented.
             (i - previousLineBreak - 1 > lineWidth &&
-             string[previousLineBreak + 1] !== ' ');
-          previousLineBreak = i;
+             string[previousLineBreak + 1] !== ' ')
+          previousLineBreak = i
         }
       } else if (!isPrintable(char)) {
-        return STYLE_DOUBLE;
+        return STYLE_DOUBLE
       }
-      plain = plain && isPlainSafe(char, prevChar, inblock);
-      prevChar = char;
+      plain = plain && isPlainSafe(char, prevChar, inblock)
+      prevChar = char
     }
     // in case the end is missing a \n
     hasFoldableLine = hasFoldableLine || (shouldTrackWidth &&
       (i - previousLineBreak - 1 > lineWidth &&
-       string[previousLineBreak + 1] !== ' '));
+       string[previousLineBreak + 1] !== ' '))
   }
   // Although every style can represent \n without escaping, prefer block styles
   // for multiline, since they're more readable and they don't add empty lines.
@@ -15658,20 +13360,20 @@ function chooseScalarStyle(string, singleLineOnly, indentPerLevel, lineWidth,
     // Strings interpretable as another type have to be quoted;
     // e.g. the string 'true' vs. the boolean true.
     if (plain && !forceQuotes && !testAmbiguousType(string)) {
-      return STYLE_PLAIN;
+      return STYLE_PLAIN
     }
-    return quotingType === QUOTING_TYPE_DOUBLE ? STYLE_DOUBLE : STYLE_SINGLE;
+    return quotingType === QUOTING_TYPE_DOUBLE ? STYLE_DOUBLE : STYLE_SINGLE
   }
   // Edge case: block indentation indicator can only have one digit.
   if (indentPerLevel > 9 && needIndentIndicator(string)) {
-    return STYLE_DOUBLE;
+    return STYLE_DOUBLE
   }
   // At this point we know block styles are valid.
   // Prefer literal style unless we want to fold.
   if (!forceQuotes) {
-    return hasFoldableLine ? STYLE_FOLDED : STYLE_LITERAL;
+    return hasFoldableLine ? STYLE_FOLDED : STYLE_LITERAL
   }
-  return quotingType === QUOTING_TYPE_DOUBLE ? STYLE_DOUBLE : STYLE_SINGLE;
+  return quotingType === QUOTING_TYPE_DOUBLE ? STYLE_DOUBLE : STYLE_SINGLE
 }
 
 // Note: line breaking/folding is implemented for only the folded style.
@@ -15680,18 +13382,18 @@ function chooseScalarStyle(string, singleLineOnly, indentPerLevel, lineWidth,
 //    • No ending newline => unaffected; already using strip "-" chomping.
 //    • Ending newline    => removed then restored.
 //  Importantly, this keeps the "+" chomp indicator from gaining an extra line.
-function writeScalar(state, string, level, iskey, inblock) {
+function writeScalar (state, string, level, iskey, inblock) {
   state.dump = (function () {
     if (string.length === 0) {
-      return state.quotingType === QUOTING_TYPE_DOUBLE ? '""' : "''";
+      return state.quotingType === QUOTING_TYPE_DOUBLE ? '""' : "''"
     }
     if (!state.noCompatMode) {
       if (DEPRECATED_BOOLEANS_SYNTAX.indexOf(string) !== -1 || DEPRECATED_BASE60_SYNTAX.test(string)) {
-        return state.quotingType === QUOTING_TYPE_DOUBLE ? ('"' + string + '"') : ("'" + string + "'");
+        return state.quotingType === QUOTING_TYPE_DOUBLE ? ('"' + string + '"') : ("'" + string + "'")
       }
     }
 
-    var indent = state.indent * Math.max(1, level); // no 0-indent scalars
+    const indent = state.indent * Math.max(1, level) // no 0-indent scalars
     // As indentation gets deeper, let the width decrease monotonically
     // to the lower bound min(state.lineWidth, 40).
     // Note that this implies
@@ -15699,461 +13401,441 @@ function writeScalar(state, string, level, iskey, inblock) {
     //  state.lineWidth > 40 + state.indent: width decreases until the lower bound.
     // This behaves better than a constant minimum width which disallows narrower options,
     // or an indent threshold which causes the width to suddenly increase.
-    var lineWidth = state.lineWidth === -1
-      ? -1 : Math.max(Math.min(state.lineWidth, 40), state.lineWidth - indent);
+    const lineWidth = (state.lineWidth === -1)
+      ? -1
+      : Math.max(Math.min(state.lineWidth, 40), state.lineWidth - indent)
 
     // Without knowing if keys are implicit/explicit, assume implicit for safety.
-    var singleLineOnly = iskey
+    const singleLineOnly = iskey ||
       // No block styles in flow mode.
-      || (state.flowLevel > -1 && level >= state.flowLevel);
-    function testAmbiguity(string) {
-      return testImplicitResolving(state, string);
+      (state.flowLevel > -1 && level >= state.flowLevel)
+    function testAmbiguity (string) {
+      return testImplicitResolving(state, string)
     }
 
     switch (chooseScalarStyle(string, singleLineOnly, state.indent, lineWidth,
       testAmbiguity, state.quotingType, state.forceQuotes && !iskey, inblock)) {
-
       case STYLE_PLAIN:
-        return string;
+        return string
       case STYLE_SINGLE:
-        return "'" + string.replace(/'/g, "''") + "'";
+        return "'" + string.replace(/'/g, "''") + "'"
       case STYLE_LITERAL:
-        return '|' + blockHeader(string, state.indent)
-          + dropEndingNewline(indentString(string, indent));
+        return '|' + blockHeader(string, state.indent) +
+          dropEndingNewline(indentString(string, indent))
       case STYLE_FOLDED:
-        return '>' + blockHeader(string, state.indent)
-          + dropEndingNewline(indentString(foldString(string, lineWidth), indent));
+        return '>' + blockHeader(string, state.indent) +
+          dropEndingNewline(indentString(foldString(string, lineWidth), indent))
       case STYLE_DOUBLE:
-        return '"' + escapeString(string, lineWidth) + '"';
+        return '"' + escapeString(string, lineWidth) + '"'
       default:
-        throw new YAMLException('impossible error: invalid scalar style');
+        throw new YAMLException('impossible error: invalid scalar style')
     }
-  }());
+  }())
 }
 
 // Pre-conditions: string is valid for a block scalar, 1 <= indentPerLevel <= 9.
-function blockHeader(string, indentPerLevel) {
-  var indentIndicator = needIndentIndicator(string) ? String(indentPerLevel) : '';
+function blockHeader (string, indentPerLevel) {
+  const indentIndicator = needIndentIndicator(string) ? String(indentPerLevel) : ''
 
   // note the special case: the string '\n' counts as a "trailing" empty line.
-  var clip =          string[string.length - 1] === '\n';
-  var keep = clip && (string[string.length - 2] === '\n' || string === '\n');
-  var chomp = keep ? '+' : (clip ? '' : '-');
+  const clip = string[string.length - 1] === '\n'
+  const keep = clip && (string[string.length - 2] === '\n' || string === '\n')
+  const chomp = keep ? '+' : (clip ? '' : '-')
 
-  return indentIndicator + chomp + '\n';
+  return indentIndicator + chomp + '\n'
 }
 
 // (See the note for writeScalar.)
-function dropEndingNewline(string) {
-  return string[string.length - 1] === '\n' ? string.slice(0, -1) : string;
+function dropEndingNewline (string) {
+  return string[string.length - 1] === '\n' ? string.slice(0, -1) : string
 }
 
 // Note: a long line without a suitable break point will exceed the width limit.
 // Pre-conditions: every char in str isPrintable, str.length > 0, width > 0.
-function foldString(string, width) {
+function foldString (string, width) {
   // In folded style, $k$ consecutive newlines output as $k+1$ newlines—
   // unless they're before or after a more-indented line, or at the very
   // beginning or end, in which case $k$ maps to $k$.
   // Therefore, parse each chunk as newline(s) followed by a content line.
-  var lineRe = /(\n+)([^\n]*)/g;
+  const lineRe = /(\n+)([^\n]*)/g
 
   // first line (possibly an empty line)
-  var result = (function () {
-    var nextLF = string.indexOf('\n');
-    nextLF = nextLF !== -1 ? nextLF : string.length;
-    lineRe.lastIndex = nextLF;
-    return foldLine(string.slice(0, nextLF), width);
-  }());
+  let result = (function () {
+    let nextLF = string.indexOf('\n')
+    nextLF = nextLF !== -1 ? nextLF : string.length
+    lineRe.lastIndex = nextLF
+    return foldLine(string.slice(0, nextLF), width)
+  }())
   // If we haven't reached the first content line yet, don't add an extra \n.
-  var prevMoreIndented = string[0] === '\n' || string[0] === ' ';
-  var moreIndented;
+  let prevMoreIndented = string[0] === '\n' || string[0] === ' '
+  let moreIndented
 
   // rest of the lines
-  var match;
+  let match
   while ((match = lineRe.exec(string))) {
-    var prefix = match[1], line = match[2];
-    moreIndented = (line[0] === ' ');
-    result += prefix
-      + (!prevMoreIndented && !moreIndented && line !== ''
-        ? '\n' : '')
-      + foldLine(line, width);
-    prevMoreIndented = moreIndented;
+    const prefix = match[1]
+    const line = match[2]
+
+    moreIndented = (line[0] === ' ')
+    result += prefix +
+      ((!prevMoreIndented && !moreIndented && line !== '') ? '\n' : '') +
+      foldLine(line, width)
+    prevMoreIndented = moreIndented
   }
 
-  return result;
+  return result
 }
 
 // Greedy line breaking.
 // Picks the longest line under the limit each time,
 // otherwise settles for the shortest line over the limit.
 // NB. More-indented lines *cannot* be folded, as that would add an extra \n.
-function foldLine(line, width) {
-  if (line === '' || line[0] === ' ') return line;
+function foldLine (line, width) {
+  if (line === '' || line[0] === ' ') return line
 
   // Since a more-indented line adds a \n, breaks can't be followed by a space.
-  var breakRe = / [^ ]/g; // note: the match index will always be <= length-2.
-  var match;
+  const breakRe = / [^ ]/g // note: the match index will always be <= length-2.
+  let match
   // start is an inclusive index. end, curr, and next are exclusive.
-  var start = 0, end, curr = 0, next = 0;
-  var result = '';
+  let start = 0
+  let end
+  let curr = 0
+  let next = 0
+  let result = ''
 
   // Invariants: 0 <= start <= length-1.
   //   0 <= curr <= next <= max(0, length-2). curr - start <= width.
   // Inside the loop:
   //   A match implies length >= 2, so curr and next are <= length-2.
   while ((match = breakRe.exec(line))) {
-    next = match.index;
+    next = match.index
     // maintain invariant: curr - start <= width
     if (next - start > width) {
-      end = (curr > start) ? curr : next; // derive end <= length-2
-      result += '\n' + line.slice(start, end);
+      end = (curr > start) ? curr : next // derive end <= length-2
+      result += '\n' + line.slice(start, end)
       // skip the space that was output as \n
-      start = end + 1;                    // derive start <= length-1
+      start = end + 1                    // derive start <= length-1
     }
-    curr = next;
+    curr = next
   }
 
   // By the invariants, start <= length-1, so there is something left over.
   // It is either the whole string or a part starting from non-whitespace.
-  result += '\n';
+  result += '\n'
   // Insert a break if the remainder is too long and there is a break available.
   if (line.length - start > width && curr > start) {
-    result += line.slice(start, curr) + '\n' + line.slice(curr + 1);
+    result += line.slice(start, curr) + '\n' + line.slice(curr + 1)
   } else {
-    result += line.slice(start);
+    result += line.slice(start)
   }
 
-  return result.slice(1); // drop extra \n joiner
+  return result.slice(1) // drop extra \n joiner
 }
 
 // Escapes a double-quoted string.
-function escapeString(string) {
-  var result = '';
-  var char = 0;
-  var escapeSeq;
+function escapeString (string) {
+  let result = ''
+  let char = 0
 
-  for (var i = 0; i < string.length; char >= 0x10000 ? i += 2 : i++) {
-    char = codePointAt(string, i);
-    escapeSeq = ESCAPE_SEQUENCES[char];
+  for (let i = 0; i < string.length; char >= 0x10000 ? i += 2 : i++) {
+    char = codePointAt(string, i)
+    const escapeSeq = ESCAPE_SEQUENCES[char]
 
     if (!escapeSeq && isPrintable(char)) {
-      result += string[i];
-      if (char >= 0x10000) result += string[i + 1];
+      result += string[i]
+      if (char >= 0x10000) result += string[i + 1]
     } else {
-      result += escapeSeq || encodeHex(char);
+      result += escapeSeq || encodeHex(char)
     }
   }
 
-  return result;
+  return result
 }
 
-function writeFlowSequence(state, level, object) {
-  var _result = '',
-      _tag    = state.tag,
-      index,
-      length,
-      value;
+function writeFlowSequence (state, level, object) {
+  let _result = ''
+  const _tag = state.tag
 
-  for (index = 0, length = object.length; index < length; index += 1) {
-    value = object[index];
+  for (let index = 0, length = object.length; index < length; index += 1) {
+    let value = object[index]
 
     if (state.replacer) {
-      value = state.replacer.call(object, String(index), value);
+      value = state.replacer.call(object, String(index), value)
     }
 
     // Write only valid elements, put null instead of invalid elements.
     if (writeNode(state, level, value, false, false) ||
         (typeof value === 'undefined' &&
          writeNode(state, level, null, false, false))) {
-
-      if (_result !== '') _result += ',' + (!state.condenseFlow ? ' ' : '');
-      _result += state.dump;
+      if (_result !== '') _result += ',' + (!state.condenseFlow ? ' ' : '')
+      _result += state.dump
     }
   }
 
-  state.tag = _tag;
-  state.dump = '[' + _result + ']';
+  state.tag = _tag
+  state.dump = '[' + _result + ']'
 }
 
-function writeBlockSequence(state, level, object, compact) {
-  var _result = '',
-      _tag    = state.tag,
-      index,
-      length,
-      value;
+function writeBlockSequence (state, level, object, compact) {
+  let _result = ''
+  const _tag = state.tag
 
-  for (index = 0, length = object.length; index < length; index += 1) {
-    value = object[index];
+  for (let index = 0, length = object.length; index < length; index += 1) {
+    let value = object[index]
 
     if (state.replacer) {
-      value = state.replacer.call(object, String(index), value);
+      value = state.replacer.call(object, String(index), value)
     }
 
     // Write only valid elements, put null instead of invalid elements.
     if (writeNode(state, level + 1, value, true, true, false, true) ||
         (typeof value === 'undefined' &&
          writeNode(state, level + 1, null, true, true, false, true))) {
-
       if (!compact || _result !== '') {
-        _result += generateNextLine(state, level);
+        _result += generateNextLine(state, level)
       }
 
       if (state.dump && CHAR_LINE_FEED === state.dump.charCodeAt(0)) {
-        _result += '-';
+        _result += '-'
       } else {
-        _result += '- ';
+        _result += '- '
       }
 
-      _result += state.dump;
+      _result += state.dump
     }
   }
 
-  state.tag = _tag;
-  state.dump = _result || '[]'; // Empty sequence if no valid values.
+  state.tag = _tag
+  state.dump = _result || '[]' // Empty sequence if no valid values.
 }
 
-function writeFlowMapping(state, level, object) {
-  var _result       = '',
-      _tag          = state.tag,
-      objectKeyList = Object.keys(object),
-      index,
-      length,
-      objectKey,
-      objectValue,
-      pairBuffer;
+function writeFlowMapping (state, level, object) {
+  let _result = ''
+  const _tag = state.tag
+  const objectKeyList = Object.keys(object)
 
-  for (index = 0, length = objectKeyList.length; index < length; index += 1) {
+  for (let index = 0, length = objectKeyList.length; index < length; index += 1) {
+    let pairBuffer = ''
+    if (_result !== '') pairBuffer += ', '
 
-    pairBuffer = '';
-    if (_result !== '') pairBuffer += ', ';
+    if (state.condenseFlow) pairBuffer += '"'
 
-    if (state.condenseFlow) pairBuffer += '"';
-
-    objectKey = objectKeyList[index];
-    objectValue = object[objectKey];
+    const objectKey = objectKeyList[index]
+    let objectValue = object[objectKey]
 
     if (state.replacer) {
-      objectValue = state.replacer.call(object, objectKey, objectValue);
+      objectValue = state.replacer.call(object, objectKey, objectValue)
     }
 
     if (!writeNode(state, level, objectKey, false, false)) {
-      continue; // Skip this pair because of invalid key;
+      continue // Skip this pair because of invalid key;
     }
 
-    if (state.dump.length > 1024) pairBuffer += '? ';
+    if (state.dump.length > 1024) pairBuffer += '? '
 
-    pairBuffer += state.dump + (state.condenseFlow ? '"' : '') + ':' + (state.condenseFlow ? '' : ' ');
+    pairBuffer += state.dump + (state.condenseFlow ? '"' : '') + ':' + (state.condenseFlow ? '' : ' ')
 
     if (!writeNode(state, level, objectValue, false, false)) {
-      continue; // Skip this pair because of invalid value.
+      continue // Skip this pair because of invalid value.
     }
 
-    pairBuffer += state.dump;
+    pairBuffer += state.dump
 
     // Both key and value are valid.
-    _result += pairBuffer;
+    _result += pairBuffer
   }
 
-  state.tag = _tag;
-  state.dump = '{' + _result + '}';
+  state.tag = _tag
+  state.dump = '{' + _result + '}'
 }
 
-function writeBlockMapping(state, level, object, compact) {
-  var _result       = '',
-      _tag          = state.tag,
-      objectKeyList = Object.keys(object),
-      index,
-      length,
-      objectKey,
-      objectValue,
-      explicitPair,
-      pairBuffer;
+function writeBlockMapping (state, level, object, compact) {
+  let _result = ''
+  const _tag = state.tag
+  const objectKeyList = Object.keys(object)
 
   // Allow sorting keys so that the output file is deterministic
   if (state.sortKeys === true) {
     // Default sorting
-    objectKeyList.sort();
+    objectKeyList.sort()
   } else if (typeof state.sortKeys === 'function') {
     // Custom sort function
-    objectKeyList.sort(state.sortKeys);
+    objectKeyList.sort(state.sortKeys)
   } else if (state.sortKeys) {
     // Something is wrong
-    throw new YAMLException('sortKeys must be a boolean or a function');
+    throw new YAMLException('sortKeys must be a boolean or a function')
   }
 
-  for (index = 0, length = objectKeyList.length; index < length; index += 1) {
-    pairBuffer = '';
+  for (let index = 0, length = objectKeyList.length; index < length; index += 1) {
+    let pairBuffer = ''
 
     if (!compact || _result !== '') {
-      pairBuffer += generateNextLine(state, level);
+      pairBuffer += generateNextLine(state, level)
     }
 
-    objectKey = objectKeyList[index];
-    objectValue = object[objectKey];
+    const objectKey = objectKeyList[index]
+    let objectValue = object[objectKey]
 
     if (state.replacer) {
-      objectValue = state.replacer.call(object, objectKey, objectValue);
+      objectValue = state.replacer.call(object, objectKey, objectValue)
     }
 
     if (!writeNode(state, level + 1, objectKey, true, true, true)) {
-      continue; // Skip this pair because of invalid key.
+      continue // Skip this pair because of invalid key.
     }
 
-    explicitPair = (state.tag !== null && state.tag !== '?') ||
-                   (state.dump && state.dump.length > 1024);
+    const explicitPair = (state.tag !== null && state.tag !== '?') ||
+                   (state.dump && state.dump.length > 1024)
 
     if (explicitPair) {
       if (state.dump && CHAR_LINE_FEED === state.dump.charCodeAt(0)) {
-        pairBuffer += '?';
+        pairBuffer += '?'
       } else {
-        pairBuffer += '? ';
+        pairBuffer += '? '
       }
     }
 
-    pairBuffer += state.dump;
+    pairBuffer += state.dump
 
     if (explicitPair) {
-      pairBuffer += generateNextLine(state, level);
+      pairBuffer += generateNextLine(state, level)
     }
 
     if (!writeNode(state, level + 1, objectValue, true, explicitPair)) {
-      continue; // Skip this pair because of invalid value.
+      continue // Skip this pair because of invalid value.
     }
 
     if (state.dump && CHAR_LINE_FEED === state.dump.charCodeAt(0)) {
-      pairBuffer += ':';
+      pairBuffer += ':'
     } else {
-      pairBuffer += ': ';
+      pairBuffer += ': '
     }
 
-    pairBuffer += state.dump;
+    pairBuffer += state.dump
 
     // Both key and value are valid.
-    _result += pairBuffer;
+    _result += pairBuffer
   }
 
-  state.tag = _tag;
-  state.dump = _result || '{}'; // Empty mapping if no valid pairs.
+  state.tag = _tag
+  state.dump = _result || '{}' // Empty mapping if no valid pairs.
 }
 
-function detectType(state, object, explicit) {
-  var _result, typeList, index, length, type, style;
+function detectType (state, object, explicit) {
+  const typeList = explicit ? state.explicitTypes : state.implicitTypes
 
-  typeList = explicit ? state.explicitTypes : state.implicitTypes;
+  for (let index = 0, length = typeList.length; index < length; index += 1) {
+    const type = typeList[index]
 
-  for (index = 0, length = typeList.length; index < length; index += 1) {
-    type = typeList[index];
-
-    if ((type.instanceOf  || type.predicate) &&
+    if ((type.instanceOf || type.predicate) &&
         (!type.instanceOf || ((typeof object === 'object') && (object instanceof type.instanceOf))) &&
-        (!type.predicate  || type.predicate(object))) {
-
+        (!type.predicate || type.predicate(object))) {
       if (explicit) {
         if (type.multi && type.representName) {
-          state.tag = type.representName(object);
+          state.tag = type.representName(object)
         } else {
-          state.tag = type.tag;
+          state.tag = type.tag
         }
       } else {
-        state.tag = '?';
+        state.tag = '?'
       }
 
       if (type.represent) {
-        style = state.styleMap[type.tag] || type.defaultStyle;
+        const style = state.styleMap[type.tag] || type.defaultStyle
 
+        let _result
         if (_toString.call(type.represent) === '[object Function]') {
-          _result = type.represent(object, style);
+          _result = type.represent(object, style)
         } else if (_hasOwnProperty.call(type.represent, style)) {
-          _result = type.represent[style](object, style);
+          _result = type.represent[style](object, style)
         } else {
-          throw new YAMLException('!<' + type.tag + '> tag resolver accepts not "' + style + '" style');
+          throw new YAMLException('!<' + type.tag + '> tag resolver accepts not "' + style + '" style')
         }
 
-        state.dump = _result;
+        state.dump = _result
       }
 
-      return true;
+      return true
     }
   }
 
-  return false;
+  return false
 }
 
 // Serializes `object` and writes it to global `result`.
 // Returns true on success, or false on invalid object.
 //
-function writeNode(state, level, object, block, compact, iskey, isblockseq) {
-  state.tag = null;
-  state.dump = object;
+function writeNode (state, level, object, block, compact, iskey, isblockseq) {
+  state.tag = null
+  state.dump = object
 
   if (!detectType(state, object, false)) {
-    detectType(state, object, true);
+    detectType(state, object, true)
   }
 
-  var type = _toString.call(state.dump);
-  var inblock = block;
-  var tagStr;
+  const type = _toString.call(state.dump)
+  const inblock = block
 
   if (block) {
-    block = (state.flowLevel < 0 || state.flowLevel > level);
+    block = (state.flowLevel < 0 || state.flowLevel > level)
   }
 
-  var objectOrArray = type === '[object Object]' || type === '[object Array]',
-      duplicateIndex,
-      duplicate;
+  const objectOrArray = type === '[object Object]' || type === '[object Array]'
+  let duplicateIndex
+  let duplicate
 
   if (objectOrArray) {
-    duplicateIndex = state.duplicates.indexOf(object);
-    duplicate = duplicateIndex !== -1;
+    duplicateIndex = state.duplicates.indexOf(object)
+    duplicate = duplicateIndex !== -1
   }
 
   if ((state.tag !== null && state.tag !== '?') || duplicate || (state.indent !== 2 && level > 0)) {
-    compact = false;
+    compact = false
   }
 
   if (duplicate && state.usedDuplicates[duplicateIndex]) {
-    state.dump = '*ref_' + duplicateIndex;
+    state.dump = '*ref_' + duplicateIndex
   } else {
     if (objectOrArray && duplicate && !state.usedDuplicates[duplicateIndex]) {
-      state.usedDuplicates[duplicateIndex] = true;
+      state.usedDuplicates[duplicateIndex] = true
     }
     if (type === '[object Object]') {
       if (block && (Object.keys(state.dump).length !== 0)) {
-        writeBlockMapping(state, level, state.dump, compact);
+        writeBlockMapping(state, level, state.dump, compact)
         if (duplicate) {
-          state.dump = '&ref_' + duplicateIndex + state.dump;
+          state.dump = '&ref_' + duplicateIndex + state.dump
         }
       } else {
-        writeFlowMapping(state, level, state.dump);
+        writeFlowMapping(state, level, state.dump)
         if (duplicate) {
-          state.dump = '&ref_' + duplicateIndex + ' ' + state.dump;
+          state.dump = '&ref_' + duplicateIndex + ' ' + state.dump
         }
       }
     } else if (type === '[object Array]') {
       if (block && (state.dump.length !== 0)) {
         if (state.noArrayIndent && !isblockseq && level > 0) {
-          writeBlockSequence(state, level - 1, state.dump, compact);
+          writeBlockSequence(state, level - 1, state.dump, compact)
         } else {
-          writeBlockSequence(state, level, state.dump, compact);
+          writeBlockSequence(state, level, state.dump, compact)
         }
         if (duplicate) {
-          state.dump = '&ref_' + duplicateIndex + state.dump;
+          state.dump = '&ref_' + duplicateIndex + state.dump
         }
       } else {
-        writeFlowSequence(state, level, state.dump);
+        writeFlowSequence(state, level, state.dump)
         if (duplicate) {
-          state.dump = '&ref_' + duplicateIndex + ' ' + state.dump;
+          state.dump = '&ref_' + duplicateIndex + ' ' + state.dump
         }
       }
     } else if (type === '[object String]') {
       if (state.tag !== '?') {
-        writeScalar(state, state.dump, level, iskey, inblock);
+        writeScalar(state, state.dump, level, iskey, inblock)
       }
     } else if (type === '[object Undefined]') {
-      return false;
+      return false
     } else {
-      if (state.skipInvalid) return false;
-      throw new YAMLException('unacceptable kind of an object to dump ' + type);
+      if (state.skipInvalid) return false
+      throw new YAMLException('unacceptable kind of an object to dump ' + type)
     }
 
     if (state.tag !== null && state.tag !== '?') {
@@ -16170,87 +13852,82 @@ function writeNode(state, level, object, block, compact, iskey, isblockseq) {
       //
       // Also need to encode '!' because it has special meaning (end of tag prefix).
       //
-      tagStr = encodeURI(
+      let tagStr = encodeURI(
         state.tag[0] === '!' ? state.tag.slice(1) : state.tag
-      ).replace(/!/g, '%21');
+      ).replace(/!/g, '%21')
 
       if (state.tag[0] === '!') {
-        tagStr = '!' + tagStr;
+        tagStr = '!' + tagStr
       } else if (tagStr.slice(0, 18) === 'tag:yaml.org,2002:') {
-        tagStr = '!!' + tagStr.slice(18);
+        tagStr = '!!' + tagStr.slice(18)
       } else {
-        tagStr = '!<' + tagStr + '>';
+        tagStr = '!<' + tagStr + '>'
       }
 
-      state.dump = tagStr + ' ' + state.dump;
+      state.dump = tagStr + ' ' + state.dump
     }
   }
 
-  return true;
+  return true
 }
 
-function getDuplicateReferences(object, state) {
-  var objects = [],
-      duplicatesIndexes = [],
-      index,
-      length;
+function getDuplicateReferences (object, state) {
+  const objects = []
+  const duplicatesIndexes = []
 
-  inspectNode(object, objects, duplicatesIndexes);
+  inspectNode(object, objects, duplicatesIndexes)
 
-  for (index = 0, length = duplicatesIndexes.length; index < length; index += 1) {
-    state.duplicates.push(objects[duplicatesIndexes[index]]);
+  const length = duplicatesIndexes.length
+  for (let index = 0; index < length; index += 1) {
+    state.duplicates.push(objects[duplicatesIndexes[index]])
   }
-  state.usedDuplicates = new Array(length);
+  state.usedDuplicates = new Array(length)
 }
 
-function inspectNode(object, objects, duplicatesIndexes) {
-  var objectKeyList,
-      index,
-      length;
-
+function inspectNode (object, objects, duplicatesIndexes) {
   if (object !== null && typeof object === 'object') {
-    index = objects.indexOf(object);
+    const index = objects.indexOf(object)
     if (index !== -1) {
       if (duplicatesIndexes.indexOf(index) === -1) {
-        duplicatesIndexes.push(index);
+        duplicatesIndexes.push(index)
       }
     } else {
-      objects.push(object);
+      objects.push(object)
 
       if (Array.isArray(object)) {
-        for (index = 0, length = object.length; index < length; index += 1) {
-          inspectNode(object[index], objects, duplicatesIndexes);
+        for (let i = 0, length = object.length; i < length; i += 1) {
+          inspectNode(object[i], objects, duplicatesIndexes)
         }
       } else {
-        objectKeyList = Object.keys(object);
+        const objectKeyList = Object.keys(object)
 
-        for (index = 0, length = objectKeyList.length; index < length; index += 1) {
-          inspectNode(object[objectKeyList[index]], objects, duplicatesIndexes);
+        for (let i = 0, length = objectKeyList.length; i < length; i += 1) {
+          inspectNode(object[objectKeyList[i]], objects, duplicatesIndexes)
         }
       }
     }
   }
 }
 
-function dump(input, options) {
-  options = options || {};
+function dump (input, options) {
+  options = options || {}
 
-  var state = new State(options);
+  const state = new State(options)
 
-  if (!state.noRefs) getDuplicateReferences(input, state);
+  if (!state.noRefs) getDuplicateReferences(input, state)
 
-  var value = input;
+  let value = input
 
   if (state.replacer) {
-    value = state.replacer.call({ '': value }, '', value);
+    value = state.replacer.call({ '': value }, '', value)
   }
 
-  if (writeNode(state, 0, value, true, true)) return state.dump + '\n';
+  if (writeNode(state, 0, value, true, true)) return state.dump + '\n'
 
-  return '';
+  return ''
 }
 
-module.exports.dump = dump;
+module.exports.dump = dump
 
 
 /***/ }),
@@ -16263,57 +13940,53 @@ module.exports.dump = dump;
 //
 
 
+function formatError (exception, compact) {
+  let where = ''
+  const message = exception.reason || '(unknown reason)'
 
-function formatError(exception, compact) {
-  var where = '', message = exception.reason || '(unknown reason)';
-
-  if (!exception.mark) return message;
+  if (!exception.mark) return message
 
   if (exception.mark.name) {
-    where += 'in "' + exception.mark.name + '" ';
+    where += 'in "' + exception.mark.name + '" '
   }
 
-  where += '(' + (exception.mark.line + 1) + ':' + (exception.mark.column + 1) + ')';
+  where += '(' + (exception.mark.line + 1) + ':' + (exception.mark.column + 1) + ')'
 
   if (!compact && exception.mark.snippet) {
-    where += '\n\n' + exception.mark.snippet;
+    where += '\n\n' + exception.mark.snippet
   }
 
-  return message + ' ' + where;
+  return message + ' ' + where
 }
 
-
-function YAMLException(reason, mark) {
+function YAMLException (reason, mark) {
   // Super constructor
-  Error.call(this);
+  Error.call(this)
 
-  this.name = 'YAMLException';
-  this.reason = reason;
-  this.mark = mark;
-  this.message = formatError(this, false);
+  this.name = 'YAMLException'
+  this.reason = reason
+  this.mark = mark
+  this.message = formatError(this, false)
 
   // Include stack trace in error object
   if (Error.captureStackTrace) {
     // Chrome and NodeJS
-    Error.captureStackTrace(this, this.constructor);
+    Error.captureStackTrace(this, this.constructor)
   } else {
     // FF, IE 10+ and Safari 6+. Fallback for others
-    this.stack = (new Error()).stack || '';
+    this.stack = (new Error()).stack || ''
   }
 }
 
-
 // Inherit from Error
-YAMLException.prototype = Object.create(Error.prototype);
-YAMLException.prototype.constructor = YAMLException;
+YAMLException.prototype = Object.create(Error.prototype)
+YAMLException.prototype.constructor = YAMLException
 
+YAMLException.prototype.toString = function toString (compact) {
+  return this.name + ': ' + formatError(this, compact)
+}
 
-YAMLException.prototype.toString = function toString(compact) {
-  return this.name + ': ' + formatError(this, compact);
-};
-
-
-module.exports = YAMLException;
+module.exports = YAMLException
 
 
 /***/ }),
@@ -16324,129 +13997,125 @@ module.exports = YAMLException;
 "use strict";
 
 
-/*eslint-disable max-len,no-use-before-define*/
+const common = __nccwpck_require__(9816)
+const YAMLException = __nccwpck_require__(1248)
+const makeSnippet = __nccwpck_require__(9440)
+const DEFAULT_SCHEMA = __nccwpck_require__(7336)
 
-var common              = __nccwpck_require__(9816);
-var YAMLException       = __nccwpck_require__(1248);
-var makeSnippet         = __nccwpck_require__(9440);
-var DEFAULT_SCHEMA      = __nccwpck_require__(7336);
+const _hasOwnProperty = Object.prototype.hasOwnProperty
 
+const CONTEXT_FLOW_IN = 1
+const CONTEXT_FLOW_OUT = 2
+const CONTEXT_BLOCK_IN = 3
+const CONTEXT_BLOCK_OUT = 4
 
-var _hasOwnProperty = Object.prototype.hasOwnProperty;
+const CHOMPING_CLIP = 1
+const CHOMPING_STRIP = 2
+const CHOMPING_KEEP = 3
 
+// eslint-disable-next-line no-control-regex
+const PATTERN_NON_PRINTABLE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x84\x86-\x9F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/
+const PATTERN_NON_ASCII_LINE_BREAKS = /[\x85\u2028\u2029]/
+// eslint-disable-next-line no-useless-escape
+const PATTERN_FLOW_INDICATORS = /[,\[\]{}]/
+// eslint-disable-next-line no-useless-escape
+const PATTERN_TAG_HANDLE = /^(?:!|!!|![0-9A-Za-z-]+!)$/
+// eslint-disable-next-line no-useless-escape
+const PATTERN_TAG_URI = /^(?:!|[^,\[\]{}])(?:%[0-9a-f]{2}|[0-9a-z\-#;/?:@&=+$,_.!~*'()\[\]])*$/i
 
-var CONTEXT_FLOW_IN   = 1;
-var CONTEXT_FLOW_OUT  = 2;
-var CONTEXT_BLOCK_IN  = 3;
-var CONTEXT_BLOCK_OUT = 4;
+function _class (obj) { return Object.prototype.toString.call(obj) }
 
-
-var CHOMPING_CLIP  = 1;
-var CHOMPING_STRIP = 2;
-var CHOMPING_KEEP  = 3;
-
-
-var PATTERN_NON_PRINTABLE         = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x84\x86-\x9F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/;
-var PATTERN_NON_ASCII_LINE_BREAKS = /[\x85\u2028\u2029]/;
-var PATTERN_FLOW_INDICATORS       = /[,\[\]\{\}]/;
-var PATTERN_TAG_HANDLE            = /^(?:!|!!|![a-z\-]+!)$/i;
-var PATTERN_TAG_URI               = /^(?:!|[^,\[\]\{\}])(?:%[0-9a-f]{2}|[0-9a-z\-#;\/\?:@&=\+\$,_\.!~\*'\(\)\[\]])*$/i;
-
-
-function _class(obj) { return Object.prototype.toString.call(obj); }
-
-function is_EOL(c) {
-  return (c === 0x0A/* LF */) || (c === 0x0D/* CR */);
+function isEol (c) {
+  return (c === 0x0A/* LF */) || (c === 0x0D/* CR */)
 }
 
-function is_WHITE_SPACE(c) {
-  return (c === 0x09/* Tab */) || (c === 0x20/* Space */);
+function isWhiteSpace (c) {
+  return (c === 0x09/* Tab */) || (c === 0x20/* Space */)
 }
 
-function is_WS_OR_EOL(c) {
+function isWsOrEol (c) {
   return (c === 0x09/* Tab */) ||
          (c === 0x20/* Space */) ||
          (c === 0x0A/* LF */) ||
-         (c === 0x0D/* CR */);
+         (c === 0x0D/* CR */)
 }
 
-function is_FLOW_INDICATOR(c) {
+function isFlowIndicator (c) {
   return c === 0x2C/* , */ ||
          c === 0x5B/* [ */ ||
          c === 0x5D/* ] */ ||
          c === 0x7B/* { */ ||
-         c === 0x7D/* } */;
+         c === 0x7D/* } */
 }
 
-function fromHexCode(c) {
-  var lc;
-
-  if ((0x30/* 0 */ <= c) && (c <= 0x39/* 9 */)) {
-    return c - 0x30;
+function fromHexCode (c) {
+  if ((c >= 0x30/* 0 */) && (c <= 0x39/* 9 */)) {
+    return c - 0x30
   }
 
-  /*eslint-disable no-bitwise*/
-  lc = c | 0x20;
+  const lc = c | 0x20
 
-  if ((0x61/* a */ <= lc) && (lc <= 0x66/* f */)) {
-    return lc - 0x61 + 10;
+  if ((lc >= 0x61/* a */) && (lc <= 0x66/* f */)) {
+    return lc - 0x61 + 10
   }
 
-  return -1;
+  return -1
 }
 
-function escapedHexLen(c) {
-  if (c === 0x78/* x */) { return 2; }
-  if (c === 0x75/* u */) { return 4; }
-  if (c === 0x55/* U */) { return 8; }
-  return 0;
+function escapedHexLen (c) {
+  if (c === 0x78/* x */) { return 2 }
+  if (c === 0x75/* u */) { return 4 }
+  if (c === 0x55/* U */) { return 8 }
+  return 0
 }
 
-function fromDecimalCode(c) {
-  if ((0x30/* 0 */ <= c) && (c <= 0x39/* 9 */)) {
-    return c - 0x30;
+function fromDecimalCode (c) {
+  if ((c >= 0x30/* 0 */) && (c <= 0x39/* 9 */)) {
+    return c - 0x30
   }
 
-  return -1;
+  return -1
 }
 
-function simpleEscapeSequence(c) {
-  /* eslint-disable indent */
-  return (c === 0x30/* 0 */) ? '\x00' :
-        (c === 0x61/* a */) ? '\x07' :
-        (c === 0x62/* b */) ? '\x08' :
-        (c === 0x74/* t */) ? '\x09' :
-        (c === 0x09/* Tab */) ? '\x09' :
-        (c === 0x6E/* n */) ? '\x0A' :
-        (c === 0x76/* v */) ? '\x0B' :
-        (c === 0x66/* f */) ? '\x0C' :
-        (c === 0x72/* r */) ? '\x0D' :
-        (c === 0x65/* e */) ? '\x1B' :
-        (c === 0x20/* Space */) ? ' ' :
-        (c === 0x22/* " */) ? '\x22' :
-        (c === 0x2F/* / */) ? '/' :
-        (c === 0x5C/* \ */) ? '\x5C' :
-        (c === 0x4E/* N */) ? '\x85' :
-        (c === 0x5F/* _ */) ? '\xA0' :
-        (c === 0x4C/* L */) ? '\u2028' :
-        (c === 0x50/* P */) ? '\u2029' : '';
+function simpleEscapeSequence (c) {
+  switch (c) {
+    case 0x30/* 0 */: return '\x00'
+    case 0x61/* a */: return '\x07'
+    case 0x62/* b */: return '\x08'
+    case 0x74/* t */: return '\x09'
+    case 0x09/* Tab */: return '\x09'
+    case 0x6E/* n */: return '\x0A'
+    case 0x76/* v */: return '\x0B'
+    case 0x66/* f */: return '\x0C'
+    case 0x72/* r */: return '\x0D'
+    case 0x65/* e */: return '\x1B'
+    case 0x20/* Space */: return ' '
+    case 0x22/* " */: return '\x22'
+    case 0x2F/* / */: return '/'
+    case 0x5C/* \ */: return '\x5C'
+    case 0x4E/* N */: return '\x85'
+    case 0x5F/* _ */: return '\xA0'
+    case 0x4C/* L */: return '\u2028'
+    case 0x50/* P */: return '\u2029'
+    default: return ''
+  }
 }
 
-function charFromCodepoint(c) {
+function charFromCodepoint (c) {
   if (c <= 0xFFFF) {
-    return String.fromCharCode(c);
+    return String.fromCharCode(c)
   }
   // Encode UTF-16 surrogate pair
   // https://en.wikipedia.org/wiki/UTF-16#Code_points_U.2B010000_to_U.2B10FFFF
   return String.fromCharCode(
     ((c - 0x010000) >> 10) + 0xD800,
     ((c - 0x010000) & 0x03FF) + 0xDC00
-  );
+  )
 }
 
 // set a property of a literal object, while protecting against prototype pollution,
 // see https://github.com/nodeca/js-yaml/issues/164 for more details
-function setProperty(object, key, value) {
+function setProperty (object, key, value) {
   // used for this specific key only because Object.defineProperty is slow
   if (key === '__proto__') {
     Object.defineProperty(object, key, {
@@ -16454,47 +14123,51 @@ function setProperty(object, key, value) {
       enumerable: true,
       writable: true,
       value: value
-    });
+    })
   } else {
-    object[key] = value;
+    object[key] = value
   }
 }
 
-var simpleEscapeCheck = new Array(256); // integer, for fast access
-var simpleEscapeMap = new Array(256);
-for (var i = 0; i < 256; i++) {
-  simpleEscapeCheck[i] = simpleEscapeSequence(i) ? 1 : 0;
-  simpleEscapeMap[i] = simpleEscapeSequence(i);
+const simpleEscapeCheck = new Array(256) // integer, for fast access
+const simpleEscapeMap = new Array(256)
+for (let i = 0; i < 256; i++) {
+  simpleEscapeCheck[i] = simpleEscapeSequence(i) ? 1 : 0
+  simpleEscapeMap[i] = simpleEscapeSequence(i)
 }
 
+function State (input, options) {
+  this.input = input
 
-function State(input, options) {
-  this.input = input;
-
-  this.filename  = options['filename']  || null;
-  this.schema    = options['schema']    || DEFAULT_SCHEMA;
-  this.onWarning = options['onWarning'] || null;
+  this.filename = options['filename'] || null
+  this.schema = options['schema'] || DEFAULT_SCHEMA
+  this.onWarning = options['onWarning'] || null
   // (Hidden) Remove? makes the loader to expect YAML 1.1 documents
   // if such documents have no explicit %YAML directive
-  this.legacy    = options['legacy']    || false;
+  this.legacy = options['legacy'] || false
 
-  this.json      = options['json']      || false;
-  this.listener  = options['listener']  || null;
+  this.json = options['json'] || false
+  this.listener = options['listener'] || null
+  this.maxDepth = typeof options['maxDepth'] === 'number' ? options['maxDepth'] : 100
+  this.maxTotalMergeKeys = typeof options['maxTotalMergeKeys'] === 'number' ? options['maxTotalMergeKeys'] : 10000
 
-  this.implicitTypes = this.schema.compiledImplicit;
-  this.typeMap       = this.schema.compiledTypeMap;
+  this.implicitTypes = this.schema.compiledImplicit
+  this.typeMap = this.schema.compiledTypeMap
 
-  this.length     = input.length;
-  this.position   = 0;
-  this.line       = 0;
-  this.lineStart  = 0;
-  this.lineIndent = 0;
+  this.length = input.length
+  this.position = 0
+  this.line = 0
+  this.lineStart = 0
+  this.lineIndent = 0
+  this.depth = 0
+  this.totalMergeKeys = 0
 
   // position of first leading tab in the current line,
   // used to make sure there are no tabs in the indentation
-  this.firstTabInLine = -1;
+  this.firstTabInLine = -1
 
-  this.documents = [];
+  this.documents = []
+  this.anchorMapTransactions = []
 
   /*
   this.version;
@@ -16504,164 +14177,242 @@ function State(input, options) {
   this.tag;
   this.anchor;
   this.kind;
-  this.result;*/
-
+  this.result; */
 }
 
-
-function generateError(state, message) {
-  var mark = {
-    name:     state.filename,
-    buffer:   state.input.slice(0, -1), // omit trailing \0
+function generateError (state, message) {
+  const mark = {
+    name: state.filename,
+    buffer: state.input.slice(0, -1), // omit trailing \0
     position: state.position,
-    line:     state.line,
-    column:   state.position - state.lineStart
-  };
+    line: state.line,
+    column: state.position - state.lineStart
+  }
 
-  mark.snippet = makeSnippet(mark);
+  mark.snippet = makeSnippet(mark)
 
-  return new YAMLException(message, mark);
+  return new YAMLException(message, mark)
 }
 
-function throwError(state, message) {
-  throw generateError(state, message);
+function throwError (state, message) {
+  throw generateError(state, message)
 }
 
-function throwWarning(state, message) {
+function throwWarning (state, message) {
   if (state.onWarning) {
-    state.onWarning.call(null, generateError(state, message));
+    state.onWarning.call(null, generateError(state, message))
   }
 }
 
+function storeAnchor (state, name, value) {
+  const transactions = state.anchorMapTransactions
 
-var directiveHandlers = {
+  if (transactions.length !== 0) {
+    const transaction = transactions[transactions.length - 1]
 
-  YAML: function handleYamlDirective(state, name, args) {
+    if (!_hasOwnProperty.call(transaction, name)) {
+      transaction[name] = {
+        existed: _hasOwnProperty.call(state.anchorMap, name),
+        value: state.anchorMap[name]
+      }
+    }
+  }
 
-    var match, major, minor;
+  state.anchorMap[name] = value
+}
 
+function beginAnchorTransaction (state) {
+  state.anchorMapTransactions.push(Object.create(null))
+}
+
+function commitAnchorTransaction (state) {
+  const transaction = state.anchorMapTransactions.pop()
+  const transactions = state.anchorMapTransactions
+
+  if (transactions.length === 0) return
+
+  const parent = transactions[transactions.length - 1]
+  const names = Object.keys(transaction)
+
+  for (let index = 0, length = names.length; index < length; index += 1) {
+    const name = names[index]
+
+    if (!_hasOwnProperty.call(parent, name)) {
+      parent[name] = transaction[name]
+    }
+  }
+}
+
+function rollbackAnchorTransaction (state) {
+  const transaction = state.anchorMapTransactions.pop()
+  const names = Object.keys(transaction)
+
+  for (let index = names.length - 1; index >= 0; index -= 1) {
+    const entry = transaction[names[index]]
+
+    if (entry.existed) {
+      state.anchorMap[names[index]] = entry.value
+    } else {
+      delete state.anchorMap[names[index]]
+    }
+  }
+}
+
+function snapshotState (state) {
+  return {
+    position: state.position,
+    line: state.line,
+    lineStart: state.lineStart,
+    lineIndent: state.lineIndent,
+    firstTabInLine: state.firstTabInLine,
+    tag: state.tag,
+    anchor: state.anchor,
+    kind: state.kind,
+    result: state.result
+  }
+}
+
+function restoreState (state, snapshot) {
+  state.position = snapshot.position
+  state.line = snapshot.line
+  state.lineStart = snapshot.lineStart
+  state.lineIndent = snapshot.lineIndent
+  state.firstTabInLine = snapshot.firstTabInLine
+  state.tag = snapshot.tag
+  state.anchor = snapshot.anchor
+  state.kind = snapshot.kind
+  state.result = snapshot.result
+}
+
+const directiveHandlers = {
+
+  YAML: function handleYamlDirective (state, name, args) {
     if (state.version !== null) {
-      throwError(state, 'duplication of %YAML directive');
+      throwError(state, 'duplication of %YAML directive')
     }
 
     if (args.length !== 1) {
-      throwError(state, 'YAML directive accepts exactly one argument');
+      throwError(state, 'YAML directive accepts exactly one argument')
     }
 
-    match = /^([0-9]+)\.([0-9]+)$/.exec(args[0]);
+    const match = /^([0-9]+)\.([0-9]+)$/.exec(args[0])
 
     if (match === null) {
-      throwError(state, 'ill-formed argument of the YAML directive');
+      throwError(state, 'ill-formed argument of the YAML directive')
     }
 
-    major = parseInt(match[1], 10);
-    minor = parseInt(match[2], 10);
+    const major = parseInt(match[1], 10)
+    const minor = parseInt(match[2], 10)
 
     if (major !== 1) {
-      throwError(state, 'unacceptable YAML version of the document');
+      throwError(state, 'unacceptable YAML version of the document')
     }
 
-    state.version = args[0];
-    state.checkLineBreaks = (minor < 2);
+    state.version = args[0]
+    state.checkLineBreaks = (minor < 2)
 
     if (minor !== 1 && minor !== 2) {
-      throwWarning(state, 'unsupported YAML version of the document');
+      throwWarning(state, 'unsupported YAML version of the document')
     }
   },
 
-  TAG: function handleTagDirective(state, name, args) {
-
-    var handle, prefix;
+  TAG: function handleTagDirective (state, name, args) {
+    let prefix
 
     if (args.length !== 2) {
-      throwError(state, 'TAG directive accepts exactly two arguments');
+      throwError(state, 'TAG directive accepts exactly two arguments')
     }
 
-    handle = args[0];
-    prefix = args[1];
+    const handle = args[0]
+    prefix = args[1]
 
     if (!PATTERN_TAG_HANDLE.test(handle)) {
-      throwError(state, 'ill-formed tag handle (first argument) of the TAG directive');
+      throwError(state, 'ill-formed tag handle (first argument) of the TAG directive')
     }
 
     if (_hasOwnProperty.call(state.tagMap, handle)) {
-      throwError(state, 'there is a previously declared suffix for "' + handle + '" tag handle');
+      throwError(state, 'there is a previously declared suffix for "' + handle + '" tag handle')
     }
 
     if (!PATTERN_TAG_URI.test(prefix)) {
-      throwError(state, 'ill-formed tag prefix (second argument) of the TAG directive');
+      throwError(state, 'ill-formed tag prefix (second argument) of the TAG directive')
     }
 
     try {
-      prefix = decodeURIComponent(prefix);
+      prefix = decodeURIComponent(prefix)
     } catch (err) {
-      throwError(state, 'tag prefix is malformed: ' + prefix);
+      throwError(state, 'tag prefix is malformed: ' + prefix)
     }
 
-    state.tagMap[handle] = prefix;
+    state.tagMap[handle] = prefix
   }
-};
+}
 
-
-function captureSegment(state, start, end, checkJson) {
-  var _position, _length, _character, _result;
-
+function captureSegment (state, start, end, checkJson) {
   if (start < end) {
-    _result = state.input.slice(start, end);
+    const _result = state.input.slice(start, end)
 
     if (checkJson) {
-      for (_position = 0, _length = _result.length; _position < _length; _position += 1) {
-        _character = _result.charCodeAt(_position);
+      for (let _position = 0, _length = _result.length; _position < _length; _position += 1) {
+        const _character = _result.charCodeAt(_position)
         if (!(_character === 0x09 ||
-              (0x20 <= _character && _character <= 0x10FFFF))) {
-          throwError(state, 'expected valid JSON character');
+              (_character >= 0x20 && _character <= 0x10FFFF))) {
+          throwError(state, 'expected valid JSON character')
         }
       }
     } else if (PATTERN_NON_PRINTABLE.test(_result)) {
-      throwError(state, 'the stream contains non-printable characters');
+      throwError(state, 'the stream contains non-printable characters')
     }
 
-    state.result += _result;
+    state.result += _result
   }
 }
 
-function mergeMappings(state, destination, source, overridableKeys) {
-  var sourceKeys, key, index, quantity;
+function chargeMergeWork (state) {
+  state.totalMergeKeys++
 
+  if (state.maxTotalMergeKeys !== -1 && state.totalMergeKeys > state.maxTotalMergeKeys) {
+    throwError(state, 'merge keys exceeded maxTotalMergeKeys (' + state.maxTotalMergeKeys + ')')
+  }
+}
+
+function mergeMappings (state, destination, source, overridableKeys) {
   if (!common.isObject(source)) {
-    throwError(state, 'cannot merge mappings; the provided source object is unacceptable');
+    throwError(state, 'cannot merge mappings; the provided source object is unacceptable')
   }
 
-  sourceKeys = Object.keys(source);
+  // Count the source mapping itself to bound sequences of empty mappings.
+  chargeMergeWork(state)
 
-  for (index = 0, quantity = sourceKeys.length; index < quantity; index += 1) {
-    key = sourceKeys[index];
+  const sourceKeys = Object.keys(source)
+
+  for (let index = 0, quantity = sourceKeys.length; index < quantity; index += 1) {
+    const key = sourceKeys[index]
+
+    chargeMergeWork(state)
 
     if (!_hasOwnProperty.call(destination, key)) {
-      setProperty(destination, key, source[key]);
-      overridableKeys[key] = true;
+      setProperty(destination, key, source[key])
+      overridableKeys[key] = true
     }
   }
 }
 
-function storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode,
+function storeMappingPair (state, _result, overridableKeys, keyTag, keyNode, valueNode,
   startLine, startLineStart, startPos) {
-
-  var index, quantity;
-
   // The output is a plain object here, so keys can only be strings.
   // We need to convert keyNode to a string, but doing so can hang the process
   // (deeply nested arrays that explode exponentially using aliases).
   if (Array.isArray(keyNode)) {
-    keyNode = Array.prototype.slice.call(keyNode);
+    keyNode = Array.prototype.slice.call(keyNode)
 
-    for (index = 0, quantity = keyNode.length; index < quantity; index += 1) {
+    for (let index = 0, quantity = keyNode.length; index < quantity; index += 1) {
       if (Array.isArray(keyNode[index])) {
-        throwError(state, 'nested arrays are not supported inside keys');
+        throwError(state, 'nested arrays are not supported inside keys')
       }
 
       if (typeof keyNode === 'object' && _class(keyNode[index]) === '[object Object]') {
-        keyNode[index] = '[object Object]';
+        keyNode[index] = '[object Object]'
       }
     }
   }
@@ -16670,814 +14421,780 @@ function storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valu
   // (still use its own toString for arrays, timestamps,
   // and whatever user schema extensions happen to have @@toStringTag)
   if (typeof keyNode === 'object' && _class(keyNode) === '[object Object]') {
-    keyNode = '[object Object]';
+    keyNode = '[object Object]'
   }
 
-
-  keyNode = String(keyNode);
+  keyNode = String(keyNode)
 
   if (_result === null) {
-    _result = {};
+    _result = {}
   }
 
   if (keyTag === 'tag:yaml.org,2002:merge') {
     if (Array.isArray(valueNode)) {
-      for (index = 0, quantity = valueNode.length; index < quantity; index += 1) {
-        mergeMappings(state, _result, valueNode[index], overridableKeys);
+      if (valueNode.length > 100) {
+        throwError(state, 'abnormal merge sequence size')
+      }
+
+      for (let index = 0, quantity = valueNode.length; index < quantity; index += 1) {
+        mergeMappings(state, _result, valueNode[index], overridableKeys)
       }
     } else {
-      mergeMappings(state, _result, valueNode, overridableKeys);
+      mergeMappings(state, _result, valueNode, overridableKeys)
     }
   } else {
     if (!state.json &&
         !_hasOwnProperty.call(overridableKeys, keyNode) &&
         _hasOwnProperty.call(_result, keyNode)) {
-      state.line = startLine || state.line;
-      state.lineStart = startLineStart || state.lineStart;
-      state.position = startPos || state.position;
-      throwError(state, 'duplicated mapping key');
+      state.line = startLine || state.line
+      state.lineStart = startLineStart || state.lineStart
+      state.position = startPos || state.position
+      throwError(state, 'duplicated mapping key')
     }
 
-    setProperty(_result, keyNode, valueNode);
-    delete overridableKeys[keyNode];
+    setProperty(_result, keyNode, valueNode)
+    delete overridableKeys[keyNode]
   }
 
-  return _result;
+  return _result
 }
 
-function readLineBreak(state) {
-  var ch;
-
-  ch = state.input.charCodeAt(state.position);
+function readLineBreak (state) {
+  const ch = state.input.charCodeAt(state.position)
 
   if (ch === 0x0A/* LF */) {
-    state.position++;
+    state.position++
   } else if (ch === 0x0D/* CR */) {
-    state.position++;
+    state.position++
     if (state.input.charCodeAt(state.position) === 0x0A/* LF */) {
-      state.position++;
+      state.position++
     }
   } else {
-    throwError(state, 'a line break is expected');
+    throwError(state, 'a line break is expected')
   }
 
-  state.line += 1;
-  state.lineStart = state.position;
-  state.firstTabInLine = -1;
+  state.line += 1
+  state.lineStart = state.position
+  state.firstTabInLine = -1
 }
 
-function skipSeparationSpace(state, allowComments, checkIndent) {
-  var lineBreaks = 0,
-      ch = state.input.charCodeAt(state.position);
+function skipSeparationSpace (state, allowComments, checkIndent) {
+  let lineBreaks = 0
+  let ch = state.input.charCodeAt(state.position)
 
   while (ch !== 0) {
-    while (is_WHITE_SPACE(ch)) {
+    while (isWhiteSpace(ch)) {
       if (ch === 0x09/* Tab */ && state.firstTabInLine === -1) {
-        state.firstTabInLine = state.position;
+        state.firstTabInLine = state.position
       }
-      ch = state.input.charCodeAt(++state.position);
+      ch = state.input.charCodeAt(++state.position)
     }
 
     if (allowComments && ch === 0x23/* # */) {
       do {
-        ch = state.input.charCodeAt(++state.position);
-      } while (ch !== 0x0A/* LF */ && ch !== 0x0D/* CR */ && ch !== 0);
+        ch = state.input.charCodeAt(++state.position)
+      } while (ch !== 0x0A/* LF */ && ch !== 0x0D/* CR */ && ch !== 0)
     }
 
-    if (is_EOL(ch)) {
-      readLineBreak(state);
+    if (isEol(ch)) {
+      readLineBreak(state)
 
-      ch = state.input.charCodeAt(state.position);
-      lineBreaks++;
-      state.lineIndent = 0;
+      ch = state.input.charCodeAt(state.position)
+      lineBreaks++
+      state.lineIndent = 0
 
       while (ch === 0x20/* Space */) {
-        state.lineIndent++;
-        ch = state.input.charCodeAt(++state.position);
+        state.lineIndent++
+        ch = state.input.charCodeAt(++state.position)
       }
     } else {
-      break;
+      break
     }
   }
 
   if (checkIndent !== -1 && lineBreaks !== 0 && state.lineIndent < checkIndent) {
-    throwWarning(state, 'deficient indentation');
+    throwWarning(state, 'deficient indentation')
   }
 
-  return lineBreaks;
+  return lineBreaks
 }
 
-function testDocumentSeparator(state) {
-  var _position = state.position,
-      ch;
-
-  ch = state.input.charCodeAt(_position);
+function testDocumentSeparator (state) {
+  let _position = state.position
+  let ch = state.input.charCodeAt(_position)
 
   // Condition state.position === state.lineStart is tested
   // in parent on each call, for efficiency. No needs to test here again.
   if ((ch === 0x2D/* - */ || ch === 0x2E/* . */) &&
       ch === state.input.charCodeAt(_position + 1) &&
       ch === state.input.charCodeAt(_position + 2)) {
+    _position += 3
 
-    _position += 3;
+    ch = state.input.charCodeAt(_position)
 
-    ch = state.input.charCodeAt(_position);
-
-    if (ch === 0 || is_WS_OR_EOL(ch)) {
-      return true;
+    if (ch === 0 || isWsOrEol(ch)) {
+      return true
     }
   }
 
-  return false;
+  return false
 }
 
-function writeFoldedLines(state, count) {
+function writeFoldedLines (state, count) {
   if (count === 1) {
-    state.result += ' ';
+    state.result += ' '
   } else if (count > 1) {
-    state.result += common.repeat('\n', count - 1);
+    state.result += common.repeat('\n', count - 1)
   }
 }
 
+function readPlainScalar (state, nodeIndent, withinFlowCollection) {
+  let captureStart
+  let captureEnd
+  let hasPendingContent
+  let _line
+  let _lineStart
+  let _lineIndent
+  const _kind = state.kind
+  const _result = state.result
 
-function readPlainScalar(state, nodeIndent, withinFlowCollection) {
-  var preceding,
-      following,
-      captureStart,
-      captureEnd,
-      hasPendingContent,
-      _line,
-      _lineStart,
-      _lineIndent,
-      _kind = state.kind,
-      _result = state.result,
-      ch;
+  let ch = state.input.charCodeAt(state.position)
 
-  ch = state.input.charCodeAt(state.position);
-
-  if (is_WS_OR_EOL(ch)      ||
-      is_FLOW_INDICATOR(ch) ||
-      ch === 0x23/* # */    ||
-      ch === 0x26/* & */    ||
-      ch === 0x2A/* * */    ||
-      ch === 0x21/* ! */    ||
-      ch === 0x7C/* | */    ||
-      ch === 0x3E/* > */    ||
-      ch === 0x27/* ' */    ||
-      ch === 0x22/* " */    ||
-      ch === 0x25/* % */    ||
-      ch === 0x40/* @ */    ||
+  if (isWsOrEol(ch) ||
+      isFlowIndicator(ch) ||
+      ch === 0x23/* # */ ||
+      ch === 0x26/* & */ ||
+      ch === 0x2A/* * */ ||
+      ch === 0x21/* ! */ ||
+      ch === 0x7C/* | */ ||
+      ch === 0x3E/* > */ ||
+      ch === 0x27/* ' */ ||
+      ch === 0x22/* " */ ||
+      ch === 0x25/* % */ ||
+      ch === 0x40/* @ */ ||
       ch === 0x60/* ` */) {
-    return false;
+    return false
   }
 
   if (ch === 0x3F/* ? */ || ch === 0x2D/* - */) {
-    following = state.input.charCodeAt(state.position + 1);
+    const following = state.input.charCodeAt(state.position + 1)
 
-    if (is_WS_OR_EOL(following) ||
-        withinFlowCollection && is_FLOW_INDICATOR(following)) {
-      return false;
+    if (isWsOrEol(following) ||
+        (withinFlowCollection && isFlowIndicator(following))) {
+      return false
     }
   }
 
-  state.kind = 'scalar';
-  state.result = '';
-  captureStart = captureEnd = state.position;
-  hasPendingContent = false;
+  state.kind = 'scalar'
+  state.result = ''
+  captureStart = captureEnd = state.position
+  hasPendingContent = false
 
   while (ch !== 0) {
     if (ch === 0x3A/* : */) {
-      following = state.input.charCodeAt(state.position + 1);
+      const following = state.input.charCodeAt(state.position + 1)
 
-      if (is_WS_OR_EOL(following) ||
-          withinFlowCollection && is_FLOW_INDICATOR(following)) {
-        break;
+      if (isWsOrEol(following) ||
+          (withinFlowCollection && isFlowIndicator(following))) {
+        break
       }
-
     } else if (ch === 0x23/* # */) {
-      preceding = state.input.charCodeAt(state.position - 1);
+      const preceding = state.input.charCodeAt(state.position - 1)
 
-      if (is_WS_OR_EOL(preceding)) {
-        break;
+      if (isWsOrEol(preceding)) {
+        break
       }
-
     } else if ((state.position === state.lineStart && testDocumentSeparator(state)) ||
-               withinFlowCollection && is_FLOW_INDICATOR(ch)) {
-      break;
-
-    } else if (is_EOL(ch)) {
-      _line = state.line;
-      _lineStart = state.lineStart;
-      _lineIndent = state.lineIndent;
-      skipSeparationSpace(state, false, -1);
+               (withinFlowCollection && isFlowIndicator(ch))) {
+      break
+    } else if (isEol(ch)) {
+      _line = state.line
+      _lineStart = state.lineStart
+      _lineIndent = state.lineIndent
+      skipSeparationSpace(state, false, -1)
 
       if (state.lineIndent >= nodeIndent) {
-        hasPendingContent = true;
-        ch = state.input.charCodeAt(state.position);
-        continue;
+        hasPendingContent = true
+        ch = state.input.charCodeAt(state.position)
+        continue
       } else {
-        state.position = captureEnd;
-        state.line = _line;
-        state.lineStart = _lineStart;
-        state.lineIndent = _lineIndent;
-        break;
+        state.position = captureEnd
+        state.line = _line
+        state.lineStart = _lineStart
+        state.lineIndent = _lineIndent
+        break
       }
     }
 
     if (hasPendingContent) {
-      captureSegment(state, captureStart, captureEnd, false);
-      writeFoldedLines(state, state.line - _line);
-      captureStart = captureEnd = state.position;
-      hasPendingContent = false;
+      captureSegment(state, captureStart, captureEnd, false)
+      writeFoldedLines(state, state.line - _line)
+      captureStart = captureEnd = state.position
+      hasPendingContent = false
     }
 
-    if (!is_WHITE_SPACE(ch)) {
-      captureEnd = state.position + 1;
+    if (!isWhiteSpace(ch)) {
+      captureEnd = state.position + 1
     }
 
-    ch = state.input.charCodeAt(++state.position);
+    ch = state.input.charCodeAt(++state.position)
   }
 
-  captureSegment(state, captureStart, captureEnd, false);
+  captureSegment(state, captureStart, captureEnd, false)
 
   if (state.result) {
-    return true;
+    return true
   }
 
-  state.kind = _kind;
-  state.result = _result;
-  return false;
+  state.kind = _kind
+  state.result = _result
+  return false
 }
 
-function readSingleQuotedScalar(state, nodeIndent) {
-  var ch,
-      captureStart, captureEnd;
+function readSingleQuotedScalar (state, nodeIndent) {
+  let captureStart
+  let captureEnd
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   if (ch !== 0x27/* ' */) {
-    return false;
+    return false
   }
 
-  state.kind = 'scalar';
-  state.result = '';
-  state.position++;
-  captureStart = captureEnd = state.position;
+  state.kind = 'scalar'
+  state.result = ''
+  state.position++
+  captureStart = captureEnd = state.position
 
   while ((ch = state.input.charCodeAt(state.position)) !== 0) {
     if (ch === 0x27/* ' */) {
-      captureSegment(state, captureStart, state.position, true);
-      ch = state.input.charCodeAt(++state.position);
+      captureSegment(state, captureStart, state.position, true)
+      ch = state.input.charCodeAt(++state.position)
 
       if (ch === 0x27/* ' */) {
-        captureStart = state.position;
-        state.position++;
-        captureEnd = state.position;
+        captureStart = state.position
+        state.position++
+        captureEnd = state.position
       } else {
-        return true;
+        return true
       }
-
-    } else if (is_EOL(ch)) {
-      captureSegment(state, captureStart, captureEnd, true);
-      writeFoldedLines(state, skipSeparationSpace(state, false, nodeIndent));
-      captureStart = captureEnd = state.position;
-
+    } else if (isEol(ch)) {
+      captureSegment(state, captureStart, captureEnd, true)
+      writeFoldedLines(state, skipSeparationSpace(state, false, nodeIndent))
+      captureStart = captureEnd = state.position
     } else if (state.position === state.lineStart && testDocumentSeparator(state)) {
-      throwError(state, 'unexpected end of the document within a single quoted scalar');
-
+      throwError(state, 'unexpected end of the document within a single quoted scalar')
     } else {
-      state.position++;
-      captureEnd = state.position;
+      state.position++
+      if (!isWhiteSpace(ch)) {
+        captureEnd = state.position
+      }
     }
   }
 
-  throwError(state, 'unexpected end of the stream within a single quoted scalar');
+  throwError(state, 'unexpected end of the stream within a single quoted scalar')
 }
 
-function readDoubleQuotedScalar(state, nodeIndent) {
-  var captureStart,
-      captureEnd,
-      hexLength,
-      hexResult,
-      tmp,
-      ch;
+function readDoubleQuotedScalar (state, nodeIndent) {
+  let captureStart
+  let captureEnd
+  let tmp
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   if (ch !== 0x22/* " */) {
-    return false;
+    return false
   }
 
-  state.kind = 'scalar';
-  state.result = '';
-  state.position++;
-  captureStart = captureEnd = state.position;
+  state.kind = 'scalar'
+  state.result = ''
+  state.position++
+  captureStart = captureEnd = state.position
 
   while ((ch = state.input.charCodeAt(state.position)) !== 0) {
     if (ch === 0x22/* " */) {
-      captureSegment(state, captureStart, state.position, true);
-      state.position++;
-      return true;
-
+      captureSegment(state, captureStart, state.position, true)
+      state.position++
+      return true
     } else if (ch === 0x5C/* \ */) {
-      captureSegment(state, captureStart, state.position, true);
-      ch = state.input.charCodeAt(++state.position);
+      captureSegment(state, captureStart, state.position, true)
+      ch = state.input.charCodeAt(++state.position)
 
-      if (is_EOL(ch)) {
-        skipSeparationSpace(state, false, nodeIndent);
+      if (isEol(ch)) {
+        skipSeparationSpace(state, false, nodeIndent)
 
         // TODO: rework to inline fn with no type cast?
       } else if (ch < 256 && simpleEscapeCheck[ch]) {
-        state.result += simpleEscapeMap[ch];
-        state.position++;
-
+        state.result += simpleEscapeMap[ch]
+        state.position++
       } else if ((tmp = escapedHexLen(ch)) > 0) {
-        hexLength = tmp;
-        hexResult = 0;
+        let hexLength = tmp
+        let hexResult = 0
 
         for (; hexLength > 0; hexLength--) {
-          ch = state.input.charCodeAt(++state.position);
+          ch = state.input.charCodeAt(++state.position)
 
           if ((tmp = fromHexCode(ch)) >= 0) {
-            hexResult = (hexResult << 4) + tmp;
-
+            hexResult = (hexResult << 4) + tmp
           } else {
-            throwError(state, 'expected hexadecimal character');
+            throwError(state, 'expected hexadecimal character')
           }
         }
 
-        state.result += charFromCodepoint(hexResult);
+        state.result += charFromCodepoint(hexResult)
 
-        state.position++;
-
+        state.position++
       } else {
-        throwError(state, 'unknown escape sequence');
+        throwError(state, 'unknown escape sequence')
       }
 
-      captureStart = captureEnd = state.position;
-
-    } else if (is_EOL(ch)) {
-      captureSegment(state, captureStart, captureEnd, true);
-      writeFoldedLines(state, skipSeparationSpace(state, false, nodeIndent));
-      captureStart = captureEnd = state.position;
-
+      captureStart = captureEnd = state.position
+    } else if (isEol(ch)) {
+      captureSegment(state, captureStart, captureEnd, true)
+      writeFoldedLines(state, skipSeparationSpace(state, false, nodeIndent))
+      captureStart = captureEnd = state.position
     } else if (state.position === state.lineStart && testDocumentSeparator(state)) {
-      throwError(state, 'unexpected end of the document within a double quoted scalar');
-
+      throwError(state, 'unexpected end of the document within a double quoted scalar')
     } else {
-      state.position++;
-      captureEnd = state.position;
+      state.position++
+      if (!isWhiteSpace(ch)) {
+        captureEnd = state.position
+      }
     }
   }
 
-  throwError(state, 'unexpected end of the stream within a double quoted scalar');
+  throwError(state, 'unexpected end of the stream within a double quoted scalar')
 }
 
-function readFlowCollection(state, nodeIndent) {
-  var readNext = true,
-      _line,
-      _lineStart,
-      _pos,
-      _tag     = state.tag,
-      _result,
-      _anchor  = state.anchor,
-      following,
-      terminator,
-      isPair,
-      isExplicitPair,
-      isMapping,
-      overridableKeys = Object.create(null),
-      keyNode,
-      keyTag,
-      valueNode,
-      ch;
+function readFlowCollection (state, nodeIndent) {
+  let readNext = true
+  let _line
+  let _lineStart
+  let _pos
+  const _tag = state.tag
+  let _result
+  const _anchor = state.anchor
+  let terminator
+  let isPair
+  let isExplicitPair
+  let isMapping
+  const overridableKeys = Object.create(null)
+  let keyNode
+  let keyTag
+  let valueNode
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   if (ch === 0x5B/* [ */) {
-    terminator = 0x5D;/* ] */
-    isMapping = false;
-    _result = [];
+    terminator = 0x5D/* ] */
+    isMapping = false
+    _result = []
   } else if (ch === 0x7B/* { */) {
-    terminator = 0x7D;/* } */
-    isMapping = true;
-    _result = {};
+    terminator = 0x7D/* } */
+    isMapping = true
+    _result = {}
   } else {
-    return false;
+    return false
   }
 
   if (state.anchor !== null) {
-    state.anchorMap[state.anchor] = _result;
+    storeAnchor(state, state.anchor, _result)
   }
 
-  ch = state.input.charCodeAt(++state.position);
+  ch = state.input.charCodeAt(++state.position)
 
   while (ch !== 0) {
-    skipSeparationSpace(state, true, nodeIndent);
+    skipSeparationSpace(state, true, nodeIndent)
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
     if (ch === terminator) {
-      state.position++;
-      state.tag = _tag;
-      state.anchor = _anchor;
-      state.kind = isMapping ? 'mapping' : 'sequence';
-      state.result = _result;
-      return true;
+      state.position++
+      state.tag = _tag
+      state.anchor = _anchor
+      state.kind = isMapping ? 'mapping' : 'sequence'
+      state.result = _result
+      return true
     } else if (!readNext) {
-      throwError(state, 'missed comma between flow collection entries');
+      throwError(state, 'missed comma between flow collection entries')
     } else if (ch === 0x2C/* , */) {
       // "flow collection entries can never be completely empty", as per YAML 1.2, section 7.4
-      throwError(state, "expected the node content, but found ','");
+      throwError(state, "expected the node content, but found ','")
     }
 
-    keyTag = keyNode = valueNode = null;
-    isPair = isExplicitPair = false;
+    keyTag = keyNode = valueNode = null
+    isPair = isExplicitPair = false
 
     if (ch === 0x3F/* ? */) {
-      following = state.input.charCodeAt(state.position + 1);
+      const following = state.input.charCodeAt(state.position + 1)
 
-      if (is_WS_OR_EOL(following)) {
-        isPair = isExplicitPair = true;
-        state.position++;
-        skipSeparationSpace(state, true, nodeIndent);
+      if (isWsOrEol(following)) {
+        isPair = isExplicitPair = true
+        state.position++
+        skipSeparationSpace(state, true, nodeIndent)
       }
     }
 
-    _line = state.line; // Save the current line.
-    _lineStart = state.lineStart;
-    _pos = state.position;
-    composeNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true);
-    keyTag = state.tag;
-    keyNode = state.result;
-    skipSeparationSpace(state, true, nodeIndent);
+    _line = state.line // Save the current line.
+    _lineStart = state.lineStart
+    _pos = state.position
+    composeNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true)
+    keyTag = state.tag
+    keyNode = state.result
+    skipSeparationSpace(state, true, nodeIndent)
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
     if ((isExplicitPair || state.line === _line) && ch === 0x3A/* : */) {
-      isPair = true;
-      ch = state.input.charCodeAt(++state.position);
-      skipSeparationSpace(state, true, nodeIndent);
-      composeNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true);
-      valueNode = state.result;
+      isPair = true
+      ch = state.input.charCodeAt(++state.position)
+      skipSeparationSpace(state, true, nodeIndent)
+      composeNode(state, nodeIndent, CONTEXT_FLOW_IN, false, true)
+      valueNode = state.result
     }
 
     if (isMapping) {
-      storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, _line, _lineStart, _pos);
+      storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, _line, _lineStart, _pos)
     } else if (isPair) {
-      _result.push(storeMappingPair(state, null, overridableKeys, keyTag, keyNode, valueNode, _line, _lineStart, _pos));
+      _result.push(storeMappingPair(state, null, overridableKeys, keyTag, keyNode, valueNode, _line, _lineStart, _pos))
     } else {
-      _result.push(keyNode);
+      _result.push(keyNode)
     }
 
-    skipSeparationSpace(state, true, nodeIndent);
+    skipSeparationSpace(state, true, nodeIndent)
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
     if (ch === 0x2C/* , */) {
-      readNext = true;
-      ch = state.input.charCodeAt(++state.position);
+      readNext = true
+      ch = state.input.charCodeAt(++state.position)
     } else {
-      readNext = false;
+      readNext = false
     }
   }
 
-  throwError(state, 'unexpected end of the stream within a flow collection');
+  throwError(state, 'unexpected end of the stream within a flow collection')
 }
 
-function readBlockScalar(state, nodeIndent) {
-  var captureStart,
-      folding,
-      chomping       = CHOMPING_CLIP,
-      didReadContent = false,
-      detectedIndent = false,
-      textIndent     = nodeIndent,
-      emptyLines     = 0,
-      atMoreIndented = false,
-      tmp,
-      ch;
+function readBlockScalar (state, nodeIndent) {
+  let folding
+  let chomping = CHOMPING_CLIP
+  let didReadContent = false
+  let detectedIndent = false
+  let textIndent = nodeIndent
+  let emptyLines = 0
+  let atMoreIndented = false
+  let tmp
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   if (ch === 0x7C/* | */) {
-    folding = false;
+    folding = false
   } else if (ch === 0x3E/* > */) {
-    folding = true;
+    folding = true
   } else {
-    return false;
+    return false
   }
 
-  state.kind = 'scalar';
-  state.result = '';
+  state.kind = 'scalar'
+  state.result = ''
 
   while (ch !== 0) {
-    ch = state.input.charCodeAt(++state.position);
+    ch = state.input.charCodeAt(++state.position)
 
     if (ch === 0x2B/* + */ || ch === 0x2D/* - */) {
       if (CHOMPING_CLIP === chomping) {
-        chomping = (ch === 0x2B/* + */) ? CHOMPING_KEEP : CHOMPING_STRIP;
+        chomping = (ch === 0x2B/* + */) ? CHOMPING_KEEP : CHOMPING_STRIP
       } else {
-        throwError(state, 'repeat of a chomping mode identifier');
+        throwError(state, 'repeat of a chomping mode identifier')
       }
-
     } else if ((tmp = fromDecimalCode(ch)) >= 0) {
       if (tmp === 0) {
-        throwError(state, 'bad explicit indentation width of a block scalar; it cannot be less than one');
+        throwError(state, 'bad explicit indentation width of a block scalar; it cannot be less than one')
       } else if (!detectedIndent) {
-        textIndent = nodeIndent + tmp - 1;
-        detectedIndent = true;
+        textIndent = nodeIndent + tmp - 1
+        detectedIndent = true
       } else {
-        throwError(state, 'repeat of an indentation width identifier');
+        throwError(state, 'repeat of an indentation width identifier')
       }
-
     } else {
-      break;
+      break
     }
   }
 
-  if (is_WHITE_SPACE(ch)) {
-    do { ch = state.input.charCodeAt(++state.position); }
-    while (is_WHITE_SPACE(ch));
+  if (isWhiteSpace(ch)) {
+    do { ch = state.input.charCodeAt(++state.position) }
+    while (isWhiteSpace(ch))
 
     if (ch === 0x23/* # */) {
-      do { ch = state.input.charCodeAt(++state.position); }
-      while (!is_EOL(ch) && (ch !== 0));
+      do { ch = state.input.charCodeAt(++state.position) }
+      while (!isEol(ch) && (ch !== 0))
     }
   }
 
   while (ch !== 0) {
-    readLineBreak(state);
-    state.lineIndent = 0;
+    readLineBreak(state)
+    state.lineIndent = 0
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
+    // eslint-disable-next-line no-unmodified-loop-condition
     while ((!detectedIndent || state.lineIndent < textIndent) &&
            (ch === 0x20/* Space */)) {
-      state.lineIndent++;
-      ch = state.input.charCodeAt(++state.position);
+      state.lineIndent++
+      ch = state.input.charCodeAt(++state.position)
     }
 
     if (!detectedIndent && state.lineIndent > textIndent) {
-      textIndent = state.lineIndent;
+      textIndent = state.lineIndent
     }
 
-    if (is_EOL(ch)) {
-      emptyLines++;
-      continue;
+    if (isEol(ch)) {
+      emptyLines++
+      continue
+    }
+
+    if (!detectedIndent && textIndent === 0) {
+      throwError(state, 'missing indentation for block scalar')
     }
 
     // End of the scalar.
     if (state.lineIndent < textIndent) {
-
       // Perform the chomping.
       if (chomping === CHOMPING_KEEP) {
-        state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines);
+        state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines)
       } else if (chomping === CHOMPING_CLIP) {
         if (didReadContent) { // i.e. only if the scalar is not empty.
-          state.result += '\n';
+          state.result += '\n'
         }
       }
 
       // Break this `while` cycle and go to the funciton's epilogue.
-      break;
+      break
     }
 
     // Folded style: use fancy rules to handle line breaks.
     if (folding) {
-
       // Lines starting with white space characters (more-indented lines) are not folded.
-      if (is_WHITE_SPACE(ch)) {
-        atMoreIndented = true;
+      if (isWhiteSpace(ch)) {
+        atMoreIndented = true
         // except for the first content line (cf. Example 8.1)
-        state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines);
+        state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines)
 
       // End of more-indented block.
       } else if (atMoreIndented) {
-        atMoreIndented = false;
-        state.result += common.repeat('\n', emptyLines + 1);
+        atMoreIndented = false
+        state.result += common.repeat('\n', emptyLines + 1)
 
       // Just one line break - perceive as the same line.
       } else if (emptyLines === 0) {
         if (didReadContent) { // i.e. only if we have already read some scalar content.
-          state.result += ' ';
+          state.result += ' '
         }
 
       // Several line breaks - perceive as different lines.
       } else {
-        state.result += common.repeat('\n', emptyLines);
+        state.result += common.repeat('\n', emptyLines)
       }
 
     // Literal style: just add exact number of line breaks between content lines.
     } else {
       // Keep all line breaks except the header line break.
-      state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines);
+      state.result += common.repeat('\n', didReadContent ? 1 + emptyLines : emptyLines)
     }
 
-    didReadContent = true;
-    detectedIndent = true;
-    emptyLines = 0;
-    captureStart = state.position;
+    didReadContent = true
+    detectedIndent = true
+    emptyLines = 0
+    const captureStart = state.position
 
-    while (!is_EOL(ch) && (ch !== 0)) {
-      ch = state.input.charCodeAt(++state.position);
+    while (!isEol(ch) && (ch !== 0)) {
+      ch = state.input.charCodeAt(++state.position)
     }
 
-    captureSegment(state, captureStart, state.position, false);
+    captureSegment(state, captureStart, state.position, false)
   }
 
-  return true;
+  return true
 }
 
-function readBlockSequence(state, nodeIndent) {
-  var _line,
-      _tag      = state.tag,
-      _anchor   = state.anchor,
-      _result   = [],
-      following,
-      detected  = false,
-      ch;
+function readBlockSequence (state, nodeIndent) {
+  const _tag = state.tag
+  const _anchor = state.anchor
+  const _result = []
+  let detected = false
 
   // there is a leading tab before this token, so it can't be a block sequence/mapping;
   // it can still be flow sequence/mapping or a scalar
-  if (state.firstTabInLine !== -1) return false;
+  if (state.firstTabInLine !== -1) return false
 
   if (state.anchor !== null) {
-    state.anchorMap[state.anchor] = _result;
+    storeAnchor(state, state.anchor, _result)
   }
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   while (ch !== 0) {
     if (state.firstTabInLine !== -1) {
-      state.position = state.firstTabInLine;
-      throwError(state, 'tab characters must not be used in indentation');
+      state.position = state.firstTabInLine
+      throwError(state, 'tab characters must not be used in indentation')
     }
 
     if (ch !== 0x2D/* - */) {
-      break;
+      break
     }
 
-    following = state.input.charCodeAt(state.position + 1);
+    const following = state.input.charCodeAt(state.position + 1)
 
-    if (!is_WS_OR_EOL(following)) {
-      break;
+    if (!isWsOrEol(following)) {
+      break
     }
 
-    detected = true;
-    state.position++;
+    detected = true
+    state.position++
 
     if (skipSeparationSpace(state, true, -1)) {
       if (state.lineIndent <= nodeIndent) {
-        _result.push(null);
-        ch = state.input.charCodeAt(state.position);
-        continue;
+        _result.push(null)
+        ch = state.input.charCodeAt(state.position)
+        continue
       }
     }
 
-    _line = state.line;
-    composeNode(state, nodeIndent, CONTEXT_BLOCK_IN, false, true);
-    _result.push(state.result);
-    skipSeparationSpace(state, true, -1);
+    const _line = state.line
+    composeNode(state, nodeIndent, CONTEXT_BLOCK_IN, false, true)
+    _result.push(state.result)
+    skipSeparationSpace(state, true, -1)
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
     if ((state.line === _line || state.lineIndent > nodeIndent) && (ch !== 0)) {
-      throwError(state, 'bad indentation of a sequence entry');
+      throwError(state, 'bad indentation of a sequence entry')
     } else if (state.lineIndent < nodeIndent) {
-      break;
+      break
     }
   }
 
   if (detected) {
-    state.tag = _tag;
-    state.anchor = _anchor;
-    state.kind = 'sequence';
-    state.result = _result;
-    return true;
+    state.tag = _tag
+    state.anchor = _anchor
+    state.kind = 'sequence'
+    state.result = _result
+    return true
   }
-  return false;
+  return false
 }
 
-function readBlockMapping(state, nodeIndent, flowIndent) {
-  var following,
-      allowCompact,
-      _line,
-      _keyLine,
-      _keyLineStart,
-      _keyPos,
-      _tag          = state.tag,
-      _anchor       = state.anchor,
-      _result       = {},
-      overridableKeys = Object.create(null),
-      keyTag        = null,
-      keyNode       = null,
-      valueNode     = null,
-      atExplicitKey = false,
-      detected      = false,
-      ch;
+function readBlockMapping (state, nodeIndent, flowIndent) {
+  let allowCompact
+  let _keyLine
+  let _keyLineStart
+  let _keyPos
+  const _tag = state.tag
+  const _anchor = state.anchor
+  const _result = {}
+  const overridableKeys = Object.create(null)
+  let keyTag = null
+  let keyNode = null
+  let valueNode = null
+  let atExplicitKey = false
+  let detected = false
 
   // there is a leading tab before this token, so it can't be a block sequence/mapping;
   // it can still be flow sequence/mapping or a scalar
-  if (state.firstTabInLine !== -1) return false;
+  if (state.firstTabInLine !== -1) return false
 
   if (state.anchor !== null) {
-    state.anchorMap[state.anchor] = _result;
+    storeAnchor(state, state.anchor, _result)
   }
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
   while (ch !== 0) {
     if (!atExplicitKey && state.firstTabInLine !== -1) {
-      state.position = state.firstTabInLine;
-      throwError(state, 'tab characters must not be used in indentation');
+      state.position = state.firstTabInLine
+      throwError(state, 'tab characters must not be used in indentation')
     }
 
-    following = state.input.charCodeAt(state.position + 1);
-    _line = state.line; // Save the current line.
+    const following = state.input.charCodeAt(state.position + 1)
+    const _line = state.line // Save the current line.
 
     //
     // Explicit notation case. There are two separate blocks:
     // first for the key (denoted by "?") and second for the value (denoted by ":")
     //
-    if ((ch === 0x3F/* ? */ || ch === 0x3A/* : */) && is_WS_OR_EOL(following)) {
-
+    if ((ch === 0x3F/* ? */ || ch === 0x3A/* : */) && isWsOrEol(following)) {
       if (ch === 0x3F/* ? */) {
         if (atExplicitKey) {
-          storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos);
-          keyTag = keyNode = valueNode = null;
+          storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos)
+          keyTag = keyNode = valueNode = null
         }
 
-        detected = true;
-        atExplicitKey = true;
-        allowCompact = true;
-
+        detected = true
+        atExplicitKey = true
+        allowCompact = true
       } else if (atExplicitKey) {
         // i.e. 0x3A/* : */ === character after the explicit key.
-        atExplicitKey = false;
-        allowCompact = true;
-
+        atExplicitKey = false
+        allowCompact = true
       } else {
-        throwError(state, 'incomplete explicit mapping pair; a key node is missed; or followed by a non-tabulated empty line');
+        throwError(state, 'incomplete explicit mapping pair; a key node is missed; or followed by a non-tabulated empty line')
       }
 
-      state.position += 1;
-      ch = following;
+      state.position += 1
+      ch = following
 
     //
     // Implicit notation case. Flow-style node as the key first, then ":", and the value.
     //
     } else {
-      _keyLine = state.line;
-      _keyLineStart = state.lineStart;
-      _keyPos = state.position;
+      _keyLine = state.line
+      _keyLineStart = state.lineStart
+      _keyPos = state.position
 
       if (!composeNode(state, flowIndent, CONTEXT_FLOW_OUT, false, true)) {
         // Neither implicit nor explicit notation.
         // Reading is done. Go to the epilogue.
-        break;
+        break
       }
 
       if (state.line === _line) {
-        ch = state.input.charCodeAt(state.position);
+        ch = state.input.charCodeAt(state.position)
 
-        while (is_WHITE_SPACE(ch)) {
-          ch = state.input.charCodeAt(++state.position);
+        while (isWhiteSpace(ch)) {
+          ch = state.input.charCodeAt(++state.position)
         }
 
         if (ch === 0x3A/* : */) {
-          ch = state.input.charCodeAt(++state.position);
+          ch = state.input.charCodeAt(++state.position)
 
-          if (!is_WS_OR_EOL(ch)) {
-            throwError(state, 'a whitespace character is expected after the key-value separator within a block mapping');
+          if (!isWsOrEol(ch)) {
+            throwError(state, 'a whitespace character is expected after the key-value separator within a block mapping')
           }
 
           if (atExplicitKey) {
-            storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos);
-            keyTag = keyNode = valueNode = null;
+            storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos)
+            keyTag = keyNode = valueNode = null
           }
 
-          detected = true;
-          atExplicitKey = false;
-          allowCompact = false;
-          keyTag = state.tag;
-          keyNode = state.result;
-
+          detected = true
+          atExplicitKey = false
+          allowCompact = false
+          keyTag = state.tag
+          keyNode = state.result
         } else if (detected) {
-          throwError(state, 'can not read an implicit mapping pair; a colon is missed');
-
+          throwError(state, 'can not read an implicit mapping pair; a colon is missed')
         } else {
-          state.tag = _tag;
-          state.anchor = _anchor;
-          return true; // Keep the result of `composeNode`.
+          state.tag = _tag
+          state.anchor = _anchor
+          return true // Keep the result of `composeNode`.
         }
-
       } else if (detected) {
-        throwError(state, 'can not read a block mapping entry; a multiline key may not be an implicit key');
-
+        throwError(state, 'can not read a block mapping entry; a multiline key may not be an implicit key')
       } else {
-        state.tag = _tag;
-        state.anchor = _anchor;
-        return true; // Keep the result of `composeNode`.
+        state.tag = _tag
+        state.anchor = _anchor
+        return true // Keep the result of `composeNode`.
       }
     }
 
@@ -17486,32 +15203,32 @@ function readBlockMapping(state, nodeIndent, flowIndent) {
     //
     if (state.line === _line || state.lineIndent > nodeIndent) {
       if (atExplicitKey) {
-        _keyLine = state.line;
-        _keyLineStart = state.lineStart;
-        _keyPos = state.position;
+        _keyLine = state.line
+        _keyLineStart = state.lineStart
+        _keyPos = state.position
       }
 
       if (composeNode(state, nodeIndent, CONTEXT_BLOCK_OUT, true, allowCompact)) {
         if (atExplicitKey) {
-          keyNode = state.result;
+          keyNode = state.result
         } else {
-          valueNode = state.result;
+          valueNode = state.result
         }
       }
 
       if (!atExplicitKey) {
-        storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, _keyLine, _keyLineStart, _keyPos);
-        keyTag = keyNode = valueNode = null;
+        storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, valueNode, _keyLine, _keyLineStart, _keyPos)
+        keyTag = keyNode = valueNode = null
       }
 
-      skipSeparationSpace(state, true, -1);
-      ch = state.input.charCodeAt(state.position);
+      skipSeparationSpace(state, true, -1)
+      ch = state.input.charCodeAt(state.position)
     }
 
     if ((state.line === _line || state.lineIndent > nodeIndent) && (ch !== 0)) {
-      throwError(state, 'bad indentation of a mapping entry');
+      throwError(state, 'bad indentation of a mapping entry')
     } else if (state.lineIndent < nodeIndent) {
-      break;
+      break
     }
   }
 
@@ -17521,293 +15238,330 @@ function readBlockMapping(state, nodeIndent, flowIndent) {
 
   // Special case: last mapping's node contains only the key in explicit notation.
   if (atExplicitKey) {
-    storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos);
+    storeMappingPair(state, _result, overridableKeys, keyTag, keyNode, null, _keyLine, _keyLineStart, _keyPos)
   }
 
   // Expose the resulting mapping.
   if (detected) {
-    state.tag = _tag;
-    state.anchor = _anchor;
-    state.kind = 'mapping';
-    state.result = _result;
+    state.tag = _tag
+    state.anchor = _anchor
+    state.kind = 'mapping'
+    state.result = _result
   }
 
-  return detected;
+  return detected
 }
 
-function readTagProperty(state) {
-  var _position,
-      isVerbatim = false,
-      isNamed    = false,
-      tagHandle,
-      tagName,
-      ch;
+function readTagProperty (state) {
+  let isVerbatim = false
+  let isNamed = false
+  let tagHandle
+  let tagName
 
-  ch = state.input.charCodeAt(state.position);
+  let ch = state.input.charCodeAt(state.position)
 
-  if (ch !== 0x21/* ! */) return false;
+  if (ch !== 0x21/* ! */) return false
 
   if (state.tag !== null) {
-    throwError(state, 'duplication of a tag property');
+    throwError(state, 'duplication of a tag property')
   }
 
-  ch = state.input.charCodeAt(++state.position);
+  ch = state.input.charCodeAt(++state.position)
 
   if (ch === 0x3C/* < */) {
-    isVerbatim = true;
-    ch = state.input.charCodeAt(++state.position);
-
+    isVerbatim = true
+    ch = state.input.charCodeAt(++state.position)
   } else if (ch === 0x21/* ! */) {
-    isNamed = true;
-    tagHandle = '!!';
-    ch = state.input.charCodeAt(++state.position);
-
+    isNamed = true
+    tagHandle = '!!'
+    ch = state.input.charCodeAt(++state.position)
   } else {
-    tagHandle = '!';
+    tagHandle = '!'
   }
 
-  _position = state.position;
+  let _position = state.position
 
   if (isVerbatim) {
-    do { ch = state.input.charCodeAt(++state.position); }
-    while (ch !== 0 && ch !== 0x3E/* > */);
+    do { ch = state.input.charCodeAt(++state.position) }
+    while (ch !== 0 && ch !== 0x3E/* > */)
 
     if (state.position < state.length) {
-      tagName = state.input.slice(_position, state.position);
-      ch = state.input.charCodeAt(++state.position);
+      tagName = state.input.slice(_position, state.position)
+      ch = state.input.charCodeAt(++state.position)
     } else {
-      throwError(state, 'unexpected end of the stream within a verbatim tag');
+      throwError(state, 'unexpected end of the stream within a verbatim tag')
     }
   } else {
-    while (ch !== 0 && !is_WS_OR_EOL(ch)) {
-
+    while (ch !== 0 && !isWsOrEol(ch)) {
       if (ch === 0x21/* ! */) {
         if (!isNamed) {
-          tagHandle = state.input.slice(_position - 1, state.position + 1);
+          tagHandle = state.input.slice(_position - 1, state.position + 1)
 
           if (!PATTERN_TAG_HANDLE.test(tagHandle)) {
-            throwError(state, 'named tag handle cannot contain such characters');
+            throwError(state, 'named tag handle cannot contain such characters')
           }
 
-          isNamed = true;
-          _position = state.position + 1;
+          isNamed = true
+          _position = state.position + 1
         } else {
-          throwError(state, 'tag suffix cannot contain exclamation marks');
+          throwError(state, 'tag suffix cannot contain exclamation marks')
         }
       }
 
-      ch = state.input.charCodeAt(++state.position);
+      ch = state.input.charCodeAt(++state.position)
     }
 
-    tagName = state.input.slice(_position, state.position);
+    tagName = state.input.slice(_position, state.position)
 
     if (PATTERN_FLOW_INDICATORS.test(tagName)) {
-      throwError(state, 'tag suffix cannot contain flow indicator characters');
+      throwError(state, 'tag suffix cannot contain flow indicator characters')
     }
   }
 
   if (tagName && !PATTERN_TAG_URI.test(tagName)) {
-    throwError(state, 'tag name cannot contain such characters: ' + tagName);
+    throwError(state, 'tag name cannot contain such characters: ' + tagName)
   }
 
   try {
-    tagName = decodeURIComponent(tagName);
+    tagName = decodeURIComponent(tagName)
   } catch (err) {
-    throwError(state, 'tag name is malformed: ' + tagName);
+    throwError(state, 'tag name is malformed: ' + tagName)
   }
 
   if (isVerbatim) {
-    state.tag = tagName;
-
+    state.tag = tagName
   } else if (_hasOwnProperty.call(state.tagMap, tagHandle)) {
-    state.tag = state.tagMap[tagHandle] + tagName;
-
+    state.tag = state.tagMap[tagHandle] + tagName
   } else if (tagHandle === '!') {
-    state.tag = '!' + tagName;
-
+    state.tag = '!' + tagName
   } else if (tagHandle === '!!') {
-    state.tag = 'tag:yaml.org,2002:' + tagName;
-
+    state.tag = 'tag:yaml.org,2002:' + tagName
   } else {
-    throwError(state, 'undeclared tag handle "' + tagHandle + '"');
+    throwError(state, 'undeclared tag handle "' + tagHandle + '"')
   }
 
-  return true;
+  return true
 }
 
-function readAnchorProperty(state) {
-  var _position,
-      ch;
+function readAnchorProperty (state) {
+  let ch = state.input.charCodeAt(state.position)
 
-  ch = state.input.charCodeAt(state.position);
-
-  if (ch !== 0x26/* & */) return false;
+  if (ch !== 0x26/* & */) return false
 
   if (state.anchor !== null) {
-    throwError(state, 'duplication of an anchor property');
+    throwError(state, 'duplication of an anchor property')
   }
 
-  ch = state.input.charCodeAt(++state.position);
-  _position = state.position;
+  ch = state.input.charCodeAt(++state.position)
+  const _position = state.position
 
-  while (ch !== 0 && !is_WS_OR_EOL(ch) && !is_FLOW_INDICATOR(ch)) {
-    ch = state.input.charCodeAt(++state.position);
+  while (ch !== 0 && !isWsOrEol(ch) && !isFlowIndicator(ch)) {
+    ch = state.input.charCodeAt(++state.position)
   }
 
   if (state.position === _position) {
-    throwError(state, 'name of an anchor node must contain at least one character');
+    throwError(state, 'name of an anchor node must contain at least one character')
   }
 
-  state.anchor = state.input.slice(_position, state.position);
-  return true;
+  state.anchor = state.input.slice(_position, state.position)
+  return true
 }
 
-function readAlias(state) {
-  var _position, alias,
-      ch;
+function readAlias (state) {
+  let ch = state.input.charCodeAt(state.position)
 
-  ch = state.input.charCodeAt(state.position);
+  if (ch !== 0x2A/* * */) return false
 
-  if (ch !== 0x2A/* * */) return false;
+  ch = state.input.charCodeAt(++state.position)
+  const _position = state.position
 
-  ch = state.input.charCodeAt(++state.position);
-  _position = state.position;
-
-  while (ch !== 0 && !is_WS_OR_EOL(ch) && !is_FLOW_INDICATOR(ch)) {
-    ch = state.input.charCodeAt(++state.position);
+  while (ch !== 0 && !isWsOrEol(ch) && !isFlowIndicator(ch)) {
+    ch = state.input.charCodeAt(++state.position)
   }
 
   if (state.position === _position) {
-    throwError(state, 'name of an alias node must contain at least one character');
+    throwError(state, 'name of an alias node must contain at least one character')
   }
 
-  alias = state.input.slice(_position, state.position);
+  const alias = state.input.slice(_position, state.position)
 
   if (!_hasOwnProperty.call(state.anchorMap, alias)) {
-    throwError(state, 'unidentified alias "' + alias + '"');
+    throwError(state, 'unidentified alias "' + alias + '"')
   }
 
-  state.result = state.anchorMap[alias];
-  skipSeparationSpace(state, true, -1);
-  return true;
+  state.result = state.anchorMap[alias]
+  skipSeparationSpace(state, true, -1)
+  return true
 }
 
-function composeNode(state, parentIndent, nodeContext, allowToSeek, allowCompact) {
-  var allowBlockStyles,
-      allowBlockScalars,
-      allowBlockCollections,
-      indentStatus = 1, // 1: this>parent, 0: this=parent, -1: this<parent
-      atNewLine  = false,
-      hasContent = false,
-      typeIndex,
-      typeQuantity,
-      typeList,
-      type,
-      flowIndent,
-      blockIndent;
+function tryReadBlockMappingFromProperty (state, propertyStart, nodeIndent, flowIndent) {
+  const fallbackState = snapshotState(state)
 
-  if (state.listener !== null) {
-    state.listener('open', state);
+  beginAnchorTransaction(state)
+  restoreState(state, propertyStart)
+
+  // Re-read the leading properties as part of the first implicit key, not as
+  // properties of the current node.
+  state.tag = null
+  state.anchor = null
+  state.kind = null
+  state.result = null
+
+  if (readBlockMapping(state, nodeIndent, flowIndent) && state.kind === 'mapping') {
+    commitAnchorTransaction(state)
+    return true
   }
 
-  state.tag    = null;
-  state.anchor = null;
-  state.kind   = null;
-  state.result = null;
+  rollbackAnchorTransaction(state)
+  restoreState(state, fallbackState)
+  return false
+}
 
-  allowBlockStyles = allowBlockScalars = allowBlockCollections =
+function composeNode (state, parentIndent, nodeContext, allowToSeek, allowCompact) {
+  let allowBlockScalars
+  let allowBlockCollections
+  let indentStatus = 1 // 1: this>parent, 0: this=parent, -1: this<parent
+  let atNewLine = false
+  let hasContent = false
+  let propertyStart = null
+  let type
+  let flowIndent
+  let blockIndent
+
+  if (state.depth >= state.maxDepth) {
+    throwError(state, 'nesting exceeded maxDepth (' + state.maxDepth + ')')
+  }
+
+  state.depth += 1
+
+  if (state.listener !== null) {
+    state.listener('open', state)
+  }
+
+  state.tag = null
+  state.anchor = null
+  state.kind = null
+  state.result = null
+
+  const allowBlockStyles = allowBlockScalars = allowBlockCollections =
     CONTEXT_BLOCK_OUT === nodeContext ||
-    CONTEXT_BLOCK_IN  === nodeContext;
+    CONTEXT_BLOCK_IN === nodeContext
 
   if (allowToSeek) {
     if (skipSeparationSpace(state, true, -1)) {
-      atNewLine = true;
+      atNewLine = true
 
       if (state.lineIndent > parentIndent) {
-        indentStatus = 1;
+        indentStatus = 1
       } else if (state.lineIndent === parentIndent) {
-        indentStatus = 0;
+        indentStatus = 0
       } else if (state.lineIndent < parentIndent) {
-        indentStatus = -1;
+        indentStatus = -1
       }
     }
   }
 
   if (indentStatus === 1) {
-    while (readTagProperty(state) || readAnchorProperty(state)) {
+    while (true) {
+      const ch = state.input.charCodeAt(state.position)
+      const propertyState = snapshotState(state)
+
+      // A duplicate property token after a line break can be the first key of
+      // a nested block mapping, e.g. `!!map\n  !!str key: value`.
+      if (atNewLine &&
+          ((ch === 0x21/* ! */ && state.tag !== null) ||
+           (ch === 0x26/* & */ && state.anchor !== null))) {
+        break
+      }
+
+      if (!readTagProperty(state) && !readAnchorProperty(state)) {
+        break
+      }
+
+      if (propertyStart === null) {
+        propertyStart = propertyState
+      }
+
       if (skipSeparationSpace(state, true, -1)) {
-        atNewLine = true;
-        allowBlockCollections = allowBlockStyles;
+        atNewLine = true
+        allowBlockCollections = allowBlockStyles
 
         if (state.lineIndent > parentIndent) {
-          indentStatus = 1;
+          indentStatus = 1
         } else if (state.lineIndent === parentIndent) {
-          indentStatus = 0;
+          indentStatus = 0
         } else if (state.lineIndent < parentIndent) {
-          indentStatus = -1;
+          indentStatus = -1
         }
       } else {
-        allowBlockCollections = false;
+        allowBlockCollections = false
       }
     }
   }
 
   if (allowBlockCollections) {
-    allowBlockCollections = atNewLine || allowCompact;
+    allowBlockCollections = atNewLine || allowCompact
   }
 
   if (indentStatus === 1 || CONTEXT_BLOCK_OUT === nodeContext) {
     if (CONTEXT_FLOW_IN === nodeContext || CONTEXT_FLOW_OUT === nodeContext) {
-      flowIndent = parentIndent;
+      flowIndent = parentIndent
     } else {
-      flowIndent = parentIndent + 1;
+      flowIndent = parentIndent + 1
     }
 
-    blockIndent = state.position - state.lineStart;
+    blockIndent = state.position - state.lineStart
 
     if (indentStatus === 1) {
-      if (allowBlockCollections &&
-          (readBlockSequence(state, blockIndent) ||
-           readBlockMapping(state, blockIndent, flowIndent)) ||
+      if ((allowBlockCollections &&
+          (readBlockSequence(state, blockIndent) || readBlockMapping(state, blockIndent, flowIndent))) ||
           readFlowCollection(state, flowIndent)) {
-        hasContent = true;
+        hasContent = true
       } else {
-        if ((allowBlockScalars && readBlockScalar(state, flowIndent)) ||
+        const ch = state.input.charCodeAt(state.position)
+
+        if (propertyStart !== null && allowBlockStyles && !allowBlockCollections &&
+            ch !== 0x7C/* | */ && ch !== 0x3E/* > */ &&
+            tryReadBlockMappingFromProperty(
+              state,
+              propertyStart,
+              propertyStart.position - propertyStart.lineStart,
+              flowIndent
+            )) {
+          hasContent = true
+        } else if ((allowBlockScalars && readBlockScalar(state, flowIndent)) ||
             readSingleQuotedScalar(state, flowIndent) ||
             readDoubleQuotedScalar(state, flowIndent)) {
-          hasContent = true;
-
+          hasContent = true
         } else if (readAlias(state)) {
-          hasContent = true;
+          hasContent = true
 
           if (state.tag !== null || state.anchor !== null) {
-            throwError(state, 'alias node should not have any properties');
+            throwError(state, 'alias node should not have any properties')
           }
-
         } else if (readPlainScalar(state, flowIndent, CONTEXT_FLOW_IN === nodeContext)) {
-          hasContent = true;
+          hasContent = true
 
           if (state.tag === null) {
-            state.tag = '?';
+            state.tag = '?'
           }
         }
 
         if (state.anchor !== null) {
-          state.anchorMap[state.anchor] = state.result;
+          storeAnchor(state, state.anchor, state.result)
         }
       }
     } else if (indentStatus === 0) {
       // Special case: block sequences are allowed to have same indentation level as the parent.
       // http://www.yaml.org/spec/1.2/spec.html#id2799784
-      hasContent = allowBlockCollections && readBlockSequence(state, blockIndent);
+      hasContent = allowBlockCollections && readBlockSequence(state, blockIndent)
     }
   }
 
   if (state.tag === null) {
     if (state.anchor !== null) {
-      state.anchorMap[state.anchor] = state.result;
+      storeAnchor(state, state.anchor, state.result)
     }
-
   } else if (state.tag === '?') {
     // Implicit resolving is not allowed for non-scalar types, and '?'
     // non-specific tag is only automatically assigned to plain scalars.
@@ -17816,245 +15570,234 @@ function composeNode(state, parentIndent, nodeContext, allowToSeek, allowCompact
     // tag, for example like this: "!<?> [0]"
     //
     if (state.result !== null && state.kind !== 'scalar') {
-      throwError(state, 'unacceptable node kind for !<?> tag; it should be "scalar", not "' + state.kind + '"');
+      throwError(state, 'unacceptable node kind for !<?> tag; it should be "scalar", not "' + state.kind + '"')
     }
 
-    for (typeIndex = 0, typeQuantity = state.implicitTypes.length; typeIndex < typeQuantity; typeIndex += 1) {
-      type = state.implicitTypes[typeIndex];
+    for (let typeIndex = 0, typeQuantity = state.implicitTypes.length; typeIndex < typeQuantity; typeIndex += 1) {
+      type = state.implicitTypes[typeIndex]
 
       if (type.resolve(state.result)) { // `state.result` updated in resolver if matched
-        state.result = type.construct(state.result);
-        state.tag = type.tag;
+        state.result = type.construct(state.result)
+        state.tag = type.tag
         if (state.anchor !== null) {
-          state.anchorMap[state.anchor] = state.result;
+          storeAnchor(state, state.anchor, state.result)
         }
-        break;
+        break
       }
     }
   } else if (state.tag !== '!') {
     if (_hasOwnProperty.call(state.typeMap[state.kind || 'fallback'], state.tag)) {
-      type = state.typeMap[state.kind || 'fallback'][state.tag];
+      type = state.typeMap[state.kind || 'fallback'][state.tag]
     } else {
       // looking for multi type
-      type = null;
-      typeList = state.typeMap.multi[state.kind || 'fallback'];
+      type = null
+      const typeList = state.typeMap.multi[state.kind || 'fallback']
 
-      for (typeIndex = 0, typeQuantity = typeList.length; typeIndex < typeQuantity; typeIndex += 1) {
+      for (let typeIndex = 0, typeQuantity = typeList.length; typeIndex < typeQuantity; typeIndex += 1) {
         if (state.tag.slice(0, typeList[typeIndex].tag.length) === typeList[typeIndex].tag) {
-          type = typeList[typeIndex];
-          break;
+          type = typeList[typeIndex]
+          break
         }
       }
     }
 
     if (!type) {
-      throwError(state, 'unknown tag !<' + state.tag + '>');
+      throwError(state, 'unknown tag !<' + state.tag + '>')
     }
 
     if (state.result !== null && type.kind !== state.kind) {
-      throwError(state, 'unacceptable node kind for !<' + state.tag + '> tag; it should be "' + type.kind + '", not "' + state.kind + '"');
+      throwError(state, 'unacceptable node kind for !<' + state.tag + '> tag; it should be "' + type.kind + '", not "' + state.kind + '"')
     }
 
     if (!type.resolve(state.result, state.tag)) { // `state.result` updated in resolver if matched
-      throwError(state, 'cannot resolve a node with !<' + state.tag + '> explicit tag');
+      throwError(state, 'cannot resolve a node with !<' + state.tag + '> explicit tag')
     } else {
-      state.result = type.construct(state.result, state.tag);
+      state.result = type.construct(state.result, state.tag)
       if (state.anchor !== null) {
-        state.anchorMap[state.anchor] = state.result;
+        storeAnchor(state, state.anchor, state.result)
       }
     }
   }
 
   if (state.listener !== null) {
-    state.listener('close', state);
+    state.listener('close', state)
   }
-  return state.tag !== null ||  state.anchor !== null || hasContent;
+
+  state.depth -= 1
+  return state.tag !== null || state.anchor !== null || hasContent
 }
 
-function readDocument(state) {
-  var documentStart = state.position,
-      _position,
-      directiveName,
-      directiveArgs,
-      hasDirectives = false,
-      ch;
+function readDocument (state) {
+  const documentStart = state.position
+  let hasDirectives = false
+  let ch
 
-  state.version = null;
-  state.checkLineBreaks = state.legacy;
-  state.tagMap = Object.create(null);
-  state.anchorMap = Object.create(null);
+  state.version = null
+  state.checkLineBreaks = state.legacy
+  state.tagMap = Object.create(null)
+  state.anchorMap = Object.create(null)
 
   while ((ch = state.input.charCodeAt(state.position)) !== 0) {
-    skipSeparationSpace(state, true, -1);
+    skipSeparationSpace(state, true, -1)
 
-    ch = state.input.charCodeAt(state.position);
+    ch = state.input.charCodeAt(state.position)
 
     if (state.lineIndent > 0 || ch !== 0x25/* % */) {
-      break;
+      break
     }
 
-    hasDirectives = true;
-    ch = state.input.charCodeAt(++state.position);
-    _position = state.position;
+    hasDirectives = true
+    ch = state.input.charCodeAt(++state.position)
+    let _position = state.position
 
-    while (ch !== 0 && !is_WS_OR_EOL(ch)) {
-      ch = state.input.charCodeAt(++state.position);
+    while (ch !== 0 && !isWsOrEol(ch)) {
+      ch = state.input.charCodeAt(++state.position)
     }
 
-    directiveName = state.input.slice(_position, state.position);
-    directiveArgs = [];
+    const directiveName = state.input.slice(_position, state.position)
+    const directiveArgs = []
 
     if (directiveName.length < 1) {
-      throwError(state, 'directive name must not be less than one character in length');
+      throwError(state, 'directive name must not be less than one character in length')
     }
 
     while (ch !== 0) {
-      while (is_WHITE_SPACE(ch)) {
-        ch = state.input.charCodeAt(++state.position);
+      while (isWhiteSpace(ch)) {
+        ch = state.input.charCodeAt(++state.position)
       }
 
       if (ch === 0x23/* # */) {
-        do { ch = state.input.charCodeAt(++state.position); }
-        while (ch !== 0 && !is_EOL(ch));
-        break;
+        do { ch = state.input.charCodeAt(++state.position) }
+        while (ch !== 0 && !isEol(ch))
+        break
       }
 
-      if (is_EOL(ch)) break;
+      if (isEol(ch)) break
 
-      _position = state.position;
+      _position = state.position
 
-      while (ch !== 0 && !is_WS_OR_EOL(ch)) {
-        ch = state.input.charCodeAt(++state.position);
+      while (ch !== 0 && !isWsOrEol(ch)) {
+        ch = state.input.charCodeAt(++state.position)
       }
 
-      directiveArgs.push(state.input.slice(_position, state.position));
+      directiveArgs.push(state.input.slice(_position, state.position))
     }
 
-    if (ch !== 0) readLineBreak(state);
+    if (ch !== 0) readLineBreak(state)
 
     if (_hasOwnProperty.call(directiveHandlers, directiveName)) {
-      directiveHandlers[directiveName](state, directiveName, directiveArgs);
+      directiveHandlers[directiveName](state, directiveName, directiveArgs)
     } else {
-      throwWarning(state, 'unknown document directive "' + directiveName + '"');
+      throwWarning(state, 'unknown document directive "' + directiveName + '"')
     }
   }
 
-  skipSeparationSpace(state, true, -1);
+  skipSeparationSpace(state, true, -1)
 
   if (state.lineIndent === 0 &&
-      state.input.charCodeAt(state.position)     === 0x2D/* - */ &&
+      state.input.charCodeAt(state.position) === 0x2D/* - */ &&
       state.input.charCodeAt(state.position + 1) === 0x2D/* - */ &&
       state.input.charCodeAt(state.position + 2) === 0x2D/* - */) {
-    state.position += 3;
-    skipSeparationSpace(state, true, -1);
-
+    state.position += 3
+    skipSeparationSpace(state, true, -1)
   } else if (hasDirectives) {
-    throwError(state, 'directives end mark is expected');
+    throwError(state, 'directives end mark is expected')
   }
 
-  composeNode(state, state.lineIndent - 1, CONTEXT_BLOCK_OUT, false, true);
-  skipSeparationSpace(state, true, -1);
+  composeNode(state, state.lineIndent - 1, CONTEXT_BLOCK_OUT, false, true)
+  skipSeparationSpace(state, true, -1)
 
   if (state.checkLineBreaks &&
       PATTERN_NON_ASCII_LINE_BREAKS.test(state.input.slice(documentStart, state.position))) {
-    throwWarning(state, 'non-ASCII line breaks are interpreted as content');
+    throwWarning(state, 'non-ASCII line breaks are interpreted as content')
   }
 
-  state.documents.push(state.result);
+  state.documents.push(state.result)
 
   if (state.position === state.lineStart && testDocumentSeparator(state)) {
-
     if (state.input.charCodeAt(state.position) === 0x2E/* . */) {
-      state.position += 3;
-      skipSeparationSpace(state, true, -1);
+      state.position += 3
+      skipSeparationSpace(state, true, -1)
     }
-    return;
+    return
   }
 
   if (state.position < (state.length - 1)) {
-    throwError(state, 'end of the stream or a document separator is expected');
-  } else {
-    return;
+    throwError(state, 'end of the stream or a document separator is expected')
   }
 }
 
-
-function loadDocuments(input, options) {
-  input = String(input);
-  options = options || {};
+function loadDocuments (input, options) {
+  input = String(input)
+  options = options || {}
 
   if (input.length !== 0) {
-
     // Add tailing `\n` if not exists
     if (input.charCodeAt(input.length - 1) !== 0x0A/* LF */ &&
         input.charCodeAt(input.length - 1) !== 0x0D/* CR */) {
-      input += '\n';
+      input += '\n'
     }
 
     // Strip BOM
     if (input.charCodeAt(0) === 0xFEFF) {
-      input = input.slice(1);
+      input = input.slice(1)
     }
   }
 
-  var state = new State(input, options);
+  const state = new State(input, options)
 
-  var nullpos = input.indexOf('\0');
+  const nullpos = input.indexOf('\0')
 
   if (nullpos !== -1) {
-    state.position = nullpos;
-    throwError(state, 'null byte is not allowed in input');
+    state.position = nullpos
+    throwError(state, 'null byte is not allowed in input')
   }
 
   // Use 0 as string terminator. That significantly simplifies bounds check.
-  state.input += '\0';
+  state.input += '\0'
 
   while (state.input.charCodeAt(state.position) === 0x20/* Space */) {
-    state.lineIndent += 1;
-    state.position += 1;
+    state.lineIndent += 1
+    state.position += 1
   }
 
   while (state.position < (state.length - 1)) {
-    readDocument(state);
+    readDocument(state)
   }
 
-  return state.documents;
+  return state.documents
 }
 
-
-function loadAll(input, iterator, options) {
+function loadAll (input, iterator, options) {
   if (iterator !== null && typeof iterator === 'object' && typeof options === 'undefined') {
-    options = iterator;
-    iterator = null;
+    options = iterator
+    iterator = null
   }
 
-  var documents = loadDocuments(input, options);
+  const documents = loadDocuments(input, options)
 
   if (typeof iterator !== 'function') {
-    return documents;
+    return documents
   }
 
-  for (var index = 0, length = documents.length; index < length; index += 1) {
-    iterator(documents[index]);
+  for (let index = 0, length = documents.length; index < length; index += 1) {
+    iterator(documents[index])
   }
 }
 
-
-function load(input, options) {
-  var documents = loadDocuments(input, options);
+function load (input, options) {
+  const documents = loadDocuments(input, options)
 
   if (documents.length === 0) {
-    /*eslint-disable no-undefined*/
-    return undefined;
+    return undefined
   } else if (documents.length === 1) {
-    return documents[0];
+    return documents[0]
   }
-  throw new YAMLException('expected a single document in the stream, but found more');
+  throw new YAMLException('expected a single document in the stream, but found more')
 }
 
-
-module.exports.loadAll = loadAll;
-module.exports.load    = load;
+module.exports.loadAll = loadAll
+module.exports.load = load
 
 
 /***/ }),
@@ -18065,125 +15808,113 @@ module.exports.load    = load;
 "use strict";
 
 
-/*eslint-disable max-len*/
+const YAMLException = __nccwpck_require__(1248)
+const Type = __nccwpck_require__(9557)
 
-var YAMLException = __nccwpck_require__(1248);
-var Type          = __nccwpck_require__(9557);
-
-
-function compileList(schema, name) {
-  var result = [];
+function compileList (schema, name) {
+  const result = []
 
   schema[name].forEach(function (currentType) {
-    var newIndex = result.length;
+    let newIndex = result.length
 
     result.forEach(function (previousType, previousIndex) {
       if (previousType.tag === currentType.tag &&
           previousType.kind === currentType.kind &&
           previousType.multi === currentType.multi) {
-
-        newIndex = previousIndex;
+        newIndex = previousIndex
       }
-    });
+    })
 
-    result[newIndex] = currentType;
-  });
+    result[newIndex] = currentType
+  })
 
-  return result;
+  return result
 }
 
-
-function compileMap(/* lists... */) {
-  var result = {
-        scalar: {},
-        sequence: {},
-        mapping: {},
-        fallback: {},
-        multi: {
-          scalar: [],
-          sequence: [],
-          mapping: [],
-          fallback: []
-        }
-      }, index, length;
-
-  function collectType(type) {
+function compileMap (/* lists... */) {
+  const result = {
+    scalar: {},
+    sequence: {},
+    mapping: {},
+    fallback: {},
+    multi: {
+      scalar: [],
+      sequence: [],
+      mapping: [],
+      fallback: []
+    }
+  }
+  function collectType (type) {
     if (type.multi) {
-      result.multi[type.kind].push(type);
-      result.multi['fallback'].push(type);
+      result.multi[type.kind].push(type)
+      result.multi['fallback'].push(type)
     } else {
-      result[type.kind][type.tag] = result['fallback'][type.tag] = type;
+      result[type.kind][type.tag] = result['fallback'][type.tag] = type
     }
   }
 
-  for (index = 0, length = arguments.length; index < length; index += 1) {
-    arguments[index].forEach(collectType);
+  for (let index = 0, length = arguments.length; index < length; index += 1) {
+    arguments[index].forEach(collectType)
   }
-  return result;
+  return result
 }
 
-
-function Schema(definition) {
-  return this.extend(definition);
+function Schema (definition) {
+  return this.extend(definition)
 }
 
-
-Schema.prototype.extend = function extend(definition) {
-  var implicit = [];
-  var explicit = [];
+Schema.prototype.extend = function extend (definition) {
+  let implicit = []
+  let explicit = []
 
   if (definition instanceof Type) {
     // Schema.extend(type)
-    explicit.push(definition);
-
+    explicit.push(definition)
   } else if (Array.isArray(definition)) {
     // Schema.extend([ type1, type2, ... ])
-    explicit = explicit.concat(definition);
-
+    explicit = explicit.concat(definition)
   } else if (definition && (Array.isArray(definition.implicit) || Array.isArray(definition.explicit))) {
     // Schema.extend({ explicit: [ type1, type2, ... ], implicit: [ type1, type2, ... ] })
-    if (definition.implicit) implicit = implicit.concat(definition.implicit);
-    if (definition.explicit) explicit = explicit.concat(definition.explicit);
-
+    if (definition.implicit) implicit = implicit.concat(definition.implicit)
+    if (definition.explicit) explicit = explicit.concat(definition.explicit)
   } else {
     throw new YAMLException('Schema.extend argument should be a Type, [ Type ], ' +
-      'or a schema definition ({ implicit: [...], explicit: [...] })');
+      'or a schema definition ({ implicit: [...], explicit: [...] })')
   }
 
   implicit.forEach(function (type) {
     if (!(type instanceof Type)) {
-      throw new YAMLException('Specified list of YAML types (or a single Type object) contains a non-Type object.');
+      throw new YAMLException('Specified list of YAML types (or a single Type object) contains a non-Type object.')
     }
 
     if (type.loadKind && type.loadKind !== 'scalar') {
-      throw new YAMLException('There is a non-scalar type in the implicit list of a schema. Implicit resolving of such types is not supported.');
+      throw new YAMLException('There is a non-scalar type in the implicit list of a schema. Implicit resolving of such types is not supported.')
     }
 
     if (type.multi) {
-      throw new YAMLException('There is a multi type in the implicit list of a schema. Multi tags can only be listed as explicit.');
+      throw new YAMLException('There is a multi type in the implicit list of a schema. Multi tags can only be listed as explicit.')
     }
-  });
+  })
 
   explicit.forEach(function (type) {
     if (!(type instanceof Type)) {
-      throw new YAMLException('Specified list of YAML types (or a single Type object) contains a non-Type object.');
+      throw new YAMLException('Specified list of YAML types (or a single Type object) contains a non-Type object.')
     }
-  });
+  })
 
-  var result = Object.create(Schema.prototype);
+  const result = Object.create(Schema.prototype)
 
-  result.implicit = (this.implicit || []).concat(implicit);
-  result.explicit = (this.explicit || []).concat(explicit);
+  result.implicit = (this.implicit || []).concat(implicit)
+  result.explicit = (this.explicit || []).concat(explicit)
 
-  result.compiledImplicit = compileList(result, 'implicit');
-  result.compiledExplicit = compileList(result, 'explicit');
-  result.compiledTypeMap  = compileMap(result.compiledImplicit, result.compiledExplicit);
+  result.compiledImplicit = compileList(result, 'implicit')
+  result.compiledExplicit = compileList(result, 'explicit')
+  result.compiledTypeMap = compileMap(result.compiledImplicit, result.compiledExplicit)
 
-  return result;
-};
+  return result
+}
 
-
-module.exports = Schema;
+module.exports = Schema
 
 
 /***/ }),
@@ -18200,9 +15931,7 @@ module.exports = Schema;
 
 
 
-
-
-module.exports = __nccwpck_require__(8927);
+module.exports = __nccwpck_require__(8927)
 
 
 /***/ }),
@@ -18219,8 +15948,6 @@ module.exports = __nccwpck_require__(8927);
 
 
 
-
-
 module.exports = (__nccwpck_require__(5746).extend)({
   implicit: [
     __nccwpck_require__(8966),
@@ -18232,7 +15959,7 @@ module.exports = (__nccwpck_require__(5746).extend)({
     __nccwpck_require__(6267),
     __nccwpck_require__(8758)
   ]
-});
+})
 
 
 /***/ }),
@@ -18246,10 +15973,7 @@ module.exports = (__nccwpck_require__(5746).extend)({
 
 
 
-
-
-var Schema = __nccwpck_require__(2046);
-
+const Schema = __nccwpck_require__(2046)
 
 module.exports = new Schema({
   explicit: [
@@ -18257,7 +15981,7 @@ module.exports = new Schema({
     __nccwpck_require__(7161),
     __nccwpck_require__(7316)
   ]
-});
+})
 
 
 /***/ }),
@@ -18275,8 +15999,6 @@ module.exports = new Schema({
 
 
 
-
-
 module.exports = (__nccwpck_require__(9832).extend)({
   implicit: [
     __nccwpck_require__(4333),
@@ -18284,7 +16006,7 @@ module.exports = (__nccwpck_require__(9832).extend)({
     __nccwpck_require__(4652),
     __nccwpck_require__(7584)
   ]
-});
+})
 
 
 /***/ }),
@@ -18295,105 +16017,100 @@ module.exports = (__nccwpck_require__(9832).extend)({
 "use strict";
 
 
-
-var common = __nccwpck_require__(9816);
-
+const common = __nccwpck_require__(9816)
 
 // get snippet for a single line, respecting maxLength
-function getLine(buffer, lineStart, lineEnd, position, maxLineLength) {
-  var head = '';
-  var tail = '';
-  var maxHalfLength = Math.floor(maxLineLength / 2) - 1;
+function getLine (buffer, lineStart, lineEnd, position, maxLineLength) {
+  let head = ''
+  let tail = ''
+  const maxHalfLength = Math.floor(maxLineLength / 2) - 1
 
   if (position - lineStart > maxHalfLength) {
-    head = ' ... ';
-    lineStart = position - maxHalfLength + head.length;
+    head = ' ... '
+    lineStart = position - maxHalfLength + head.length
   }
 
   if (lineEnd - position > maxHalfLength) {
-    tail = ' ...';
-    lineEnd = position + maxHalfLength - tail.length;
+    tail = ' ...'
+    lineEnd = position + maxHalfLength - tail.length
   }
 
   return {
     str: head + buffer.slice(lineStart, lineEnd).replace(/\t/g, '→') + tail,
     pos: position - lineStart + head.length // relative position
-  };
+  }
 }
 
-
-function padStart(string, max) {
-  return common.repeat(' ', max - string.length) + string;
+function padStart (string, max) {
+  return common.repeat(' ', max - string.length) + string
 }
 
+function makeSnippet (mark, options) {
+  options = Object.create(options || null)
 
-function makeSnippet(mark, options) {
-  options = Object.create(options || null);
+  if (!mark.buffer) return null
 
-  if (!mark.buffer) return null;
+  if (!options.maxLength) options.maxLength = 79
+  if (typeof options.indent !== 'number') options.indent = 1
+  if (typeof options.linesBefore !== 'number') options.linesBefore = 3
+  if (typeof options.linesAfter !== 'number') options.linesAfter = 2
 
-  if (!options.maxLength) options.maxLength = 79;
-  if (typeof options.indent      !== 'number') options.indent      = 1;
-  if (typeof options.linesBefore !== 'number') options.linesBefore = 3;
-  if (typeof options.linesAfter  !== 'number') options.linesAfter  = 2;
-
-  var re = /\r?\n|\r|\0/g;
-  var lineStarts = [ 0 ];
-  var lineEnds = [];
-  var match;
-  var foundLineNo = -1;
+  const re = /\r?\n|\r|\0/g
+  const lineStarts = [0]
+  const lineEnds = []
+  let match
+  let foundLineNo = -1
 
   while ((match = re.exec(mark.buffer))) {
-    lineEnds.push(match.index);
-    lineStarts.push(match.index + match[0].length);
+    lineEnds.push(match.index)
+    lineStarts.push(match.index + match[0].length)
 
     if (mark.position <= match.index && foundLineNo < 0) {
-      foundLineNo = lineStarts.length - 2;
+      foundLineNo = lineStarts.length - 2
     }
   }
 
-  if (foundLineNo < 0) foundLineNo = lineStarts.length - 1;
+  if (foundLineNo < 0) foundLineNo = lineStarts.length - 1
 
-  var result = '', i, line;
-  var lineNoLength = Math.min(mark.line + options.linesAfter, lineEnds.length).toString().length;
-  var maxLineLength = options.maxLength - (options.indent + lineNoLength + 3);
+  let result = ''
+  const lineNoLength = Math.min(mark.line + options.linesAfter, lineEnds.length).toString().length
+  const maxLineLength = options.maxLength - (options.indent + lineNoLength + 3)
 
-  for (i = 1; i <= options.linesBefore; i++) {
-    if (foundLineNo - i < 0) break;
-    line = getLine(
+  for (let i = 1; i <= options.linesBefore; i++) {
+    if (foundLineNo - i < 0) break
+    const line = getLine(
       mark.buffer,
       lineStarts[foundLineNo - i],
       lineEnds[foundLineNo - i],
       mark.position - (lineStarts[foundLineNo] - lineStarts[foundLineNo - i]),
       maxLineLength
-    );
+    )
     result = common.repeat(' ', options.indent) + padStart((mark.line - i + 1).toString(), lineNoLength) +
-      ' | ' + line.str + '\n' + result;
+      ' | ' + line.str + '\n' + result
   }
 
-  line = getLine(mark.buffer, lineStarts[foundLineNo], lineEnds[foundLineNo], mark.position, maxLineLength);
+  const line = getLine(mark.buffer, lineStarts[foundLineNo], lineEnds[foundLineNo], mark.position, maxLineLength)
   result += common.repeat(' ', options.indent) + padStart((mark.line + 1).toString(), lineNoLength) +
-    ' | ' + line.str + '\n';
-  result += common.repeat('-', options.indent + lineNoLength + 3 + line.pos) + '^' + '\n';
+    ' | ' + line.str + '\n'
+  result += common.repeat('-', options.indent + lineNoLength + 3 + line.pos) + '^' + '\n'
 
-  for (i = 1; i <= options.linesAfter; i++) {
-    if (foundLineNo + i >= lineEnds.length) break;
-    line = getLine(
+  for (let i = 1; i <= options.linesAfter; i++) {
+    if (foundLineNo + i >= lineEnds.length) break
+    const line = getLine(
       mark.buffer,
       lineStarts[foundLineNo + i],
       lineEnds[foundLineNo + i],
       mark.position - (lineStarts[foundLineNo] - lineStarts[foundLineNo + i]),
       maxLineLength
-    );
+    )
     result += common.repeat(' ', options.indent) + padStart((mark.line + i + 1).toString(), lineNoLength) +
-      ' | ' + line.str + '\n';
+      ' | ' + line.str + '\n'
   }
 
-  return result.replace(/\n$/, '');
+  return result.replace(/\n$/, '')
 }
 
-
-module.exports = makeSnippet;
+module.exports = makeSnippet
 
 
 /***/ }),
@@ -18404,9 +16121,9 @@ module.exports = makeSnippet;
 "use strict";
 
 
-var YAMLException = __nccwpck_require__(1248);
+const YAMLException = __nccwpck_require__(1248)
 
-var TYPE_CONSTRUCTOR_OPTIONS = [
+const TYPE_CONSTRUCTOR_OPTIONS = [
   'kind',
   'multi',
   'resolve',
@@ -18417,57 +16134,57 @@ var TYPE_CONSTRUCTOR_OPTIONS = [
   'representName',
   'defaultStyle',
   'styleAliases'
-];
+]
 
-var YAML_NODE_KINDS = [
+const YAML_NODE_KINDS = [
   'scalar',
   'sequence',
   'mapping'
-];
+]
 
-function compileStyleAliases(map) {
-  var result = {};
+function compileStyleAliases (map) {
+  const result = {}
 
   if (map !== null) {
     Object.keys(map).forEach(function (style) {
       map[style].forEach(function (alias) {
-        result[String(alias)] = style;
-      });
-    });
+        result[String(alias)] = style
+      })
+    })
   }
 
-  return result;
+  return result
 }
 
-function Type(tag, options) {
-  options = options || {};
+function Type (tag, options) {
+  options = options || {}
 
   Object.keys(options).forEach(function (name) {
     if (TYPE_CONSTRUCTOR_OPTIONS.indexOf(name) === -1) {
-      throw new YAMLException('Unknown option "' + name + '" is met in definition of "' + tag + '" YAML type.');
+      throw new YAMLException('Unknown option "' + name + '" is met in definition of "' + tag + '" YAML type.')
     }
-  });
+  })
 
   // TODO: Add tag format check.
-  this.options       = options; // keep original options in case user wants to extend this type later
-  this.tag           = tag;
-  this.kind          = options['kind']          || null;
-  this.resolve       = options['resolve']       || function () { return true; };
-  this.construct     = options['construct']     || function (data) { return data; };
-  this.instanceOf    = options['instanceOf']    || null;
-  this.predicate     = options['predicate']     || null;
-  this.represent     = options['represent']     || null;
-  this.representName = options['representName'] || null;
-  this.defaultStyle  = options['defaultStyle']  || null;
-  this.multi         = options['multi']         || false;
-  this.styleAliases  = compileStyleAliases(options['styleAliases'] || null);
+  this.options = options // keep original options in case user wants to extend this type later
+  this.tag = tag
+  this.kind = options['kind'] || null
+  this.resolve = options['resolve'] || function () { return true }
+  this.construct = options['construct'] || function (data) { return data }
+  this.instanceOf = options['instanceOf'] || null
+  this.predicate = options['predicate'] || null
+  this.represent = options['represent'] || null
+  this.representName = options['representName'] || null
+  this.defaultStyle = options['defaultStyle'] || null
+  this.multi = options['multi'] || false
+  this.styleAliases = compileStyleAliases(options['styleAliases'] || null)
 
   if (YAML_NODE_KINDS.indexOf(this.kind) === -1) {
-    throw new YAMLException('Unknown kind "' + this.kind + '" is specified for "' + tag + '" YAML type.');
+    throw new YAMLException('Unknown kind "' + this.kind + '" is specified for "' + tag + '" YAML type.')
   }
 }
 
-module.exports = Type;
+module.exports = Type
 
 
 /***/ }),
@@ -18478,120 +16195,117 @@ module.exports = Type;
 "use strict";
 
 
-/*eslint-disable no-bitwise*/
-
-
-var Type = __nccwpck_require__(9557);
-
+const Type = __nccwpck_require__(9557)
 
 // [ 64, 65, 66 ] -> [ padding, CR, LF ]
-var BASE64_MAP = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n\r';
+const BASE64_MAP = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\n\r'
 
+function resolveYamlBinary (data) {
+  if (data === null) return false
 
-function resolveYamlBinary(data) {
-  if (data === null) return false;
-
-  var code, idx, bitlen = 0, max = data.length, map = BASE64_MAP;
+  let bitlen = 0
+  const max = data.length
+  const map = BASE64_MAP
 
   // Convert one by one.
-  for (idx = 0; idx < max; idx++) {
-    code = map.indexOf(data.charAt(idx));
+  for (let idx = 0; idx < max; idx++) {
+    const code = map.indexOf(data.charAt(idx))
 
     // Skip CR/LF
-    if (code > 64) continue;
+    if (code > 64) continue
 
     // Fail on illegal characters
-    if (code < 0) return false;
+    if (code < 0) return false
 
-    bitlen += 6;
+    bitlen += 6
   }
 
   // If there are any bits left, source was corrupted
-  return (bitlen % 8) === 0;
+  return (bitlen % 8) === 0
 }
 
-function constructYamlBinary(data) {
-  var idx, tailbits,
-      input = data.replace(/[\r\n=]/g, ''), // remove CR/LF & padding to simplify scan
-      max = input.length,
-      map = BASE64_MAP,
-      bits = 0,
-      result = [];
+function constructYamlBinary (data) {
+  const input = data.replace(/[\r\n=]/g, '') // remove CR/LF & padding to simplify scan
+  const max = input.length
+  const map = BASE64_MAP
+  let bits = 0
+  const result = []
 
   // Collect by 6*4 bits (3 bytes)
 
-  for (idx = 0; idx < max; idx++) {
+  for (let idx = 0; idx < max; idx++) {
     if ((idx % 4 === 0) && idx) {
-      result.push((bits >> 16) & 0xFF);
-      result.push((bits >> 8) & 0xFF);
-      result.push(bits & 0xFF);
+      result.push((bits >> 16) & 0xFF)
+      result.push((bits >> 8) & 0xFF)
+      result.push(bits & 0xFF)
     }
 
-    bits = (bits << 6) | map.indexOf(input.charAt(idx));
+    bits = (bits << 6) | map.indexOf(input.charAt(idx))
   }
 
   // Dump tail
 
-  tailbits = (max % 4) * 6;
+  const tailbits = (max % 4) * 6
 
   if (tailbits === 0) {
-    result.push((bits >> 16) & 0xFF);
-    result.push((bits >> 8) & 0xFF);
-    result.push(bits & 0xFF);
+    result.push((bits >> 16) & 0xFF)
+    result.push((bits >> 8) & 0xFF)
+    result.push(bits & 0xFF)
   } else if (tailbits === 18) {
-    result.push((bits >> 10) & 0xFF);
-    result.push((bits >> 2) & 0xFF);
+    result.push((bits >> 10) & 0xFF)
+    result.push((bits >> 2) & 0xFF)
   } else if (tailbits === 12) {
-    result.push((bits >> 4) & 0xFF);
+    result.push((bits >> 4) & 0xFF)
   }
 
-  return new Uint8Array(result);
+  return new Uint8Array(result)
 }
 
-function representYamlBinary(object /*, style*/) {
-  var result = '', bits = 0, idx, tail,
-      max = object.length,
-      map = BASE64_MAP;
+function representYamlBinary (object /*, style */) {
+  let result = ''
+  let bits = 0
+  const max = object.length
+  const map = BASE64_MAP
 
   // Convert every three bytes to 4 ASCII characters.
 
-  for (idx = 0; idx < max; idx++) {
+  for (let idx = 0; idx < max; idx++) {
     if ((idx % 3 === 0) && idx) {
-      result += map[(bits >> 18) & 0x3F];
-      result += map[(bits >> 12) & 0x3F];
-      result += map[(bits >> 6) & 0x3F];
-      result += map[bits & 0x3F];
+      result += map[(bits >> 18) & 0x3F]
+      result += map[(bits >> 12) & 0x3F]
+      result += map[(bits >> 6) & 0x3F]
+      result += map[bits & 0x3F]
     }
 
-    bits = (bits << 8) + object[idx];
+    bits = (bits << 8) + object[idx]
   }
 
   // Dump tail
 
-  tail = max % 3;
+  const tail = max % 3
 
   if (tail === 0) {
-    result += map[(bits >> 18) & 0x3F];
-    result += map[(bits >> 12) & 0x3F];
-    result += map[(bits >> 6) & 0x3F];
-    result += map[bits & 0x3F];
+    result += map[(bits >> 18) & 0x3F]
+    result += map[(bits >> 12) & 0x3F]
+    result += map[(bits >> 6) & 0x3F]
+    result += map[bits & 0x3F]
   } else if (tail === 2) {
-    result += map[(bits >> 10) & 0x3F];
-    result += map[(bits >> 4) & 0x3F];
-    result += map[(bits << 2) & 0x3F];
-    result += map[64];
+    result += map[(bits >> 10) & 0x3F]
+    result += map[(bits >> 4) & 0x3F]
+    result += map[(bits << 2) & 0x3F]
+    result += map[64]
   } else if (tail === 1) {
-    result += map[(bits >> 2) & 0x3F];
-    result += map[(bits << 4) & 0x3F];
-    result += map[64];
-    result += map[64];
+    result += map[(bits >> 2) & 0x3F]
+    result += map[(bits << 4) & 0x3F]
+    result += map[64]
+    result += map[64]
   }
 
-  return result;
+  return result
 }
 
-function isBinary(obj) {
-  return Object.prototype.toString.call(obj) ===  '[object Uint8Array]';
+function isBinary (obj) {
+  return Object.prototype.toString.call(obj) === '[object Uint8Array]'
 }
 
 module.exports = new Type('tag:yaml.org,2002:binary', {
@@ -18600,7 +16314,7 @@ module.exports = new Type('tag:yaml.org,2002:binary', {
   construct: constructYamlBinary,
   predicate: isBinary,
   represent: representYamlBinary
-});
+})
 
 
 /***/ }),
@@ -18611,25 +16325,25 @@ module.exports = new Type('tag:yaml.org,2002:binary', {
 "use strict";
 
 
-var Type = __nccwpck_require__(9557);
+const Type = __nccwpck_require__(9557)
 
-function resolveYamlBoolean(data) {
-  if (data === null) return false;
+function resolveYamlBoolean (data) {
+  if (data === null) return false
 
-  var max = data.length;
+  const max = data.length
 
   return (max === 4 && (data === 'true' || data === 'True' || data === 'TRUE')) ||
-         (max === 5 && (data === 'false' || data === 'False' || data === 'FALSE'));
+         (max === 5 && (data === 'false' || data === 'False' || data === 'FALSE'))
 }
 
-function constructYamlBoolean(data) {
+function constructYamlBoolean (data) {
   return data === 'true' ||
          data === 'True' ||
-         data === 'TRUE';
+         data === 'TRUE'
 }
 
-function isBoolean(object) {
-  return Object.prototype.toString.call(object) === '[object Boolean]';
+function isBoolean (object) {
+  return Object.prototype.toString.call(object) === '[object Boolean]'
 }
 
 module.exports = new Type('tag:yaml.org,2002:bool', {
@@ -18638,12 +16352,12 @@ module.exports = new Type('tag:yaml.org,2002:bool', {
   construct: constructYamlBoolean,
   predicate: isBoolean,
   represent: {
-    lowercase: function (object) { return object ? 'true' : 'false'; },
-    uppercase: function (object) { return object ? 'TRUE' : 'FALSE'; },
-    camelcase: function (object) { return object ? 'True' : 'False'; }
+    lowercase: function (object) { return object ? 'true' : 'false' },
+    uppercase: function (object) { return object ? 'TRUE' : 'FALSE' },
+    camelcase: function (object) { return object ? 'True' : 'False' }
   },
   defaultStyle: 'lowercase'
-});
+})
 
 
 /***/ }),
@@ -18654,91 +16368,93 @@ module.exports = new Type('tag:yaml.org,2002:bool', {
 "use strict";
 
 
-var common = __nccwpck_require__(9816);
-var Type   = __nccwpck_require__(9557);
+const common = __nccwpck_require__(9816)
+const Type = __nccwpck_require__(9557)
 
-var YAML_FLOAT_PATTERN = new RegExp(
+const YAML_FLOAT_PATTERN = new RegExp(
   // 2.5e4, 2.5 and integers
-  '^(?:[-+]?(?:[0-9][0-9_]*)(?:\\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?' +
+  '^(?:[-+]?(?:[0-9]+)(?:\\.[0-9]*)?(?:[eE][-+]?[0-9]+)?' +
   // .2e4, .2
   // special case, seems not from spec
-  '|\\.[0-9_]+(?:[eE][-+]?[0-9]+)?' +
+  '|\\.[0-9]+(?:[eE][-+]?[0-9]+)?' +
   // .inf
   '|[-+]?\\.(?:inf|Inf|INF)' +
   // .nan
-  '|\\.(?:nan|NaN|NAN))$');
+  '|\\.(?:nan|NaN|NAN))$')
 
-function resolveYamlFloat(data) {
-  if (data === null) return false;
+const YAML_FLOAT_SPECIAL_PATTERN = new RegExp(
+  '^(?:' +
+  // .inf
+  '[-+]?\\.(?:inf|Inf|INF)' +
+  // .nan
+  '|\\.(?:nan|NaN|NAN))$')
 
-  if (!YAML_FLOAT_PATTERN.test(data) ||
-      // Quick hack to not allow integers end with `_`
-      // Probably should update regexp & check speed
-      data[data.length - 1] === '_') {
-    return false;
+function resolveYamlFloat (data) {
+  if (data === null) return false
+
+  if (!YAML_FLOAT_PATTERN.test(data)) {
+    return false
   }
 
-  return true;
+  if (isFinite(parseFloat(data, 10))) {
+    return true
+  }
+
+  return YAML_FLOAT_SPECIAL_PATTERN.test(data)
 }
 
-function constructYamlFloat(data) {
-  var value, sign;
-
-  value  = data.replace(/_/g, '').toLowerCase();
-  sign   = value[0] === '-' ? -1 : 1;
+function constructYamlFloat (data) {
+  let value = data.toLowerCase()
+  const sign = value[0] === '-' ? -1 : 1
 
   if ('+-'.indexOf(value[0]) >= 0) {
-    value = value.slice(1);
+    value = value.slice(1)
   }
 
   if (value === '.inf') {
-    return (sign === 1) ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
-
+    return (sign === 1) ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY
   } else if (value === '.nan') {
-    return NaN;
+    return NaN
   }
-  return sign * parseFloat(value, 10);
+  return sign * parseFloat(value, 10)
 }
 
+const SCIENTIFIC_WITHOUT_DOT = /^[-+]?[0-9]+e/
 
-var SCIENTIFIC_WITHOUT_DOT = /^[-+]?[0-9]+e/;
-
-function representYamlFloat(object, style) {
-  var res;
-
+function representYamlFloat (object, style) {
   if (isNaN(object)) {
     switch (style) {
-      case 'lowercase': return '.nan';
-      case 'uppercase': return '.NAN';
-      case 'camelcase': return '.NaN';
+      case 'lowercase': return '.nan'
+      case 'uppercase': return '.NAN'
+      case 'camelcase': return '.NaN'
     }
   } else if (Number.POSITIVE_INFINITY === object) {
     switch (style) {
-      case 'lowercase': return '.inf';
-      case 'uppercase': return '.INF';
-      case 'camelcase': return '.Inf';
+      case 'lowercase': return '.inf'
+      case 'uppercase': return '.INF'
+      case 'camelcase': return '.Inf'
     }
   } else if (Number.NEGATIVE_INFINITY === object) {
     switch (style) {
-      case 'lowercase': return '-.inf';
-      case 'uppercase': return '-.INF';
-      case 'camelcase': return '-.Inf';
+      case 'lowercase': return '-.inf'
+      case 'uppercase': return '-.INF'
+      case 'camelcase': return '-.Inf'
     }
   } else if (common.isNegativeZero(object)) {
-    return '-0.0';
+    return '-0.0'
   }
 
-  res = object.toString(10);
+  const res = object.toString(10)
 
   // JS stringifier can build scientific format without dots: 5e-100,
   // while YAML requres dot: 5.e-100. Fix it with simple hack
 
-  return SCIENTIFIC_WITHOUT_DOT.test(res) ? res.replace('e', '.e') : res;
+  return SCIENTIFIC_WITHOUT_DOT.test(res) ? res.replace('e', '.e') : res
 }
 
-function isFloat(object) {
+function isFloat (object) {
   return (Object.prototype.toString.call(object) === '[object Number]') &&
-         (object % 1 !== 0 || common.isNegativeZero(object));
+         (object % 1 !== 0 || common.isNegativeZero(object))
 }
 
 module.exports = new Type('tag:yaml.org,2002:float', {
@@ -18748,7 +16464,7 @@ module.exports = new Type('tag:yaml.org,2002:float', {
   predicate: isFloat,
   represent: representYamlFloat,
   defaultStyle: 'lowercase'
-});
+})
 
 
 /***/ }),
@@ -18759,138 +16475,125 @@ module.exports = new Type('tag:yaml.org,2002:float', {
 "use strict";
 
 
-var common = __nccwpck_require__(9816);
-var Type   = __nccwpck_require__(9557);
+const common = __nccwpck_require__(9816)
+const Type = __nccwpck_require__(9557)
 
-function isHexCode(c) {
-  return ((0x30/* 0 */ <= c) && (c <= 0x39/* 9 */)) ||
-         ((0x41/* A */ <= c) && (c <= 0x46/* F */)) ||
-         ((0x61/* a */ <= c) && (c <= 0x66/* f */));
+function isHexCode (c) {
+  return ((c >= 0x30/* 0 */) && (c <= 0x39/* 9 */)) ||
+         ((c >= 0x41/* A */) && (c <= 0x46/* F */)) ||
+         ((c >= 0x61/* a */) && (c <= 0x66/* f */))
 }
 
-function isOctCode(c) {
-  return ((0x30/* 0 */ <= c) && (c <= 0x37/* 7 */));
+function isOctCode (c) {
+  return ((c >= 0x30/* 0 */) && (c <= 0x37/* 7 */))
 }
 
-function isDecCode(c) {
-  return ((0x30/* 0 */ <= c) && (c <= 0x39/* 9 */));
+function isDecCode (c) {
+  return ((c >= 0x30/* 0 */) && (c <= 0x39/* 9 */))
 }
 
-function resolveYamlInteger(data) {
-  if (data === null) return false;
+function resolveYamlInteger (data) {
+  if (data === null) return false
 
-  var max = data.length,
-      index = 0,
-      hasDigits = false,
-      ch;
+  const max = data.length
+  let index = 0
+  let hasDigits = false
 
-  if (!max) return false;
+  if (!max) return false
 
-  ch = data[index];
+  let ch = data[index]
 
   // sign
   if (ch === '-' || ch === '+') {
-    ch = data[++index];
+    ch = data[++index]
   }
 
   if (ch === '0') {
     // 0
-    if (index + 1 === max) return true;
-    ch = data[++index];
+    if (index + 1 === max) return true
+    ch = data[++index]
 
     // base 2, base 8, base 16
 
     if (ch === 'b') {
       // base 2
-      index++;
+      index++
 
       for (; index < max; index++) {
-        ch = data[index];
-        if (ch === '_') continue;
-        if (ch !== '0' && ch !== '1') return false;
-        hasDigits = true;
+        ch = data[index]
+        if (ch !== '0' && ch !== '1') return false
+        hasDigits = true
       }
-      return hasDigits && ch !== '_';
+      return hasDigits && isFinite(parseYamlInteger(data))
     }
-
 
     if (ch === 'x') {
       // base 16
-      index++;
+      index++
 
       for (; index < max; index++) {
-        ch = data[index];
-        if (ch === '_') continue;
-        if (!isHexCode(data.charCodeAt(index))) return false;
-        hasDigits = true;
+        if (!isHexCode(data.charCodeAt(index))) return false
+        hasDigits = true
       }
-      return hasDigits && ch !== '_';
+      return hasDigits && isFinite(parseYamlInteger(data))
     }
-
 
     if (ch === 'o') {
       // base 8
-      index++;
+      index++
 
       for (; index < max; index++) {
-        ch = data[index];
-        if (ch === '_') continue;
-        if (!isOctCode(data.charCodeAt(index))) return false;
-        hasDigits = true;
+        if (!isOctCode(data.charCodeAt(index))) return false
+        hasDigits = true
       }
-      return hasDigits && ch !== '_';
+      return hasDigits && isFinite(parseYamlInteger(data))
     }
   }
 
   // base 10 (except 0)
 
-  // value should not start with `_`;
-  if (ch === '_') return false;
-
   for (; index < max; index++) {
-    ch = data[index];
-    if (ch === '_') continue;
     if (!isDecCode(data.charCodeAt(index))) {
-      return false;
+      return false
     }
-    hasDigits = true;
+    hasDigits = true
   }
 
-  // Should have digits and should not end with `_`
-  if (!hasDigits || ch === '_') return false;
+  if (!hasDigits) return false
 
-  return true;
+  return isFinite(parseYamlInteger(data))
 }
 
-function constructYamlInteger(data) {
-  var value = data, sign = 1, ch;
+function parseYamlInteger (data) {
+  let value = data
+  let sign = 1
 
-  if (value.indexOf('_') !== -1) {
-    value = value.replace(/_/g, '');
-  }
-
-  ch = value[0];
+  let ch = value[0]
 
   if (ch === '-' || ch === '+') {
-    if (ch === '-') sign = -1;
-    value = value.slice(1);
-    ch = value[0];
+    if (ch === '-') sign = -1
+    value = value.slice(1)
+    ch = value[0]
   }
 
-  if (value === '0') return 0;
+  if (value === '0') return 0
 
   if (ch === '0') {
-    if (value[1] === 'b') return sign * parseInt(value.slice(2), 2);
-    if (value[1] === 'x') return sign * parseInt(value.slice(2), 16);
-    if (value[1] === 'o') return sign * parseInt(value.slice(2), 8);
+    if (value[1] === 'b') return sign * parseInt(value.slice(2), 2)
+    if (value[1] === 'x') return sign * parseInt(value.slice(2), 16)
+    if (value[1] === 'o') return sign * parseInt(value.slice(2), 8)
   }
 
-  return sign * parseInt(value, 10);
+  return sign * parseInt(value, 10)
 }
 
-function isInteger(object) {
+function constructYamlInteger (data) {
+  return parseYamlInteger(data)
+}
+
+function isInteger (object) {
   return (Object.prototype.toString.call(object)) === '[object Number]' &&
-         (object % 1 === 0 && !common.isNegativeZero(object));
+         (object % 1 === 0 && !common.isNegativeZero(object))
 }
 
 module.exports = new Type('tag:yaml.org,2002:int', {
@@ -18899,20 +16602,19 @@ module.exports = new Type('tag:yaml.org,2002:int', {
   construct: constructYamlInteger,
   predicate: isInteger,
   represent: {
-    binary:      function (obj) { return obj >= 0 ? '0b' + obj.toString(2) : '-0b' + obj.toString(2).slice(1); },
-    octal:       function (obj) { return obj >= 0 ? '0o'  + obj.toString(8) : '-0o'  + obj.toString(8).slice(1); },
-    decimal:     function (obj) { return obj.toString(10); },
-    /* eslint-disable max-len */
-    hexadecimal: function (obj) { return obj >= 0 ? '0x' + obj.toString(16).toUpperCase() :  '-0x' + obj.toString(16).toUpperCase().slice(1); }
+    binary: function (obj) { return obj >= 0 ? '0b' + obj.toString(2) : '-0b' + obj.toString(2).slice(1) },
+    octal: function (obj) { return obj >= 0 ? '0o' + obj.toString(8) : '-0o' + obj.toString(8).slice(1) },
+    decimal: function (obj) { return obj.toString(10) },
+    hexadecimal: function (obj) { return obj >= 0 ? '0x' + obj.toString(16).toUpperCase() : '-0x' + obj.toString(16).toUpperCase().slice(1) }
   },
   defaultStyle: 'decimal',
   styleAliases: {
-    binary:      [ 2,  'bin' ],
-    octal:       [ 8,  'oct' ],
-    decimal:     [ 10, 'dec' ],
-    hexadecimal: [ 16, 'hex' ]
+    binary: [2, 'bin'],
+    octal: [8, 'oct'],
+    decimal: [10, 'dec'],
+    hexadecimal: [16, 'hex']
   }
-});
+})
 
 
 /***/ }),
@@ -18923,12 +16625,12 @@ module.exports = new Type('tag:yaml.org,2002:int', {
 "use strict";
 
 
-var Type = __nccwpck_require__(9557);
+const Type = __nccwpck_require__(9557)
 
 module.exports = new Type('tag:yaml.org,2002:map', {
   kind: 'mapping',
-  construct: function (data) { return data !== null ? data : {}; }
-});
+  construct: function (data) { return data !== null ? data : {} }
+})
 
 
 /***/ }),
@@ -18939,16 +16641,16 @@ module.exports = new Type('tag:yaml.org,2002:map', {
 "use strict";
 
 
-var Type = __nccwpck_require__(9557);
+const Type = __nccwpck_require__(9557)
 
-function resolveYamlMerge(data) {
-  return data === '<<' || data === null;
+function resolveYamlMerge (data) {
+  return data === '<<' || data === null
 }
 
 module.exports = new Type('tag:yaml.org,2002:merge', {
   kind: 'scalar',
   resolve: resolveYamlMerge
-});
+})
 
 
 /***/ }),
@@ -18959,23 +16661,23 @@ module.exports = new Type('tag:yaml.org,2002:merge', {
 "use strict";
 
 
-var Type = __nccwpck_require__(9557);
+const Type = __nccwpck_require__(9557)
 
-function resolveYamlNull(data) {
-  if (data === null) return true;
+function resolveYamlNull (data) {
+  if (data === null) return true
 
-  var max = data.length;
+  const max = data.length
 
   return (max === 1 && data === '~') ||
-         (max === 4 && (data === 'null' || data === 'Null' || data === 'NULL'));
+         (max === 4 && (data === 'null' || data === 'Null' || data === 'NULL'))
 }
 
-function constructYamlNull() {
-  return null;
+function constructYamlNull () {
+  return null
 }
 
-function isNull(object) {
-  return object === null;
+function isNull (object) {
+  return object === null
 }
 
 module.exports = new Type('tag:yaml.org,2002:null', {
@@ -18984,14 +16686,14 @@ module.exports = new Type('tag:yaml.org,2002:null', {
   construct: constructYamlNull,
   predicate: isNull,
   represent: {
-    canonical: function () { return '~';    },
-    lowercase: function () { return 'null'; },
-    uppercase: function () { return 'NULL'; },
-    camelcase: function () { return 'Null'; },
-    empty:     function () { return '';     }
+    canonical: function () { return '~' },
+    lowercase: function () { return 'null' },
+    uppercase: function () { return 'NULL' },
+    camelcase: function () { return 'Null' },
+    empty: function () { return '' }
   },
   defaultStyle: 'lowercase'
-});
+})
 
 
 /***/ }),
@@ -19002,48 +16704,49 @@ module.exports = new Type('tag:yaml.org,2002:null', {
 "use strict";
 
 
-var Type = __nccwpck_require__(9557);
+const Type = __nccwpck_require__(9557)
 
-var _hasOwnProperty = Object.prototype.hasOwnProperty;
-var _toString       = Object.prototype.toString;
+const _hasOwnProperty = Object.prototype.hasOwnProperty
+const _toString = Object.prototype.toString
 
-function resolveYamlOmap(data) {
-  if (data === null) return true;
+function resolveYamlOmap (data) {
+  if (data === null) return true
 
-  var objectKeys = [], index, length, pair, pairKey, pairHasKey,
-      object = data;
+  const objectKeys = {}
+  const object = data
 
-  for (index = 0, length = object.length; index < length; index += 1) {
-    pair = object[index];
-    pairHasKey = false;
+  for (let index = 0, length = object.length; index < length; index += 1) {
+    const pair = object[index]
+    let pairHasKey = false
 
-    if (_toString.call(pair) !== '[object Object]') return false;
+    if (_toString.call(pair) !== '[object Object]') return false
 
+    let pairKey
     for (pairKey in pair) {
       if (_hasOwnProperty.call(pair, pairKey)) {
-        if (!pairHasKey) pairHasKey = true;
-        else return false;
+        if (!pairHasKey) pairHasKey = true
+        else return false
       }
     }
 
-    if (!pairHasKey) return false;
+    if (!pairHasKey) return false
 
-    if (objectKeys.indexOf(pairKey) === -1) objectKeys.push(pairKey);
-    else return false;
+    if (_hasOwnProperty.call(objectKeys, pairKey)) return false
+    Object.defineProperty(objectKeys, pairKey, { value: true })
   }
 
-  return true;
+  return true
 }
 
-function constructYamlOmap(data) {
-  return data !== null ? data : [];
+function constructYamlOmap (data) {
+  return data !== null ? data : []
 }
 
 module.exports = new Type('tag:yaml.org,2002:omap', {
   kind: 'sequence',
   resolve: resolveYamlOmap,
   construct: constructYamlOmap
-});
+})
 
 
 /***/ }),
@@ -19054,57 +16757,54 @@ module.exports = new Type('tag:yaml.org,2002:omap', {
 "use strict";
 
 
-var Type = __nccwpck_require__(9557);
+const Type = __nccwpck_require__(9557)
 
-var _toString = Object.prototype.toString;
+const _toString = Object.prototype.toString
 
-function resolveYamlPairs(data) {
-  if (data === null) return true;
+function resolveYamlPairs (data) {
+  if (data === null) return true
 
-  var index, length, pair, keys, result,
-      object = data;
+  const object = data
 
-  result = new Array(object.length);
+  const result = new Array(object.length)
 
-  for (index = 0, length = object.length; index < length; index += 1) {
-    pair = object[index];
+  for (let index = 0, length = object.length; index < length; index += 1) {
+    const pair = object[index]
 
-    if (_toString.call(pair) !== '[object Object]') return false;
+    if (_toString.call(pair) !== '[object Object]') return false
 
-    keys = Object.keys(pair);
+    const keys = Object.keys(pair)
 
-    if (keys.length !== 1) return false;
+    if (keys.length !== 1) return false
 
-    result[index] = [ keys[0], pair[keys[0]] ];
+    result[index] = [keys[0], pair[keys[0]]]
   }
 
-  return true;
+  return true
 }
 
-function constructYamlPairs(data) {
-  if (data === null) return [];
+function constructYamlPairs (data) {
+  if (data === null) return []
 
-  var index, length, pair, keys, result,
-      object = data;
+  const object = data
+  const result = new Array(object.length)
 
-  result = new Array(object.length);
+  for (let index = 0, length = object.length; index < length; index += 1) {
+    const pair = object[index]
 
-  for (index = 0, length = object.length; index < length; index += 1) {
-    pair = object[index];
+    const keys = Object.keys(pair)
 
-    keys = Object.keys(pair);
-
-    result[index] = [ keys[0], pair[keys[0]] ];
+    result[index] = [keys[0], pair[keys[0]]]
   }
 
-  return result;
+  return result
 }
 
 module.exports = new Type('tag:yaml.org,2002:pairs', {
   kind: 'sequence',
   resolve: resolveYamlPairs,
   construct: constructYamlPairs
-});
+})
 
 
 /***/ }),
@@ -19115,12 +16815,12 @@ module.exports = new Type('tag:yaml.org,2002:pairs', {
 "use strict";
 
 
-var Type = __nccwpck_require__(9557);
+const Type = __nccwpck_require__(9557)
 
 module.exports = new Type('tag:yaml.org,2002:seq', {
   kind: 'sequence',
-  construct: function (data) { return data !== null ? data : []; }
-});
+  construct: function (data) { return data !== null ? data : [] }
+})
 
 
 /***/ }),
@@ -19131,33 +16831,33 @@ module.exports = new Type('tag:yaml.org,2002:seq', {
 "use strict";
 
 
-var Type = __nccwpck_require__(9557);
+const Type = __nccwpck_require__(9557)
 
-var _hasOwnProperty = Object.prototype.hasOwnProperty;
+const _hasOwnProperty = Object.prototype.hasOwnProperty
 
-function resolveYamlSet(data) {
-  if (data === null) return true;
+function resolveYamlSet (data) {
+  if (data === null) return true
 
-  var key, object = data;
+  const object = data
 
-  for (key in object) {
+  for (const key in object) {
     if (_hasOwnProperty.call(object, key)) {
-      if (object[key] !== null) return false;
+      if (object[key] !== null) return false
     }
   }
 
-  return true;
+  return true
 }
 
-function constructYamlSet(data) {
-  return data !== null ? data : {};
+function constructYamlSet (data) {
+  return data !== null ? data : {}
 }
 
 module.exports = new Type('tag:yaml.org,2002:set', {
   kind: 'mapping',
   resolve: resolveYamlSet,
   construct: constructYamlSet
-});
+})
 
 
 /***/ }),
@@ -19168,12 +16868,12 @@ module.exports = new Type('tag:yaml.org,2002:set', {
 "use strict";
 
 
-var Type = __nccwpck_require__(9557);
+const Type = __nccwpck_require__(9557)
 
 module.exports = new Type('tag:yaml.org,2002:str', {
   kind: 'scalar',
-  construct: function (data) { return data !== null ? data : ''; }
-});
+  construct: function (data) { return data !== null ? data : '' }
+})
 
 
 /***/ }),
@@ -19184,83 +16884,83 @@ module.exports = new Type('tag:yaml.org,2002:str', {
 "use strict";
 
 
-var Type = __nccwpck_require__(9557);
+const Type = __nccwpck_require__(9557)
 
-var YAML_DATE_REGEXP = new RegExp(
-  '^([0-9][0-9][0-9][0-9])'          + // [1] year
-  '-([0-9][0-9])'                    + // [2] month
-  '-([0-9][0-9])$');                   // [3] day
+const YAML_DATE_REGEXP = new RegExp(
+  '^([0-9][0-9][0-9][0-9])' + // [1] year
+  '-([0-9][0-9])' + // [2] month
+  '-([0-9][0-9])$')                   // [3] day
 
-var YAML_TIMESTAMP_REGEXP = new RegExp(
-  '^([0-9][0-9][0-9][0-9])'          + // [1] year
-  '-([0-9][0-9]?)'                   + // [2] month
-  '-([0-9][0-9]?)'                   + // [3] day
-  '(?:[Tt]|[ \\t]+)'                 + // ...
-  '([0-9][0-9]?)'                    + // [4] hour
-  ':([0-9][0-9])'                    + // [5] minute
-  ':([0-9][0-9])'                    + // [6] second
-  '(?:\\.([0-9]*))?'                 + // [7] fraction
-  '(?:[ \\t]*(Z|([-+])([0-9][0-9]?)' + // [8] tz [9] tz_sign [10] tz_hour
-  '(?::([0-9][0-9]))?))?$');           // [11] tz_minute
+const YAML_TIMESTAMP_REGEXP = new RegExp(
+  '^([0-9][0-9][0-9][0-9])' + // [1] year
+  '-([0-9][0-9]?)' + // [2] month
+  '-([0-9][0-9]?)' + // [3] day
+  '(?:[Tt]|[ \\t]+)' + // ...
+  '([0-9][0-9]?)' + // [4] hour
+  ':([0-9][0-9])' + // [5] minute
+  ':([0-9][0-9])' + // [6] second
+  '(?:\\.([0-9]*))?' + // [7] fraction
+  '(?:[ \\t]*(Z|([-+])([0-9][0-9]?)' + // [8] tz [9] tz_sign [10] tzHour
+  '(?::([0-9][0-9]))?))?$')           // [11] tzMinute
 
-function resolveYamlTimestamp(data) {
-  if (data === null) return false;
-  if (YAML_DATE_REGEXP.exec(data) !== null) return true;
-  if (YAML_TIMESTAMP_REGEXP.exec(data) !== null) return true;
-  return false;
+function resolveYamlTimestamp (data) {
+  if (data === null) return false
+  if (YAML_DATE_REGEXP.exec(data) !== null) return true
+  if (YAML_TIMESTAMP_REGEXP.exec(data) !== null) return true
+  return false
 }
 
-function constructYamlTimestamp(data) {
-  var match, year, month, day, hour, minute, second, fraction = 0,
-      delta = null, tz_hour, tz_minute, date;
+function constructYamlTimestamp (data) {
+  let fraction = 0
+  let delta = null
 
-  match = YAML_DATE_REGEXP.exec(data);
-  if (match === null) match = YAML_TIMESTAMP_REGEXP.exec(data);
+  let match = YAML_DATE_REGEXP.exec(data)
+  if (match === null) match = YAML_TIMESTAMP_REGEXP.exec(data)
 
-  if (match === null) throw new Error('Date resolve error');
+  if (match === null) throw new Error('Date resolve error')
 
   // match: [1] year [2] month [3] day
 
-  year = +(match[1]);
-  month = +(match[2]) - 1; // JS month starts with 0
-  day = +(match[3]);
+  const year = +(match[1])
+  const month = +(match[2]) - 1 // JS month starts with 0
+  const day = +(match[3])
 
   if (!match[4]) { // no hour
-    return new Date(Date.UTC(year, month, day));
+    return new Date(Date.UTC(year, month, day))
   }
 
   // match: [4] hour [5] minute [6] second [7] fraction
 
-  hour = +(match[4]);
-  minute = +(match[5]);
-  second = +(match[6]);
+  const hour = +(match[4])
+  const minute = +(match[5])
+  const second = +(match[6])
 
   if (match[7]) {
-    fraction = match[7].slice(0, 3);
+    fraction = match[7].slice(0, 3)
     while (fraction.length < 3) { // milli-seconds
-      fraction += '0';
+      fraction += '0'
     }
-    fraction = +fraction;
+    fraction = +fraction
   }
 
-  // match: [8] tz [9] tz_sign [10] tz_hour [11] tz_minute
+  // match: [8] tz [9] tz_sign [10] tzHour [11] tzMinute
 
   if (match[9]) {
-    tz_hour = +(match[10]);
-    tz_minute = +(match[11] || 0);
-    delta = (tz_hour * 60 + tz_minute) * 60000; // delta in mili-seconds
-    if (match[9] === '-') delta = -delta;
+    const tzHour = +(match[10])
+    const tzMinute = +(match[11] || 0)
+    delta = (tzHour * 60 + tzMinute) * 60000 // delta in mili-seconds
+    if (match[9] === '-') delta = -delta
   }
 
-  date = new Date(Date.UTC(year, month, day, hour, minute, second, fraction));
+  const date = new Date(Date.UTC(year, month, day, hour, minute, second, fraction))
 
-  if (delta) date.setTime(date.getTime() - delta);
+  if (delta) date.setTime(date.getTime() - delta)
 
-  return date;
+  return date
 }
 
-function representYamlTimestamp(object /*, style*/) {
-  return object.toISOString();
+function representYamlTimestamp (object /*, style */) {
+  return object.toISOString()
 }
 
 module.exports = new Type('tag:yaml.org,2002:timestamp', {
@@ -19269,7 +16969,7 @@ module.exports = new Type('tag:yaml.org,2002:timestamp', {
   construct: constructYamlTimestamp,
   instanceOf: Date,
   represent: representYamlTimestamp
-});
+})
 
 
 /***/ }),
@@ -25916,6 +23616,149 @@ function simpleWrite(buf) {
 function simpleEnd(buf) {
   return buf && buf.length ? this.write(buf) : '';
 }
+
+/***/ }),
+
+/***/ 1450:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const os = __nccwpck_require__(857);
+const tty = __nccwpck_require__(2018);
+const hasFlag = __nccwpck_require__(3813);
+
+const {env} = process;
+
+let forceColor;
+if (hasFlag('no-color') ||
+	hasFlag('no-colors') ||
+	hasFlag('color=false') ||
+	hasFlag('color=never')) {
+	forceColor = 0;
+} else if (hasFlag('color') ||
+	hasFlag('colors') ||
+	hasFlag('color=true') ||
+	hasFlag('color=always')) {
+	forceColor = 1;
+}
+
+if ('FORCE_COLOR' in env) {
+	if (env.FORCE_COLOR === 'true') {
+		forceColor = 1;
+	} else if (env.FORCE_COLOR === 'false') {
+		forceColor = 0;
+	} else {
+		forceColor = env.FORCE_COLOR.length === 0 ? 1 : Math.min(parseInt(env.FORCE_COLOR, 10), 3);
+	}
+}
+
+function translateLevel(level) {
+	if (level === 0) {
+		return false;
+	}
+
+	return {
+		level,
+		hasBasic: true,
+		has256: level >= 2,
+		has16m: level >= 3
+	};
+}
+
+function supportsColor(haveStream, streamIsTTY) {
+	if (forceColor === 0) {
+		return 0;
+	}
+
+	if (hasFlag('color=16m') ||
+		hasFlag('color=full') ||
+		hasFlag('color=truecolor')) {
+		return 3;
+	}
+
+	if (hasFlag('color=256')) {
+		return 2;
+	}
+
+	if (haveStream && !streamIsTTY && forceColor === undefined) {
+		return 0;
+	}
+
+	const min = forceColor || 0;
+
+	if (env.TERM === 'dumb') {
+		return min;
+	}
+
+	if (process.platform === 'win32') {
+		// Windows 10 build 10586 is the first Windows release that supports 256 colors.
+		// Windows 10 build 14931 is the first release that supports 16m/TrueColor.
+		const osRelease = os.release().split('.');
+		if (
+			Number(osRelease[0]) >= 10 &&
+			Number(osRelease[2]) >= 10586
+		) {
+			return Number(osRelease[2]) >= 14931 ? 3 : 2;
+		}
+
+		return 1;
+	}
+
+	if ('CI' in env) {
+		if (['TRAVIS', 'CIRCLECI', 'APPVEYOR', 'GITLAB_CI', 'GITHUB_ACTIONS', 'BUILDKITE'].some(sign => sign in env) || env.CI_NAME === 'codeship') {
+			return 1;
+		}
+
+		return min;
+	}
+
+	if ('TEAMCITY_VERSION' in env) {
+		return /^(9\.(0*[1-9]\d*)\.|\d{2,}\.)/.test(env.TEAMCITY_VERSION) ? 1 : 0;
+	}
+
+	if (env.COLORTERM === 'truecolor') {
+		return 3;
+	}
+
+	if ('TERM_PROGRAM' in env) {
+		const version = parseInt((env.TERM_PROGRAM_VERSION || '').split('.')[0], 10);
+
+		switch (env.TERM_PROGRAM) {
+			case 'iTerm.app':
+				return version >= 3 ? 3 : 2;
+			case 'Apple_Terminal':
+				return 2;
+			// No default
+		}
+	}
+
+	if (/-256(color)?$/i.test(env.TERM)) {
+		return 2;
+	}
+
+	if (/^screen|^xterm|^vt100|^vt220|^rxvt|color|ansi|cygwin|linux/i.test(env.TERM)) {
+		return 1;
+	}
+
+	if ('COLORTERM' in env) {
+		return 1;
+	}
+
+	return min;
+}
+
+function getSupportLevel(stream) {
+	const level = supportsColor(stream, stream && stream.isTTY);
+	return translateLevel(level);
+}
+
+module.exports = {
+	supportsColor: getSupportLevel,
+	stdout: translateLevel(supportsColor(true, tty.isatty(1))),
+	stderr: translateLevel(supportsColor(true, tty.isatty(2)))
+};
+
 
 /***/ }),
 
@@ -52385,10 +50228,3516 @@ module.exports = class Stream extends TransportStream {
 
 /***/ }),
 
-/***/ 75:
+/***/ 5378:
 /***/ ((module) => {
 
-module.exports = eval("require")("supports-color");
+class MetricsCalculator {
+  static mergeResults(slocResult, lizardResult, duplicationResult) {
+    // 合并总体指标（排除 fileDetails / identicalFileDetails / duplicationOccurrences，单独处理）
+    const { fileDetails: slocFileDetails, ...slocMetrics } = slocResult;
+    const { fileDetails: lizardFileDetails, ...lizardMetrics } = lizardResult;
+    // 显式提取 duplicationOccurrences，避免被 ...duplicationMetrics 散开混入总体指标
+    const {
+      fileDetails: duplicationFileDetails,
+      identicalFileDetails,
+      duplicationOccurrences,
+      ...duplicationMetrics
+    } = duplicationResult;
+
+    // 合并文件级指标：以 sloc 的 fileDetails 为基础
+    const fileDetails = MetricsCalculator.mergeFileDetails(
+      slocFileDetails || [],
+      lizardFileDetails || [],
+      duplicationFileDetails || []
+    );
+
+    return {
+      ...slocMetrics,
+      ...lizardMetrics,
+      ...duplicationMetrics,
+      fileDetails: fileDetails,
+      identicalFileDetails: identicalFileDetails || [],
+      // 重复块出现位置列表（含每块的明文 content，由 uploader 做 Base64 编码后分批上报）
+      duplicationOccurrences: duplicationOccurrences || []
+    };
+  }
+
+  // 合并三个检测器的 fileDetails
+  static mergeFileDetails(slocFileDetails, lizardFileDetails, duplicationFileDetails) {
+    // 以 sloc 的 fileDetails 为基础（有 filePath, language, loc）
+    const fileMap = new Map();
+
+    for (const detail of slocFileDetails) {
+      fileMap.set(detail.filePath, {
+        filePath: detail.filePath,
+        language: detail.language || '',
+        loc: detail.loc || 0,
+        commentLines: detail.commentLines || 0,
+        functionCount: 0,
+        avgFunctionLoc: 0,
+        avgCyclomaticComplexity: 0,
+        functionDetails: [],
+        duplicationRate: 0,
+        duplicationLineCount: 0,
+        duplicatedFiles: []
+      });
+    }
+
+    // 合并 lizard 的 fileDetails（按 filePath 匹配）
+    for (const detail of lizardFileDetails) {
+      const existing = fileMap.get(detail.filePath);
+      if (existing) {
+        existing.functionCount = detail.functionCount || 0;
+        existing.avgFunctionLoc = detail.avgFunctionLoc || 0;
+        existing.avgCyclomaticComplexity = detail.avgCyclomaticComplexity || 0;
+        existing.functionDetails = detail.functionDetails || [];
+      } else {
+        fileMap.set(detail.filePath, {
+          filePath: detail.filePath,
+          language: '',
+          loc: 0,
+          commentLines: 0,
+          functionCount: detail.functionCount || 0,
+          avgFunctionLoc: detail.avgFunctionLoc || 0,
+          avgCyclomaticComplexity: detail.avgCyclomaticComplexity || 0,
+          functionDetails: detail.functionDetails || [],
+          duplicationRate: 0,
+          duplicationLineCount: 0,
+          duplicatedFiles: []
+        });
+      }
+    }
+
+    // 合并 duplication 的 fileDetails（按 filePath 匹配）
+    for (const detail of duplicationFileDetails) {
+      const existing = fileMap.get(detail.filePath);
+      if (existing) {
+        existing.duplicationRate = detail.duplicationRate || 0;
+        existing.duplicationLineCount = detail.duplicationLineCount || 0;
+        existing.duplicatedFiles = detail.duplicatedFiles || [];
+        // 上下文片段快照（重复块±5行，整体 Base64 编码），由 buildContextSegments 生成
+        existing.snapshotData = detail.snapshotData || null;
+      } else {
+        // duplication 独有文件（scc 不识别其扩展名，如 .prelds）：
+        // loc 用 duplication 检测携带的 totalLines 兜底（本地"非空非注释"口径），
+        // 避免 loc=0 但 duplicationLineCount>0 的矛盾展示
+        fileMap.set(detail.filePath, {
+          filePath: detail.filePath,
+          language: '',
+          loc: detail.totalLines || 0,
+          commentLines: 0,
+          functionCount: 0,
+          avgFunctionLoc: 0,
+          avgCyclomaticComplexity: 0,
+          functionDetails: [],
+          duplicationRate: detail.duplicationRate || 0,
+          duplicationLineCount: detail.duplicationLineCount || 0,
+          duplicatedFiles: detail.duplicatedFiles || [],
+          snapshotData: detail.snapshotData || null
+        });
+      }
+    }
+
+    return [...fileMap.values()];
+  }
+
+  static validate(metrics) {
+    const required = [
+      'codeScale',
+      'averageFunctionLoc',
+      'averageCyclomaticComplexity',
+      'totalCodeDuplicationRate',
+      'totalFileDuplicationRate'
+    ];
+
+    for (const key of required) {
+      if (metrics[key] === undefined || metrics[key] === null) {
+        throw new Error(`Missing required metric: ${key}`);
+      }
+    }
+
+    return true;
+  }
+
+  static formatForReport(metrics) {
+    // 分离 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
+    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metrics;
+
+    return {
+      codeScale: Number(overallMetrics.codeScale) || 0,
+      // 扫描代码总行数：代码 + 注释 + 空行的物理总行数（scc Lines 汇总，即 rawLines），
+      // 区别于 codeScale（有效代码行）；sloc 检测器禁用时 rawLines 缺失，降级为 0
+      codeLineTotal: Number(overallMetrics.rawLines) || 0,
+      // 注释行数：直接取 sloc 检测器的 scc 汇总 commentLines（现成数据）；
+      // 每文件 commentLines 明细仍随 fileDetails 落 file_detail，供文件级下钻
+      commentLines: Number(overallMetrics.commentLines) || 0,
+      // 总圈复杂度：lizard 函数圈复杂度总和（方法维度总量，与 avgCyclomaticComplexity 同源）
+      complexityCount: Number(overallMetrics.totalCyclomaticComplexity) || 0,
+      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（lizard 口径，
+      // 区别于方法维度的 avgCyclomaticComplexity）
+      cyclomaticComplexityPerFile: Number(overallMetrics.cyclomaticComplexityPerFile) || 0,
+      // 重复代码块数量：重复块出现位置总数（与 duplication_block 表行数一致）
+      duplicatedBlocks: Number(overallMetrics.duplicatedBlocks) || 0,
+      // 重复代码行数量：Σ 每文件重复行数（totalCodeDuplicationRate 的分子）
+      duplicatedLines: Number(overallMetrics.duplicatedLines) || 0,
+      avgFunctionLoc: Number(overallMetrics.averageFunctionLoc) || 0,
+      avgCyclomaticComplexity: Number(overallMetrics.averageCyclomaticComplexity) || 0,
+      totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,
+      totalFileDuplicationRate: Number(overallMetrics.totalFileDuplicationRate) || 0,
+      fileDetails: fileDetails || [],
+      identicalFileDetails: identicalFileDetails || [],
+      // 重复块出现位置列表（含明文 content），uploader 会 Base64 编码后分批上报
+      duplicationOccurrences: duplicationOccurrences || []
+    };
+  }
+}
+
+module.exports = MetricsCalculator;
+
+
+/***/ }),
+
+/***/ 6145:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+const yaml = __nccwpck_require__(4281);
+
+const DEFAULT_CONFIG = {
+  sourceDir: './',
+  output: 'metrics.json',
+  // 排除目录：常见构建产物、依赖目录和 IDE/工具配置目录
+  excludeDirs: [],
+  // 支持的文件扩展名：覆盖主流编程语言
+  allowedExtensions: [],
+  detectors: {
+    sloc: {
+      enabled: true
+    },
+    lizard: {
+      enabled: true
+    },
+    duplication: {
+      enabled: true,
+      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块重复记为一次"
+      minLines: 10,
+      threshold: 0.3
+    }
+  },
+  uploader: {
+    enabled: true,
+    coderepoUrl: '',
+    timeout: 30
+  },
+  verbose: false,
+  parallel: true
+};
+
+class ConfigLoader {
+  static load(configPath) {
+    let config = { ...DEFAULT_CONFIG };
+
+    if (configPath && fs.existsSync(configPath)) {
+      try {
+        const fileContent = fs.readFileSync(configPath, 'utf8');
+        const ext = path.extname(configPath).toLowerCase();
+
+        let userConfig;
+        if (ext === '.yaml' || ext === '.yml') {
+          userConfig = yaml.load(fileContent);
+        } else if (ext === '.json') {
+          userConfig = JSON.parse(fileContent);
+        } else {
+          throw new Error(`Unsupported config file format: ${ext}`);
+        }
+
+        config = this.mergeConfig(config, userConfig);
+      } catch (error) {
+        console.warn(`Warning: Failed to load config file ${configPath}: ${error.message}`);
+      }
+    }
+
+    return config;
+  }
+
+  static mergeConfig(defaultConfig, userConfig) {
+    const merged = { ...defaultConfig };
+
+    for (const key of Object.keys(userConfig)) {
+      if (userConfig[key] === undefined || userConfig[key] === null) {
+        continue;
+      }
+
+      if (Array.isArray(userConfig[key])) {
+        // 如果用户配置了数组，完全替换默认值
+        merged[key] = [...userConfig[key]];
+      } else if (typeof userConfig[key] === 'object' && userConfig[key] !== null) {
+        if (typeof merged[key] === 'object' && merged[key] !== null) {
+          merged[key] = this.mergeConfig(merged[key], userConfig[key]);
+        } else {
+          merged[key] = userConfig[key];
+        }
+      } else {
+        merged[key] = userConfig[key];
+      }
+    }
+
+    return merged;
+  }
+
+  static getDefaultConfig() {
+    return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  }
+}
+
+module.exports = ConfigLoader;
+
+
+/***/ }),
+
+/***/ 658:
+/***/ ((module) => {
+
+class BaseDetector {
+  constructor(config = {}) {
+    this.config = config;
+  }
+
+  async detect(sourceDir) {
+    throw new Error('Method detect() must be implemented');
+  }
+
+  getName() {
+    throw new Error('Method getName() must be implemented');
+  }
+}
+
+module.exports = BaseDetector;
+
+
+/***/ }),
+
+/***/ 1223:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+const crypto = __nccwpck_require__(6982);
+const BaseDetector = __nccwpck_require__(658);
+const FileCollector = __nccwpck_require__(6790);
+
+class DuplicationDetector extends BaseDetector {
+  constructor(config = {}) {
+    super(config);
+    // 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
+    // - minLines=10：连续源代码行至少 10 行才算一次重复
+    this.minLines = config.minLines || 10;
+    this.allowedExtensions = config.allowedExtensions || [];
+  }
+
+  async detect(source, slocResult = null) {
+    // 支持单个路径或多个路径
+    const sources = Array.isArray(source) ? source : [source];
+    const excludeDirs = this.config.excludeDirs || [];
+
+    // 相对路径基准：优先用 git 仓库根目录，确保返回的是仓库根的相对全路径
+    // （source-dir 可能是子目录，用 sources 做基准会把子目录前缀也剥掉，只剩文件名）
+    const gitRoot = this.findGitRoot(sources[0]);
+    const pathBase = gitRoot ? [gitRoot] : sources;
+
+    // scc 的总体代码行数（codeScale），作为总重复率的分母
+    const codeScale = slocResult ? slocResult.codeScale : null;
+
+    // scc 每个文件的 loc 作为该文件重复率的权威分母，保证与上报的 loc 完全一致
+    const locByRel = new Map();
+    if (slocResult && Array.isArray(slocResult.fileDetails)) {
+      for (const d of slocResult.fileDetails) {
+        if (d && d.filePath) locByRel.set(d.filePath, Number(d.loc) || 0);
+      }
+    }
+
+    // 收集所有文件
+    const allFiles = [];
+    for (const src of sources) {
+      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+      allFiles.push(...files);
+    }
+    const uniqueFiles = [...new Set(allFiles)];
+
+    if (uniqueFiles.length === 0) {
+      return this.getEmptyResult();
+    }
+
+    // scc 口径有效行 < minLines 的文件不参与重复检测（第二道防线）：
+    // 即使插件注释规则与 scc 口径出现不一致（如历史 bug：CMakeLists.txt 的 #[[ ]]
+    // 注释体被当有效行），纯注释撑起的 10 行窗口也会在文件级被拦截，
+    // 与 cmetrics "≥10 个有效代码行才算重复"的定义对齐。
+    // 仅当 slocResult 中确有该文件的 loc 记录时过滤（路径不匹配/scc 不识别的文件保守放行）。
+    let locFiltered = 0;
+    const effectiveFiles = [];
+    for (const file of uniqueFiles) {
+      const rel = this.toRelativePath(file, pathBase);
+      const loc = locByRel.get(rel);
+      if (loc !== undefined && loc < this.minLines) {
+        locFiltered++;
+        continue;
+      }
+      effectiveFiles.push(file);
+    }
+    if (locFiltered > 0) {
+      console.log(`[duplication] Skipped ${locFiltered} files with scc loc < ${this.minLines}`);
+    }
+
+    const fileContents = new Map();
+    const fileSourceLineMaps = new Map();
+    let totalSourceLines = 0;
+    let binarySkipped = 0;
+    for (const file of effectiveFiles) {
+      try {
+        // 二进制文件嗅探：前 8KB 含 \x00 字节即判定为二进制（与 Git 同款标准），
+        // 跳过重复检测——二进制按 UTF-8 读取会产生 U+FFFD 乱码且大量伪重复块。
+        // 用内容嗅探而非扩展名黑名单：.config/.cfg 等文本配置不能按扩展名误杀。
+        if (DuplicationDetector.isBinaryFile(file)) {
+          binarySkipped++;
+          continue;
+        }
+        const content = fs.readFileSync(file, 'utf8');
+        fileContents.set(file, content);
+        const sourceLineMap = this.buildSourceLineMap(content, file);
+        fileSourceLineMaps.set(file, sourceLineMap);
+        totalSourceLines += sourceLineMap.sourceCount;
+      } catch (error) {
+        console.warn(`[WARN] Failed to read file ${file}: ${error.message}`);
+      }
+    }
+    if (binarySkipped > 0) {
+      console.log(`[duplication] Skipped ${binarySkipped} binary files (NUL byte sniffing)`);
+    }
+
+    // 行级跨文件匹配（与 cmetrics 官方定义对齐："非空非注释行连续 10 行相同"）
+    const lineResult = this.detectWithLineLevel(effectiveFiles, fileSourceLineMaps);
+    // 用 scc 对每个文件的重复行重新计数（分子分母同工具同口径，保证与 loc 完全一致）
+    const sccDupByRel = this.countDuplicatedLinesWithScc(
+        lineResult.fileDuplicatedLines, fileContents, pathBase);
+    // 使用 let 声明：buildContextSegments 会返回带 snapshotData 的新 fileDetails
+    let fileDetails = this.calculateFileDetailsFromLines(
+        lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase, locByRel, sccDupByRel);
+    // 从共享滑动窗口构建重复块出现位置（窗口级 union-find 分组，自动去重）
+    const duplicationOccurrences = this.buildDuplicationOccurrences(
+        lineResult.fileSourceLines, fileContents, pathBase, lineResult.sharedHashWindows);
+
+    // 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData
+    fileDetails = this.buildContextSegments(fileDetails, duplicationOccurrences, fileContents, pathBase);
+
+    const duplicatedLines = fileDetails.reduce((sum, d) => sum + d.duplicationLineCount, 0);
+
+    // 分母：优先用传入的 codeScale（与 cmetrics 和华为云保持一致）
+    // 如果没有 codeScale，则用本地统计的源代码行总数
+    const denominator = codeScale || totalSourceLines;
+
+    const duplicationRate = denominator > 0
+      ? parseFloat(((duplicatedLines / denominator) * 100).toFixed(2))
+      : 0;
+
+    // 完全一致文件计数（用于总文件重复率）
+    const identicalFileCount = this.calculateFileDuplication(fileContents);
+    const fileDuplicationRate = uniqueFiles.length > 0
+      ? parseFloat(((identicalFileCount / uniqueFiles.length) * 100).toFixed(2))
+      : 0;
+
+    // 计算完全一致文件的详情（用于总文件重复率下钻）
+    const identicalFileDetails = this.calculateIdenticalFileDetails(fileContents, pathBase);
+
+    return {
+      totalCodeDuplicationRate: duplicationRate,
+      totalFileDuplicationRate: fileDuplicationRate,
+      // 重复代码块数量：重复块出现位置总数（与 code_metrics_duplication_block 表行数一致）
+      duplicatedBlocks: duplicationOccurrences.length,
+      duplicatedLines: duplicatedLines,
+      totalLines: denominator,
+      duplicatedFiles: identicalFileCount,
+      totalFiles: uniqueFiles.length,
+      fileDetails: fileDetails,
+      identicalFileDetails: identicalFileDetails,
+      // 重复块出现位置列表（同一代码内容的所有出现位置归为同一 group_id），供后端入库 code_metrics_duplication_block
+      duplicationOccurrences: duplicationOccurrences
+    };
+  }
+
+  /**
+   * 行级跨文件重复检测（主路径）
+   * 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
+   *
+   * 算法：
+   * 1. 提取每个文件的源代码行（非空非注释，含 import 行），保留原始行号
+   * 2. 10 源代码行滑动窗口，md5 哈希每个窗口
+   * 3. 同一 hash 有 2+ 个窗口即计为重复（含同文件内重复）
+   * 4. 标记所有被匹配窗口覆盖的源代码行索引
+   * 5. 合并连续的源代码行索引为最大区间 → 每个区间是一个重复块出现位置
+   *
+   * 相比 token 级窗口的优势：
+   * - 按行对齐，30 行连续重复只产生 1 个块（而非多个 19 行碎片）
+   * - 合并后同一 (file, startLine, endLine) 只产生一条记录（避免重复入库）
+   *
+   * @param {string[]} files 文件绝对路径列表
+   * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（含 sourceLines，分类口径与 scc 一致）
+   * @returns {Object} {fileDuplicatedLines, fileSourceLines, sharedHashWindows}
+   */
+  detectWithLineLevel(files, fileSourceLineMaps) {
+    const WINDOW_SIZE = this.minLines; // 10
+
+    // Step 1: 提取每个文件的源代码行（与 scc 有效代码行语义一致），保留原始行号
+    // 直接复用 buildSourceLineMap 已计算好的 sourceLines，避免分类口径不一致
+    const fileSourceLines = new Map();
+    for (const file of files) {
+      const sourceLineMap = fileSourceLineMaps.get(file)
+        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
+      if (!sourceLineMap || !sourceLineMap.sourceLines) continue;
+      fileSourceLines.set(file.replace(/\\/g, '/'), sourceLineMap.sourceLines);
+    }
+
+    // Step 2: 10 源代码行滑动窗口，md5 哈希
+    const hashToWindows = new Map();
+    for (const [normalizedFile, sourceLines] of fileSourceLines) {
+      if (sourceLines.length < WINDOW_SIZE) continue;
+      for (let i = 0; i <= sourceLines.length - WINDOW_SIZE; i++) {
+        const windowText = sourceLines.slice(i, i + WINDOW_SIZE)
+          .map(l => l.text).join('\n');
+        const hash = crypto.createHash('md5').update(windowText).digest('hex');
+        if (!hashToWindows.has(hash)) hashToWindows.set(hash, []);
+        hashToWindows.get(hash).push({
+          file: normalizedFile,
+          startIdx: i,
+          endIdx: i + WINDOW_SIZE - 1
+        });
+      }
+    }
+
+    // Step 3: 标记重复行 + 收集共享 hash 的滑动窗口（供分组使用）
+    const fileDuplicatedLines = new Map();
+    // 仅含跨 2+ 个窗口的共享 hash：hash -> [{file, startIdx, endIdx}]
+    const sharedHashWindows = new Map();
+
+    for (const [hash, windows] of hashToWindows) {
+      if (windows.length < 2) continue;
+      sharedHashWindows.set(hash, windows);
+
+      for (const win of windows) {
+        const sourceLines = fileSourceLines.get(win.file);
+        if (!sourceLines) continue;
+
+        if (!fileDuplicatedLines.has(win.file)) fileDuplicatedLines.set(win.file, new Set());
+
+        const lineSet = fileDuplicatedLines.get(win.file);
+
+        for (let i = win.startIdx; i <= win.endIdx; i++) {
+          lineSet.add(sourceLines[i].lineNum);
+        }
+      }
+    }
+
+    return { fileDuplicatedLines, fileSourceLines, sharedHashWindows };
+  }
+
+  /**
+   * 把行级匹配得到的「文件→重复行号集合」转为 fileDetails 数组（Step 5）
+   * - 过滤为源代码行（剔除空行/注释行）
+   * - 只含有重复的文件入 fileDetails（无重复文件由 sloc 基础记录覆盖）
+   */
+  calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources, locByRel, sccDupByRel) {
+    const fileDetails = [];
+    for (const [file, lineSet] of fileDuplicatedLines) {
+      // 兼容路径分隔符：detectWithLineLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
+      const sourceLineMap = fileSourceLineMaps.get(file)
+        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
+      if (!sourceLineMap) continue;
+
+      // 分母：优先用 scc 每个文件的 loc（与上报的 loc 完全一致），否则回退到本地分类统计
+      const filePath = this.toRelativePath(file, sources);
+      const sccLoc = locByRel ? locByRel.get(filePath) : undefined;
+      const totalFileSourceLines = (sccLoc !== undefined && sccLoc > 0) ? sccLoc : sourceLineMap.sourceCount;
+
+      // 分子：优先用 scc 对重复行的重数结果（与分母完全同工具同口径，
+      // 保证重复率明细中的有效代码行与代码规模文件级明细一致，杜绝 >100%）；
+      // scc 重数失败（返回 null）时回退到本地 lineMap 口径并做分母封顶保护
+      let duplicatedSourceLines;
+      if (sccDupByRel) {
+        duplicatedSourceLines = sccDupByRel.get(filePath) || 0;
+        // 块注释边界等极端情况下抽取行重数可能略超全集，按分母封顶
+        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
+      } else {
+        duplicatedSourceLines = 0;
+        for (const lineNum of lineSet) {
+          if (sourceLineMap.lineMap.get(lineNum)) {
+            duplicatedSourceLines++;
+          }
+        }
+        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
+      }
+      if (duplicatedSourceLines === 0) continue;  // 全是注释/空行：不入 fileDetails
+
+      const duplicationRate = totalFileSourceLines > 0
+        ? parseFloat(((duplicatedSourceLines / totalFileSourceLines) * 100).toFixed(2))
+        : 0;
+
+      fileDetails.push({
+        filePath: filePath,
+        duplicationRate,
+        duplicationLineCount: duplicatedSourceLines,
+        // 该文件的有效代码行数（scc loc 优先，无则本地分类统计）。
+        // scc 不识别的扩展名（如 .prelds）不会出现在 sloc fileDetails 中，
+        // 合并时用该值兜底 loc，避免 loc=0 但 duplicationLineCount>0 的矛盾展示
+        totalLines: totalFileSourceLines
+      });
+    }
+    return fileDetails;
+  }
+
+  /**
+   * 用 scc 对每个文件的重复行重新计数，保证分子（重复有效行数）与分母（loc）完全同口径。
+   *
+   * <p>实现方式：把每个文件的重复物理行按行号顺序抽取到临时镜像目录（保持原相对路径与扩展名，
+   * 让 scc 用与全量扫描完全相同的语言规则解析），单次 scc 扫描取每文件 Code 即为重复有效行数。
+   * 任何异常返回 null，调用方回退本地 lineMap 口径。
+   *
+   * @param {Map<string, Set<number>>} fileDuplicatedLines 文件 → 重复物理行号集合
+   * @param {Map<string, string>} fileContents 文件 → 内容
+   * @param {string[]} sources 源目录（用于相对路径对齐）
+   * @returns {Map<string, number>|null} 相对路径 → 重复有效行数（scc 口径），失败返回 null
+   */
+  countDuplicatedLinesWithScc(fileDuplicatedLines, fileContents, sources) {
+    if (!fileDuplicatedLines || fileDuplicatedLines.size === 0) {
+      return new Map();
+    }
+    const os = __nccwpck_require__(857);
+    const { execSync } = __nccwpck_require__(5317);
+    const sccPath = DuplicationDetector.getSccBinPath();
+    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
+    // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
+    if (!sccPath) {
+      return null;
+    }
+    // 临时镜像目录：mkdtemp 防并发冲突，finally 统一清理
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-scc-'));
+    try {
+      for (const [file, lineSet] of fileDuplicatedLines) {
+        const content = fileContents.get(file);
+        if (!content) continue;
+        const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
+        // 按物理行号升序抽取重复行内容，保持原相对路径与扩展名写入镜像
+        const dupTexts = [...lineSet].sort((a, b) => a - b)
+          .filter(n => lines[n - 1] !== undefined)
+          .map(n => lines[n - 1]);
+        if (dupTexts.length === 0) continue;
+        const relPath = this.toRelativePath(file, sources);
+        const dest = path.join(tmpRoot, ...relPath.split('/'));
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
+      }
+      const cmd = `"${sccPath}" -f json --no-cocomo --no-size --by-file "${tmpRoot}"`;
+      const output = execSync(cmd, {
+        encoding: 'utf8',
+        maxBuffer: 100 * 1024 * 1024,
+        timeout: 300000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      const sccResult = JSON.parse(output.trim());
+      const dupByRel = new Map();
+      for (const lang of sccResult) {
+        for (const f of (lang.Files || [])) {
+          const name = f.Location || f.Name || '';
+          if (!name) continue;
+          const rel = path.relative(tmpRoot, name).replace(/\\/g, '/');
+          dupByRel.set(rel, f.Code || 0);
+        }
+      }
+      console.log(`[duplication] scc recount done for ${dupByRel.size} duplicated files`);
+      return dupByRel;
+    } catch (error) {
+      console.warn(`[WARN] scc recount of duplicated lines failed, fallback to local line-map: ${error.message}`);
+      return null;
+    } finally {
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (e) { /* 忽略清理异常 */ }
+    }
+  }
+
+  /**
+   * 获取 scc 二进制路径，策略与 slocDetector 完全一致：
+   * 优先使用 dist/bin 内置二进制，其次回退 PATH 查找（保证分子分母用同一个 scc）。
+   *
+   * @returns {string} scc 可执行路径
+   */
+  static getSccBinPath() {
+    // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+    // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
+    // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 src/detectors（上溯一层为 src/bin）
+    const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
+      ? __nccwpck_require2_.ab
+      : null;
+    // 候选顺序：bundle 根 + bin/ → bundle 根平铺（asset 平铺分发形态）→ 源码结构上溯
+    const candidates = [];
+    if (bundleRoot) {
+      candidates.push(path.join(bundleRoot, 'bin', 'scc'));
+      candidates.push(path.join(bundleRoot, 'scc'));
+    }
+    candidates.push(path.join(__dirname, 'bin', 'scc'));
+    candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
+    candidates.push(path.join(__dirname, 'scc'));
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755
+        try {
+          fs.chmodSync(candidate, 0o755);
+        } catch (e) {
+          console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
+        }
+        return candidate;
+      }
+    }
+    // PATH 探测：确认环境本身安装了 scc 才使用裸命令名，
+    // 避免执行注定失败的命令产生误导性报错
+    try {
+      (__nccwpck_require__(5317).execSync)('command -v scc', { stdio: 'ignore' });
+      return 'scc';
+    } catch (e) {
+      console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），重复行统计回退到本地 line-map');
+      return null;
+    }
+  }
+
+  // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）
+  // hashIsCode=true：C/C++ 预处理指令（#include/#define 等）计入代码行（scc 计入）
+  // mlStrings：Python 三引号 docstring 按注释处理（scc 不计入代码行）
+  // blockComments：多组块注释标记（如 CMake 的 #[[ ]]），进入后直到对应结束标记出现
+  static getLanguageConfig(ext, fileName) {
+    const e = (ext || '').toLowerCase();
+    // CMake 按文件名/扩展名识别（与 scc 一致）：CMakeLists.txt / *.cmake。
+    // 支持行注释 # 与方括号块注释 #[[ ]]（#[==[ 变体罕见，暂不支持）。
+    // 此前 CMakeLists.txt 按 .txt 走 default 规则，#[[ ]] 注释体被当成有效代码行，
+    // 导致纯 license 注释撑起 10 行窗口被判重复块（scc 口径 loc=2 的矛盾现象）。
+    const base = (fileName || '').toLowerCase();
+    if (base === 'cmakelists.txt' || e === '.cmake') {
+      return { lineComments: ['#'], blockStart: null, blockEnd: null,
+        blockComments: [['#[[', ']]']], mlStrings: [], hashIsCode: false };
+    }
+    switch (e) {
+      case '.c': case '.cpp': case '.cc': case '.cxx': case '.h': case '.hpp': case '.cuh':
+        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: true };
+      case '.java': case '.js': case '.mjs': case '.cjs': case '.ts': case '.go': case '.cs':
+      case '.scala': case '.kt': case '.kts': case '.swift': case '.rs':
+        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+      case '.php':
+        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+      case '.py':
+        return { lineComments: ['#'], blockStart: null, blockEnd: null, mlStrings: ['"""', "'''"], hashIsCode: false };
+      case '.rb':
+        // Ruby 块注释：=begin ... =end（必须位于行首），行注释为 #
+        return { lineComments: ['#'], blockStart: '=begin', blockEnd: '=end', mlStrings: [], hashIsCode: false };
+      default:
+        // 未知语言：保守兜底，覆盖 C 风格与 # 注释
+        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+    }
+  }
+
+  static startsWithAny(text, markers) {
+    for (const m of markers) {
+      if (text.startsWith(m)) return true;
+    }
+    return false;
+  }
+
+  // 判断一行是否以某个多行字符串标记开始；若同一行内已闭合则返回 null（不进入状态）
+  static openMlString(text, markers) {
+    for (const m of markers) {
+      if (text.startsWith(m)) {
+        return text.slice(m.length).includes(m) ? null : m;
+      }
+    }
+    return null;
+  }
+
+  // 判断一行中（非行首）是否出现三引号字符串标记。
+  // 与 scc 语义对齐：行首的三引号是 docstring（注释），行中的三引号是字符串字面量（计入代码行）。
+  // 返回 { marker, open }：open=true 表示该行打开了未在同行闭合的多行字符串；open=false 表示同行已闭合。
+  static findMidLineMlString(line, markers) {
+    for (const m of markers) {
+      const idx = line.indexOf(m);
+      // 只处理出现在行中的标记；行首由调用方走 docstring 分支
+      if (idx > 0) {
+        const after = line.slice(idx + m.length);
+        return { marker: m, open: !after.includes(m) };
+      }
+    }
+    return null;
+  }
+
+  // 逐文件构建"有效代码行"分析：与 scc 口径完全一致
+  // - 剔除空行、行注释、块注释、行首三引号 docstring（注释）
+  // - 行中三引号多行字符串（如 x = '''...'''）整块计入代码行（含内部空白行）
+  // - C/C++ 预处理指令（#include/#define 等）计入代码行
+  // 返回 { lineMap: 行号→是否有效代码行, sourceCount, sourceLines: [{lineNum,text}] }
+  buildSourceLineMap(content, filePath) {
+    const lines = content.split('\n');
+    const lang = DuplicationDetector.getLanguageConfig(
+        filePath ? path.extname(filePath) : '',
+        filePath ? path.basename(filePath) : '');
+    const lineMap = new Map();
+    const sourceLines = [];
+    let sourceCount = 0;
+    let inBlock = null;       // 块注释结束标记（null=不在块注释中；支持多组标记，如 CMake #[[ ]]）
+    let inDocstring = null;   // 行首三引号 docstring（注释）的结束标记
+    let inMlStringCode = null; // 行中三引号多行字符串（代码）的结束标记
+
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      let isCode = false;
+
+      if (inBlock !== null) {
+        // 块注释中：查找当前组的结束标记
+        if (trimmed.includes(inBlock)) inBlock = null;
+      } else if (inDocstring) {
+        // docstring（注释）中：查找结束标记
+        if (trimmed.includes(inDocstring)) inDocstring = null;
+      } else if (inMlStringCode) {
+        // 行中多行字符串中：整块计入代码行（含空白行），查找结束标记
+        isCode = true;
+        if (trimmed.includes(inMlStringCode)) inMlStringCode = null;
+      } else if (trimmed.length === 0) {
+        // 空行
+      } else if (lang.mlStrings.length > 0 && DuplicationDetector.startsWithAny(trimmed, lang.mlStrings)) {
+        // 行首三引号 → docstring，视为注释不计入代码行；未闭合则进入状态
+        const marker = DuplicationDetector.openMlString(trimmed, lang.mlStrings);
+        if (marker !== null) inDocstring = marker;
+      } else if (lang.blockComments
+          && DuplicationDetector.startsWithAny(trimmed, lang.blockComments.map(p => p[0]))) {
+        // 多组块注释开始行（如 CMake #[[ ]]）：进入后直到对应结束标记出现
+        for (const [bs, be] of lang.blockComments) {
+          if (trimmed.startsWith(bs)) {
+            if (!trimmed.slice(bs.length).includes(be)) inBlock = be;
+            break;
+          }
+        }
+      } else if (lang.blockStart && trimmed.startsWith(lang.blockStart)) {
+        // 块注释开始行
+        if (!trimmed.includes(lang.blockEnd)) inBlock = lang.blockEnd;
+      } else if (DuplicationDetector.startsWithAny(trimmed, lang.lineComments)) {
+        // 纯行注释
+      } else if (lang.hashIsCode && trimmed.startsWith('#')) {
+        // C/C++ 预处理指令：计入代码行
+        isCode = true;
+      } else {
+        // 普通代码行；若行中出现三引号且未同行闭合，则进入"行中多行字符串"状态（仍计入代码行）
+        isCode = true;
+        if (lang.mlStrings.length > 0) {
+          const mm = DuplicationDetector.findMidLineMlString(trimmed, lang.mlStrings);
+          if (mm && mm.open) inMlStringCode = mm.marker;
+        }
+      }
+
+      lineMap.set(i + 1, isCode);
+      if (isCode) {
+        sourceCount++;
+        sourceLines.push({ lineNum: i + 1, text: trimmed });
+      }
+    }
+    return { lineMap, sourceCount, sourceLines };
+  }
+
+  calculateFileDuplication(fileContents) {
+    const hashCount = new Map();
+    for (const content of fileContents.values()) {
+      const normalized = content.trim();
+      const hash = crypto.createHash('md5').update(normalized).digest('hex');
+      if (!hashCount.has(hash)) hashCount.set(hash, 0);
+      hashCount.set(hash, hashCount.get(hash) + 1);
+    }
+
+    let identicalFileCount = 0;
+    for (const count of hashCount.values()) {
+      if (count > 1) identicalFileCount += count;
+    }
+    return identicalFileCount;
+  }
+
+  // 将绝对路径转为相对路径
+  // 修复前缀匹配问题：/repo 会误匹配 /repo-other/test.py，需确保 src 是路径分隔符边界
+  toRelativePath(absolutePath, sources) {
+    if (!sources || sources.length === 0) {
+      return absolutePath.replace(/\\/g, '/');
+    }
+    const normalizedPath = absolutePath.replace(/\\/g, '/');
+    for (const src of sources) {
+      const normalizedSrc = src.replace(/\\/g, '/').replace(/\/+$/, ''); // 去掉尾部斜杠
+      // 精确前缀匹配：src 后必须跟 / 或恰好等于完整路径
+      if (normalizedPath === normalizedSrc
+          || normalizedPath.startsWith(normalizedSrc + '/')) {
+        return path.relative(src, absolutePath).replace(/\\/g, '/');
+      }
+    }
+    return absolutePath.replace(/\\/g, '/');
+  }
+
+  /**
+   * 判断文件是否为二进制文件：读取前 8KB，包含 \x00（NUL）字节即判定为二进制。
+   * 与 Git 的 binary 检测标准一致；UTF-8 文本不可能包含 \x00，因此不会误伤文本文件
+   * （.config/.cfg/.json 等文本配置即使扩展名可疑也能正常参与扫描）。
+   *
+   * @param {string} file 文件绝对路径
+   * @returns {boolean} true 表示二进制文件，应跳过重复检测
+   */
+  static isBinaryFile(file) {
+    const SNIFF_BYTES = 8192;
+    let fd = null;
+    try {
+      fd = fs.openSync(file, 'r');
+      const buf = Buffer.alloc(SNIFF_BYTES);
+      const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
+      return buf.slice(0, bytesRead).includes(0);
+    } catch (error) {
+      // 读取失败按非二进制处理，交给后续 readFileSync 的 catch 统一告警
+      return false;
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch (e) { /* 忽略关闭异常 */ }
+      }
+    }
+  }
+
+  /**
+   * 从起始目录向上查找 git 仓库根目录（包含 .git 的目录）
+   * .git 既可能是目录（普通仓库）也可能是文件（worktree/submodule）
+   * @param {string} startDir 起始目录
+   * @returns {string|null} 仓库根目录绝对路径，找不到返回 null
+   */
+  findGitRoot(startDir) {
+    let cur = path.resolve(startDir);
+    const root = path.parse(cur).root;
+    for (let i = 0; i < 8 && cur && cur !== root; i++) {
+      if (fs.existsSync(path.join(cur, '.git'))) return cur;
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+    return null;
+  }
+
+  // 计算完全一致文件的详情（用于总文件重复率下钻）
+  // 只在文件内容完全一致（MD5相同）时才认为是重复文件
+  // 对于一组重复文件 A、B、C，只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
+  // 前端将同一组的所有文件展示在一起，无需区分"原始文件"和"重复副本"
+  calculateIdenticalFileDetails(fileContents, sources) {
+    // 按内容哈希分组
+    const hashGroups = new Map();
+    for (const [file, content] of fileContents) {
+      const normalized = content.trim();
+      const hash = crypto.createHash('md5').update(normalized).digest('hex');
+      if (!hashGroups.has(hash)) {
+        hashGroups.set(hash, []);
+      }
+      hashGroups.get(hash).push(file);
+    }
+
+    const details = [];
+    for (const [hash, files] of hashGroups) {
+      // 只处理有重复的组（2个及以上文件内容一致）
+      if (files.length < 2) continue;
+
+      // 每组只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
+      // 前端展示时将同一组的所有文件列在一起，不再双向展示
+      const duplicatedFiles = files.map(f => this.toRelativePath(f, sources));
+
+      details.push({
+        duplicatedFiles: duplicatedFiles
+      });
+    }
+
+    return details;
+  }
+
+  /**
+   * 从行级检测的共享滑动窗口构建重复块出现位置列表（主路径）
+   *
+   * 分组策略（基于「精确文件集合分桶」+「完全一致文件去重」+「跨组去重」）：
+   * - 每个共享 hash（10 行连续窗口内容）都有一个「出现文件集合」F(hash)，即共同出现该内容的所有文件
+   * - 内容完全一致的文件（trim 后 MD5 相同）视为同一「等价类」，每个等价类选一个代表；
+   *   每个窗口的「代表集合」F' = { rep(f) | f ∈ F(hash) }
+   * - 按 F' 精确分桶：同一 F' 的窗口归入同一「重复关系」，不再做超集匹配
+   *   ——这保证同一代码块只属于一个精确文件集合组，不会被多个子集组重复包含
+   * - 同一 F' 桶内 |F'| ≥ 2 才算重复关系；桶内按代表合并连续索引为出现区间，每个区间一条 occurrence
+   * - 完全一致文件组单独输出：同一等价类 ≥2 个文件时整块成一组
+   * - 跨组去重保险：最终对同一 (file, startLine, endLine) 出现在多个组的情形，
+   *   只保留行覆盖最大的那个组，从其余组删除该 occurrence（不足 2 条的组整组丢弃）
+   *
+   * 最终分组示例（all_dup_cfile.cpp=A, test-codeql-cpp.cpp=T 完全一致，dup_cfile.cpp=D 为 A 的子集）：
+   * - 完全一致组：{A, T}（整块 1-46 行）
+   * - 部分重复组：{A, D}（L14-46 共同部分），T 因与 A 完全一致被折叠为 A，不再单独出现
+   * - apig 三文件完全共同代码 L4-16：F'={anti, codecheck, sca} 精确成一组，
+   *   不会在 {anti,codecheck}、{codecheck,sca} 等子集组重复出现
+   *
+   * 重复代码行数/重复率仍由行级检测（fileDuplicatedLines）取并集计算，与分组无关，不受影响。
+   *
+   * @param {Map} fileSourceLines file → [{lineNum, text}]（key 为 '/' 归一化路径）
+   * @param {Map} fileContents file(原始路径) → 内容
+   * @param {string[]} sources 源目录列表
+   * @param {Map} sharedHashWindows hash → [{file, startIdx, endIdx}]（仅跨 2+ 窗口的共享 hash）
+   * @returns {Array} duplicationOccurrences 列表
+   */
+  buildDuplicationOccurrences(fileSourceLines, fileContents, sources, sharedHashWindows) {
+    if (!sharedHashWindows || sharedHashWindows.size === 0) return [];
+
+    // 1) 计算「完全一致文件」的等价类：内容(trim 后)哈希相同的文件归为一类
+    //    （如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp 完全相同）
+    const contentHashToFiles = new Map(); // hash -> [归一化路径]
+    const fileToRep = new Map();          // 归一化路径 -> 该类代表
+    for (const [file, content] of fileContents) {
+      const norm = file.replace(/\\/g, '/');
+      const hash = crypto.createHash('md5').update(content.trim()).digest('hex');
+      if (!contentHashToFiles.has(hash)) contentHashToFiles.set(hash, []);
+      contentHashToFiles.get(hash).push(norm);
+    }
+    for (const files of contentHashToFiles.values()) {
+      const rep = files[0];
+      for (const f of files) fileToRep.set(f, rep);
+    }
+
+    const occurrences = [];
+    const W = this.minLines;
+
+    // 2) 预计算每个「代表文件」的 10 行滑动窗口哈希数组（每代表一份，供两两匹配复用）
+    //    repInfo: rep -> { src, winHashes: [idx], hashToPos: Map<hash, [idx]> }
+    const repInfo = new Map();
+    const allReps = new Set();
+    for (const f of fileToRep.keys()) allReps.add(fileToRep.get(f));
+    for (const rep of allReps) {
+      const src = fileSourceLines.get(rep);
+      if (!src || src.length < W) continue;
+      const winHashes = new Array(src.length - W + 1);
+      const hashToPos = new Map();
+      for (let i = 0; i <= src.length - W; i++) {
+        const h = crypto.createHash('md5')
+          .update(src.slice(i, i + W).map(l => l.text).join('\n')).digest('hex');
+        winHashes[i] = h;
+        if (!hashToPos.has(h)) hashToPos.set(h, []);
+        hashToPos.get(h).push(i);
+      }
+      repInfo.set(rep, { src, winHashes, hashToPos });
+    }
+
+    // 3) 两两代表文件：枚举所有「最大连续相同源代码行」运行（run）。
+    //    每个 run 代表一条独立的重复关系；对 run 内的两个出现位置建立连接（union），
+    //    再以「文件+索引区间」为节点做 union-find，把多文件共享同一段内容的出现位置合并成一组。
+    //    这样 A-B(1-45) 与 A-B-C(14-45) 作为两条独立关系同时保留，互不截断——
+    //    不再像旧的「按精确文件集合分桶」那样，把长关系中的窗口让给超集关系导致长关系被截断。
+    const parent = new Map();
+    const find = (k) => {
+      let root = k;
+      while (parent.get(root) !== root) root = parent.get(root);
+      while (parent.get(k) !== root) {
+        const next = parent.get(k);
+        parent.set(k, root);
+        k = next;
+      }
+      return root;
+    };
+    const union = (a, b) => {
+      const ra = find(a), rb = find(b);
+      if (ra !== rb) parent.set(ra, rb);
+    };
+    const nodeKey = (rep, s, e) => `${rep}\u0001${s}\u0001${e}`;
+
+    const repList = [...repInfo.keys()];
+    for (let a = 0; a < repList.length; a++) {
+      const A = repInfo.get(repList[a]);
+      for (let b = a + 1; b < repList.length; b++) {
+        const B = repInfo.get(repList[b]);
+        // 以 A 的窗口为基准，逐个匹配 B 中位置，并沿对角线扩展成最大 run
+        const consumed = new Set(); // "i:j" 已归属某个 run，避免重复枚举
+        for (let i = 0; i < A.winHashes.length; i++) {
+          const positions = B.hashToPos.get(A.winHashes[i]) || [];
+          for (const j of positions) {
+            const ck = i + ':' + j;
+            if (consumed.has(ck)) continue;
+            let k = 0;
+            while (i + k < A.winHashes.length && j + k < B.winHashes.length
+                && A.winHashes[i + k] === B.winHashes[j + k]) k++;
+            for (let t = 0; t < k; t++) consumed.add((i + t) + ':' + (j + t));
+            // run 覆盖的源代码索引区间（含窗口内所有行）
+            const sA = i, eA = i + W - 1 + (k - 1);
+            const sB = j, eB = j + W - 1 + (k - 1);
+            const kA = nodeKey(repList[a], sA, eA);
+            const kB = nodeKey(repList[b], sB, eB);
+            if (!parent.has(kA)) parent.set(kA, kA);
+            if (!parent.has(kB)) parent.set(kB, kB);
+            union(kA, kB);
+          }
+        }
+      }
+    }
+
+    // 3.5) 同文件内自重复：同一文件中相同内容出现在 ≥2 个非重叠位置时，这些区间互相 union。
+    //      行级检测（detectWithLineLevel）把同文件内重复计入重复行数，而上面两两匹配只覆盖跨文件，
+    //      会导致"文件内自重复"的文件（如大型 JSON 配置）重复率有值却没有 occurrence 明细。
+    //      按「对角线 run 扩展」合并长重复（8-36/72-100 不再被切成 10 行小块），并做了两项防爆保护：
+    //      a) 不用 Set 标记已处理位置对：V8 的 Set/Map 元素上限为 2^24（nodejs/node#37320），
+    //         大型配置文件的高频模板窗口对数可达千万级，Set.add 会抛
+    //         RangeError: Value undefined out of range for undefined options property undefined。
+    //         改用「对角线连续性剪枝」：若 (i-1, j-1) 处窗口哈希也相等，说明该对已被更早
+    //         起点的 run 覆盖，直接跳过——每个 run 只从其最左端点完整扩展一次。
+    //      b) 同一 hash 的出现段数超过 MAX_SELF_DUP_SEGS 时退回「所有段 union 成一组」：
+    //         超高频模板（同内容出现上百次）两两配对组合爆炸且展示价值低，整组输出即可。
+    const MAX_SELF_DUP_SEGS = 64;
+    for (const [rep, info] of repInfo) {
+      const winHashes = info.winHashes;
+      const len = winHashes.length;
+      for (const positions of info.hashToPos.values()) {
+        if (positions.length < 2) continue;
+        // 分段：连续窗口位置合段（段内为周期性重叠窗口，j-i < W 会被跳过，不参与配对）
+        const segs = [];
+        let segStart = positions[0];
+        for (let p = 1; p <= positions.length; p++) {
+          const cur = positions[p];
+          if (cur === undefined || cur !== positions[p - 1] + 1) {
+            segs.push([segStart, positions[p - 1]]);
+            segStart = cur;
+          }
+        }
+        if (segs.length < 2) continue;
+        if (segs.length > MAX_SELF_DUP_SEGS) {
+          // 超高频模板：所有段整组 union（每段一个节点），避免两两配对组合爆炸
+          const segNodes = segs.map(([a, b]) => {
+            const k = nodeKey(rep, a, b + W - 1);
+            if (!parent.has(k)) parent.set(k, k);
+            return k;
+          });
+          for (let i = 1; i < segNodes.length; i++) union(segNodes[0], segNodes[i]);
+          continue;
+        }
+        // 常规场景：跨段位置对做对角线 run 扩展（段数 ≤ MAX_SELF_DUP_SEGS，组合可控）
+        for (let si = 0; si < segs.length; si++) {
+          for (let sj = si + 1; sj < segs.length; sj++) {
+            for (let i = segs[si][0]; i <= segs[si][1]; i++) {
+              for (let j = segs[sj][0]; j <= segs[sj][1]; j++) {
+                // 只处理非重叠的后向重复位置：j ≥ i+W 保证两段窗口不重叠
+                if (j < i + W) continue;
+                // 对角线连续性剪枝：(i-1, j-1) 也同哈希 → 该对属于已扩展过的 run，跳过
+                if (i > 0 && winHashes[i - 1] === winHashes[j - 1]) continue;
+                // 从 (i, j) 沿对角线扩展最大 run：(i+k, j+k) 窗口内容一致即同属一段重复
+                let k = 0;
+                while (i + k < len && j + k < len
+                    && winHashes[i + k] === winHashes[j + k]) {
+                  k++;
+                }
+                // run 覆盖的源代码索引区间（含窗口内所有行）
+                const kA = nodeKey(rep, i, i + W - 1 + (k - 1));
+                const kB = nodeKey(rep, j, j + W - 1 + (k - 1));
+                if (!parent.has(kA)) parent.set(kA, kA);
+                if (!parent.has(kB)) parent.set(kB, kB);
+                union(kA, kB);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 按连通分量分组：每个分量 = 一条独立的重复关系组
+    const compNodes = new Map(); // root -> Set<nodeKey>
+    for (const k of parent.keys()) {
+      const r = find(k);
+      if (!compNodes.has(r)) compNodes.set(r, new Set());
+      compNodes.get(r).add(k);
+    }
+    for (const nodes of compNodes.values()) {
+      if (nodes.size < 2) continue;
+      const fileOccs = [];
+      for (const nk of nodes) {
+        const parts = nk.split('\u0001');
+        const rep = parts[0];
+        const s = Number(parts[1]), e = Number(parts[2]);
+        const src = fileSourceLines.get(rep);
+        if (!src) continue;
+        fileOccs.push({
+          file: rep,
+          startLine: src[s].lineNum,
+          endLine: src[e].lineNum
+        });
+      }
+      if (fileOccs.length < 2) continue; // 少于 2 个出现位置不算重复
+      this.pushGroup(occurrences, fileOccs, sources, fileContents);
+    }
+
+    // 4) 处理「完全一致文件」组：同一内容哈希的 ≥2 个文件单独成一组，
+    //    每个成员各占一条出现记录（整文件为重复块）
+    //    只有源代码行数 ≥ minLines(10) 的文件才可能被滑窗检测为重复块，故以此作为阈值
+    for (const files of contentHashToFiles.values()) {
+      if (files.length < 2) continue;
+      const fileOccs = [];
+      for (const f of files) {
+        const sourceLines = fileSourceLines.get(f);
+        if (!sourceLines || sourceLines.length < this.minLines) continue;
+        fileOccs.push({
+          file: f,
+          startLine: sourceLines[0].lineNum,
+          endLine: sourceLines[sourceLines.length - 1].lineNum
+        });
+      }
+      if (fileOccs.length < 2) continue;
+      this.pushGroup(occurrences, fileOccs, sources, fileContents);
+    }
+
+    // 5) 跨组去重保险：同一 (file, startLine, endLine) 若出现在多个组，
+    //    只保留行覆盖最大的那个组中的出现位置，从其余组删除。
+    //    （理论上精确分桶后不应出现，此处作为防御性兜底，避免任何边界情形造成跨组重复）
+    this.dedupOccurrencesAcrossGroups(occurrences);
+
+    return occurrences;
+  }
+
+  // 跨组去重：同一 (filePath, startLine, endLine) 出现在多个组时，
+  // 只保留组内「所有出现位置行覆盖并集」最大的那个组中的该出现位置，从其它组删除。
+  // 删除后若某组不足 2 条出现位置，则整组丢弃。
+  // 注意：此处以 occurrence 自身的 groupId 为分组依据，不依赖外部结构。
+  dedupOccurrencesAcrossGroups(occurrences) {
+    if (!occurrences || occurrences.length === 0) return;
+
+    // 统计每个组的行覆盖并集大小，用于决定保留哪个组
+    const groupLineSpan = new Map(); // groupId -> Set<lineKey>
+    for (const o of occurrences) {
+      if (!groupLineSpan.has(o.groupId)) groupLineSpan.set(o.groupId, new Set());
+      const span = groupLineSpan.get(o.groupId);
+      for (let ln = o.startLine; ln <= o.endLine; ln++) {
+        span.add(`${o.filePath}:${ln}`);
+      }
+    }
+
+    // 对每个 (filePath, startLine, endLine) 找出它所在的所有组，保留 span 最大者
+    const blockToGroups = new Map(); // blockKey -> Set<groupId>
+    for (const o of occurrences) {
+      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
+      if (!blockToGroups.has(k)) blockToGroups.set(k, new Set());
+      blockToGroups.get(k).add(o.groupId);
+    }
+    const dropGroupForBlock = new Map(); // blockKey -> Set<groupId>(要删除的组)
+    for (const [k, gids] of blockToGroups) {
+      if (gids.size < 2) continue;
+      let best = null, bestSize = -1;
+      for (const gid of gids) {
+        const sz = groupLineSpan.get(gid) ? groupLineSpan.get(gid).size : 0;
+        if (sz > bestSize) { bestSize = sz; best = gid; }
+      }
+      const drop = new Set();
+      for (const gid of gids) if (gid !== best) drop.add(gid);
+      dropGroupForBlock.set(k, drop);
+    }
+    if (dropGroupForBlock.size === 0) return;
+
+    // 执行删除：从被标记为删除的 (blockKey, groupId) 对中移除 occurrence
+    for (let i = occurrences.length - 1; i >= 0; i--) {
+      const o = occurrences[i];
+      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
+      const drop = dropGroupForBlock.get(k);
+      if (drop && drop.has(o.groupId)) {
+        occurrences.splice(i, 1);
+      }
+    }
+
+    // 删除后若某组不足 2 条，整组丢弃
+    const groupCount = new Map();
+    for (const o of occurrences) {
+      groupCount.set(o.groupId, (groupCount.get(o.groupId) || 0) + 1);
+    }
+    for (let i = occurrences.length - 1; i >= 0; i--) {
+      if (groupCount.get(occurrences[i].groupId) < 2) {
+        occurrences.splice(i, 1);
+      }
+    }
+  }
+
+  // 把一组出现位置(重复块)统一排序、生成 groupId 并写入 occurrences
+  pushGroup(occurrences, fileOccs, sources, fileContents) {
+    // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
+    fileOccs.sort((a, b) => {
+      const relA = this.toRelativePath(a.file, sources);
+      const relB = this.toRelativePath(b.file, sources);
+      if (relA !== relB) return relA.localeCompare(relB);
+      return a.startLine - b.startLine;
+    });
+
+    // groupId 用组内所有出现位置(文件+起止行)的结构化哈希，保证不同重复关系唯一。
+    // 同一关系内各 occurrence 的内容可能不同（如共同部分与完全一致块），
+    // 因此不能再用「单一内容哈希」作为组 ID，否则不同关系可能因首块内容相同而碰撞。
+    const groupId = crypto.createHash('sha256')
+      .update(fileOccs
+          .map(o => `${this.toRelativePath(o.file, sources)}:${o.startLine}-${o.endLine}`)
+          .sort()
+          .join('\u0001'))
+      .digest('hex');
+
+    fileOccs.forEach((occ, i) => {
+      const content = this.extractBlockContent(occ.file, occ.startLine, occ.endLine, fileContents);
+      occurrences.push({
+        groupId: groupId,
+        contentHash: groupId,
+        occurrenceIndex: i,
+        filePath: this.toRelativePath(occ.file, sources),
+        startLine: occ.startLine,
+        endLine: occ.endLine,
+        content: content
+      });
+    });
+  }
+
+  /**
+   * 提取文件中指定行号区间的代码内容
+   *
+   * @param {string} file 文件路径（可能是正斜杠或反斜杠格式）
+   * @param {number} startLine 起始行（1-based）
+   * @param {number} endLine 结束行（1-based）
+   * @param {Map} fileContents file(原始路径) → 内容
+   * @returns {string} 代码内容，找不到文件时返回空字符串
+   */
+  extractBlockContent(file, startLine, endLine, fileContents) {
+    // 兼容路径分隔符：fileContents 的 key 是原始路径（Windows 下含反斜杠）
+    const content = fileContents.get(file)
+        || fileContents.get(file.replace(/\//g, '\\'));
+    if (!content) return '';
+    const lines = content.split('\n');
+    const start = Math.max(0, startLine - 1);
+    const end = Math.min(lines.length, endLine);
+    return lines.slice(start, end).join('\n');
+  }
+
+  /**
+   * 合并重叠/相邻的行号区间
+   *
+   * @param {Array} intervals [{startLine, endLine}]
+   * @param {boolean} mergeAdjacent 是否合并相邻区间（间隔 ≤1 行），默认 true。
+   *   重复块本身合并传 true（相邻重复块视为一个连续重复区域）；
+   *   扩展 ±contextLines 后的区间合并传 false（只有真正重叠才合并，避免上下文过长）。
+   * @returns {Array} 合并后的区间列表（按 startLine 排序）
+   */
+  mergeIntervals(intervals, mergeAdjacent = true) {
+    if (intervals.length === 0) return [];
+    const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
+    const merged = [Object.assign({}, sorted[0])];
+    // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
+    const overlapThreshold = mergeAdjacent ? 1 : 0;
+    for (let i = 1; i < sorted.length; i++) {
+      const last = merged[merged.length - 1];
+      if (sorted[i].startLine <= last.endLine + overlapThreshold) {
+        last.endLine = Math.max(last.endLine, sorted[i].endLine);
+        // 合并时透传附加属性（如 oversized）：任一子区间为真则合并区间视为真
+        if (sorted[i].oversized) last.oversized = true;
+      } else {
+        merged.push(Object.assign({}, sorted[i]));
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData。
+   *
+   * segments 生成策略（完整输出，不截断）：
+   * - 所有重复块（含超大块）均完整保留其代码内容（含 ±contextLines 上下文），
+   *   保证前端能展示/高亮全部重复代码；相邻块的上下文重叠时会合并成一个连续区间。
+   * - 超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多个 segment（分段不丢内容），
+   *   不再对超大块做「头+省略+尾」截断；快照整体随全量上报文件上传 OBS。
+   * - 未覆盖的行段由前端根据相邻片段的行号差用 "... N lines omitted ..." 占位。
+   *
+   * snapshotData 结构（整体 Base64 编码）：
+   * {
+   *   totalLines: 原始文件总行数,
+   *   contextLines: 上下文行数(5),
+   *   truncated: 固定 false（保留字段做结构兼容，现已完整输出不再截断）,
+   *   segments: [{originalStartLine, originalEndLine, contentB64}]
+   *   // 每个 segment 的 contentB64 为该片段代码内容再次 Base64 编码
+   * }
+   *
+   * @param {Array} fileDetails 文件明细列表
+   * @param {Array} duplicationOccurrences 重复块出现位置列表
+   * @param {Map} fileContents file(原始路径) → 内容
+   * @param {string[]} sources 源目录列表
+   * @param {number} contextLines 上下文行数，默认 5
+   * @returns {Array} 更新后的 fileDetails（每个有重复的 fileDetail 增加 snapshotData 字段）
+   */
+  buildContextSegments(fileDetails, duplicationOccurrences, fileContents, sources, contextLines = 5) {
+    if (!duplicationOccurrences || duplicationOccurrences.length === 0) {
+      return fileDetails;
+    }
+
+    // 按 filePath 分组出现位置，得到每个文件的重复块区间
+    const blocksByFile = new Map(); // relativePath → [{startLine, endLine}]
+    for (const occ of duplicationOccurrences) {
+      if (!blocksByFile.has(occ.filePath)) blocksByFile.set(occ.filePath, []);
+      blocksByFile.get(occ.filePath).push({ startLine: occ.startLine, endLine: occ.endLine });
+    }
+
+    // 构建 relativePath → content 的映射，便于按 fileDetail.filePath 查找
+    const relativeToContent = new Map();
+    for (const [absPath, content] of fileContents) {
+      relativeToContent.set(this.toRelativePath(absPath, sources), content);
+    }
+
+    for (const fileDetail of fileDetails) {
+      // 只有有重复的文件才生成快照
+      if (!fileDetail.duplicationLineCount || fileDetail.duplicationLineCount === 0) continue;
+
+      const blocks = blocksByFile.get(fileDetail.filePath);
+      if (!blocks || blocks.length === 0) continue;
+
+      // 1. 合并重叠的重复块区间
+      const mergedBlocks = this.mergeIntervals(blocks);
+
+      // 2. 获取文件内容和总行数
+      const content = relativeToContent.get(fileDetail.filePath);
+      if (!content) continue;
+      const lines = content.split('\n');
+      const totalLines = lines.length;
+
+      // 3. 每个块扩展 ±contextLines，再次合并重叠的扩展区间
+      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间。
+      const extended = mergedBlocks.map((b) => ({
+        startLine: Math.max(1, b.startLine - contextLines),
+        endLine: b.endLine + contextLines
+      }));
+      const mergedExtended = this.mergeIntervals(extended, false);
+
+      // 4. 构建 segments：所有区间（含超大块）完整保留代码内容，不做任何省略。
+      //    超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多段（分段不丢内容），
+      //    避免 Base64/JSON 单字符串过大影响传输与解析。
+      const MAX_SEGMENT_CHARS = 24 * 1024; // 单段原始内容字符数上限（仅分段用，不截断内容）
+      const segments = [];
+      // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
+      const pushSegment = (segStart, segEnd, contentText) => {
+        segments.push({
+          originalStartLine: segStart,
+          originalEndLine: segEnd,
+          contentB64: Buffer.from(contentText, 'utf8').toString('base64')
+        });
+      };
+      for (const interval of mergedExtended) {
+        const start = Math.max(1, interval.startLine);
+        const end = Math.min(totalLines, interval.endLine);
+        // 完整保留路径：按字符预算切段（分段间行号连续，内容无丢失）
+        let segStart = start;
+        let segChars = 0;
+        for (let ln = start; ln <= end; ln++) {
+          const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
+          const lineLen = lineText.length + 1; // 行内容 + 换行符
+          if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
+            pushSegment(segStart, ln - 1, lines.slice(segStart - 1, ln - 1).join('\n'));
+            segStart = ln;
+            segChars = 0;
+          }
+          segChars += lineLen;
+        }
+        if (segChars > 0) {
+          pushSegment(segStart, end, lines.slice(segStart - 1, end).join('\n'));
+        }
+      }
+
+      // 5. 构建 snapshotData JSON 并整体 Base64 编码（完整内容随全量上报文件上传 OBS，
+      //    DB snapshot_data 为 LONGTEXT 可承载 MB 级快照，不再做 512KB 截断兜底）
+      const snapshotDataObj = {
+        totalLines: totalLines,
+        contextLines: contextLines,
+        segments: segments,
+        truncated: false // 结构兼容字段：现已完整输出，恒为 false
+      };
+      const snapshotJson = JSON.stringify(snapshotDataObj);
+      fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
+    }
+
+    return fileDetails;
+  }
+
+  getEmptyResult() {
+    return {
+      totalCodeDuplicationRate: 0,
+      totalFileDuplicationRate: 0,
+      duplicatedBlocks: 0,
+      duplicatedLines: 0,
+      totalLines: 0,
+      duplicatedFiles: 0,
+      totalFiles: 0,
+      fileDetails: [],
+      identicalFileDetails: [],
+      duplicationOccurrences: []
+    };
+  }
+
+  getName() {
+    return 'duplication';
+  }
+}
+
+module.exports = DuplicationDetector;
+
+
+/***/ }),
+
+/***/ 843:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { execSync } = __nccwpck_require__(5317);
+const path = __nccwpck_require__(6928);
+const fs = __nccwpck_require__(9896);
+const os = __nccwpck_require__(857);
+const BaseDetector = __nccwpck_require__(658);
+const FileCollector = __nccwpck_require__(6790);
+
+class LizardDetector extends BaseDetector {
+  constructor(config = {}) {
+    super(config);
+    this.tempJsonFile = './lizard_output.json';
+    this.allowedExtensions = config.allowedExtensions || [];
+  }
+
+  async detect(source) {
+    // 支持单个路径或多个路径
+    const sources = Array.isArray(source) ? source : [source];
+    const excludeDirs = this.config.excludeDirs || [];
+
+    // 收集所有文件
+    const allFiles = [];
+    for (const src of sources) {
+      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+      allFiles.push(...files);
+    }
+
+    // 去重
+    const uniqueFiles = [...new Set(allFiles)];
+
+    if (uniqueFiles.length === 0) {
+      return this.getEmptyResult();
+    }
+
+    // Lizard 处理所有文件，统一获取函数数、函数代码行数和圈复杂度
+    let lizardResult = { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+    if (uniqueFiles.length > 0) {
+      lizardResult = this.runLizard(uniqueFiles);
+    }
+
+    const totalFunctions = lizardResult.totalFunctions;
+    const totalNloc = lizardResult.totalNloc;
+    const totalCC = lizardResult.totalCC;
+
+    if (totalFunctions === 0) {
+      return this.getEmptyResult();
+    }
+
+    // 按文件聚合函数数据，计算文件级指标
+    const fileDetails = this.aggregateFileDetails(lizardResult.functions, sources);
+
+    return {
+      totalFunctions,
+      totalNloc,
+      averageFunctionLoc: totalFunctions > 0
+        ? parseFloat((totalNloc / totalFunctions).toFixed(2))
+        : 0,
+      totalCyclomaticComplexity: totalCC,
+      averageCyclomaticComplexity: totalFunctions > 0
+        ? parseFloat((totalCC / totalFunctions).toFixed(2))
+        : 0,
+      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（区别于方法维度的 averageCyclomaticComplexity）
+      cyclomaticComplexityPerFile: fileDetails.length > 0
+        ? parseFloat((totalCC / fileDetails.length).toFixed(2))
+        : 0,
+      fileDetails: fileDetails
+    };
+  }
+
+  // 将文件列表写入临时文件，供 lizard 的 -f 参数读取
+  writeInputFile(files) {
+    const tempInputPath = path.join(os.tmpdir(), `lizard_input_${Date.now()}.txt`);
+    fs.writeFileSync(tempInputPath, files.join('\n'), 'utf8');
+    return tempInputPath;
+  }
+
+  runLizard(files) {
+    const tempJsonPath = path.resolve(this.tempJsonFile);
+    let tempInputPath = null;
+
+    try {
+      if (fs.existsSync(tempJsonPath)) {
+        fs.unlinkSync(tempJsonPath);
+      }
+
+      // 使用 -f 参数从临时文件读取文件列表，避免命令行长度限制
+      tempInputPath = this.writeInputFile(files);
+      const args = ['-f', tempInputPath, '-o', tempJsonPath];
+
+      execSync('python3 -m lizard ' + args.join(' '), {
+        encoding: 'utf8',
+        maxBuffer: 50 * 1024 * 1024,
+        timeout: 300000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      if (tempInputPath) {
+        fs.unlinkSync(tempInputPath);
+        tempInputPath = null;
+      }
+
+      if (!fs.existsSync(tempJsonPath)) {
+        return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+      }
+
+      const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
+      if (fs.existsSync(tempJsonPath)) fs.unlinkSync(tempJsonPath);
+
+      if (!content) {
+        return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+      }
+
+      if (content.startsWith('{')) {
+        const results = JSON.parse(content);
+        return this.calculateMetricsFromLizard(results);
+      } else {
+        return this.parseTextOutput(content);
+      }
+    } catch (error) {
+      if (tempInputPath && fs.existsSync(tempInputPath)) {
+        fs.unlinkSync(tempInputPath);
+        tempInputPath = null;
+      }
+      if (fs.existsSync(tempJsonPath)) {
+        try {
+          const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
+          if (fs.existsSync(tempJsonPath)) fs.unlinkSync(tempJsonPath);
+          if (content) {
+            if (content.startsWith('{')) {
+              return this.calculateMetricsFromLizard(JSON.parse(content));
+            } else {
+              return this.parseTextOutput(content);
+            }
+          }
+        } catch (parseError) {
+          console.warn(`Failed to parse lizard output: ${parseError.message}`);
+        }
+      }
+      console.warn(`Lizard detection warning: ${error.message}`);
+      return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+    }
+  }
+
+  parseTextOutput(content) {
+    let totalFunctions = 0;
+    let totalNloc = 0;
+    let totalCC = 0;
+    const functions = [];
+
+    const lines = content.split('\n');
+    for (const line of lines) {
+      if (!line.trim() || line.includes('NLOC') || line.includes('===') || line.includes('----')) {
+        continue;
+      }
+
+      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+?)@(\d+)-(\d+)@(.+)$/);
+      if (match) {
+        totalFunctions++;
+        const cc = parseInt(match[2], 10);
+        totalCC += cc;
+
+        // 从源文件中计算函数体有效代码行（排除方法签名和参数行）
+        const startLine = parseInt(match[7], 10);
+        const endLine = parseInt(match[8], 10);
+        const filePath = match[9].trim();
+
+        let bodyNloc = parseInt(match[1], 10);
+        try {
+          const fileContent = fs.readFileSync(filePath, 'utf8');
+          const defLines = this.countDefinitionLines(fileContent, startLine);
+          bodyNloc = this.calculateBodyNloc(fileContent, startLine, endLine, defLines);
+        } catch (e) {
+          // 读取源文件失败时，回退到 nloc - 1
+          bodyNloc = Math.max(0, bodyNloc - 1);
+        }
+
+        totalNloc += bodyNloc;
+        // 保留 filename 用于按文件聚合
+        functions.push({
+          // match[6] 是正则捕获的函数名（如 MyClass.myMethod）
+          name: match[6] || '',
+          nloc: bodyNloc,
+          cc: cc,
+          startLine: startLine,
+          endLine: endLine,
+          filename: filePath
+        });
+      }
+    }
+
+    return { totalFunctions, totalNloc, totalCC, functions };
+  }
+
+  getEmptyResult() {
+    return {
+      totalFunctions: 0,
+      totalNloc: 0,
+      averageFunctionLoc: 0,
+      totalCyclomaticComplexity: 0,
+      averageCyclomaticComplexity: 0,
+      cyclomaticComplexityPerFile: 0,
+      fileDetails: []
+    };
+  }
+
+  // 根据源文件内容，计算函数定义占用的行数
+  countDefinitionLines(fileContent, startLine) {
+    const lines = fileContent.split('\n');
+    const startIndex = startLine - 1;
+    if (startIndex < 0 || startIndex >= lines.length) return 1;
+
+    for (let i = startIndex; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (line.endsWith(':')) {
+        return i - startIndex + 1;
+      }
+      if (line.endsWith('{')) {
+        return i - startIndex + 1;
+      }
+      if (line.endsWith(')') && i + 1 < lines.length && lines[i + 1].trim() === '{') {
+        return i - startIndex + 1;
+      }
+    }
+
+    return 1;
+  }
+
+  // 判断一行是否为有效代码行（非空行、非纯注释行）
+  static isSourceLine(line) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) return false;
+    if (trimmed.startsWith('#')) return false;
+    if (trimmed.startsWith('//')) return false;
+    if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/')) return false;
+    return true;
+  }
+
+  // 从源文件中精确计算函数体的有效代码行数（排除定义行）
+  calculateBodyNloc(fileContent, startLine, endLine, defLines) {
+    const lines = fileContent.split('\n');
+    let bodyNloc = 0;
+
+    const bodyStart = startLine - 1 + defLines;
+    const bodyEnd = endLine;
+
+    for (let i = bodyStart; i < bodyEnd && i < lines.length; i++) {
+      if (LizardDetector.isSourceLine(lines[i])) {
+        bodyNloc++;
+      }
+    }
+
+    return bodyNloc;
+  }
+
+  calculateMetricsFromLizard(results) {
+    let totalFunctions = 0;
+    let totalNloc = 0;
+    let totalCC = 0;
+    const functions = [];
+
+    if (results && results.functions) {
+      for (const func of results.functions) {
+        totalFunctions++;
+        totalCC += func.cyclomatic_complexity || 1;
+
+        // 读取源文件，精确计算函数定义行数，从 nloc 中排除
+        let bodyNloc = func.nloc || 0;
+        if (func.start_line && func.end_line && func.filename) {
+          try {
+            const fileContent = fs.readFileSync(func.filename, 'utf8');
+            const defLines = this.countDefinitionLines(fileContent, func.start_line);
+            bodyNloc = this.calculateBodyNloc(fileContent, func.start_line, func.end_line, defLines);
+          } catch (e) {
+            bodyNloc = Math.max(0, (func.nloc || 0) - 1);
+          }
+        } else {
+          bodyNloc = Math.max(0, (func.nloc || 0) - 1);
+        }
+
+        totalNloc += bodyNloc;
+        functions.push({
+          name: func.name,
+          nloc: bodyNloc,
+          cc: func.cyclomatic_complexity || 1,
+          startLine: func.start_line,
+          endLine: func.end_line,
+          filename: func.filename || ''
+        });
+      }
+    }
+
+    return { totalFunctions, totalNloc, totalCC, functions };
+  }
+
+  // 按文件聚合函数数据，保留每个函数的明细（函数名、行数、开始行、结束行）
+  aggregateFileDetails(functions, sources) {
+    if (!functions || functions.length === 0) return [];
+
+    // 按文件名分组
+    const fileMap = new Map();
+    for (const func of functions) {
+      const filename = func.filename || '';
+      if (!filename) continue;
+      if (!fileMap.has(filename)) {
+        fileMap.set(filename, []);
+      }
+      fileMap.get(filename).push(func);
+    }
+
+    const fileDetails = [];
+    for (const [filename, funcs] of fileMap) {
+      const functionCount = funcs.length;
+      const totalNloc = funcs.reduce((sum, f) => sum + (f.nloc || 0), 0);
+      const totalCC = funcs.reduce((sum, f) => sum + (f.cc || 0), 0);
+
+      // 将绝对路径转为相对路径
+      let filePath = filename;
+      if (sources && sources.length > 0) {
+        for (const src of sources) {
+          const normalizedSrc = src.replace(/\\/g, '/');
+          const normalizedPath = filePath.replace(/\\/g, '/');
+          if (normalizedPath.startsWith(normalizedSrc)) {
+            filePath = path.relative(src, filename);
+            break;
+          }
+        }
+      }
+      filePath = filePath.replace(/\\/g, '/');
+
+      // 保留每个函数的明细信息
+      const functionDetails = funcs.map(f => ({
+        functionName: f.name || '',
+        functionLoc: f.nloc || 0,
+        startLine: f.startLine || 0,
+        endLine: f.endLine || 0
+      }));
+
+      fileDetails.push({
+        filePath: filePath,
+        functionCount: functionCount,
+        avgFunctionLoc: parseFloat((totalNloc / functionCount).toFixed(2)),
+        avgCyclomaticComplexity: parseFloat((totalCC / functionCount).toFixed(2)),
+        functionDetails: functionDetails
+      });
+    }
+
+    return fileDetails;
+  }
+
+  getName() {
+    return 'lizard';
+  }
+}
+
+module.exports = LizardDetector;
+
+
+/***/ }),
+
+/***/ 2034:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { execSync } = __nccwpck_require__(5317);
+const path = __nccwpck_require__(6928);
+const fs = __nccwpck_require__(9896);
+const BaseDetector = __nccwpck_require__(658);
+const FileCollector = __nccwpck_require__(6790);
+
+// scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
+function getSccPath() {
+  // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+  // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
+  // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 src/detectors
+  const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
+    ? __nccwpck_require2_.ab
+    : null;
+  // 候选顺序：
+  // 1. bundle 根 + bin/（标准 ncc 打包形态，asset 随目录分发）
+  // 2. bundle 根根目录平铺（部分平台分发时把 asset 平铺到 dist/ 根）
+  // 3. 源码结构：__dirname=src/detectors，上溯一层为 src/（即 src/bin/scc）
+  const candidates = [];
+  if (bundleRoot) {
+    candidates.push(path.join(bundleRoot, 'bin', 'scc'));
+    candidates.push(path.join(bundleRoot, 'scc'));
+  }
+  candidates.push(path.join(__dirname, 'bin', 'scc'));
+  candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
+  candidates.push(path.join(__dirname, 'scc'));
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755，保证可执行
+      try {
+        fs.chmodSync(candidate, 0o755);
+      } catch (e) {
+        console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
+      }
+      return candidate;
+    }
+  }
+  // PATH 探测：确认 runner 环境本身安装了 scc 才使用裸命令名，
+  // 避免执行注定失败的命令产生误导性报错
+  try {
+    execSync('command -v scc', { stdio: 'ignore' });
+    return 'scc';
+  } catch (e) {
+    console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
+    return null;
+  }
+}
+
+class SlocDetector extends BaseDetector {
+  constructor(config = {}) {
+    super(config);
+    this.allowedExtensions = config.allowedExtensions || [];
+    this.sccPath = getSccPath();
+  }
+
+  async detect(source) {
+    const sources = Array.isArray(source) ? source : [source];
+    const excludeDirs = this.config.excludeDirs || [];
+
+    const sccArgs = this.buildSccArgs(sources, excludeDirs);
+
+    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接回退本地逐文件统计，
+    // 跳过注定失败的命令执行
+    if (!this.sccPath) {
+      return this.fallbackDetect(sources, excludeDirs);
+    }
+
+    try {
+      const result = this.runScc(sccArgs, sources);
+      return result;
+    } catch (error) {
+      console.warn(`[WARN] scc 执行失败: ${error.message}，回退到逐文件统计`);
+      return this.fallbackDetect(sources, excludeDirs);
+    }
+  }
+
+  // 构建 scc 命令行参数
+  buildSccArgs(sources, excludeDirs) {
+    const args = ['-f', 'json', '--no-cocomo', '--no-size', '--by-file'];
+
+    // 不再向 scc 传 --exclude-dir：scc 自身的排除规则不支持 ** 等 glob 通配符，
+    // 无法与 FileCollector 的 exclude-dirs 语义对齐。改为扫描全量后，在 runScc 里
+    // 用 FileCollector.isPathExcluded 对每个文件做后置过滤，保证与其余指标完全一致。
+
+    // 限制文件扩展名
+    if (this.allowedExtensions.length > 0) {
+      const exts = this.allowedExtensions
+        .map(e => e.replace(/^\./, ''))
+        .join(',');
+      args.push('--include-ext', exts);
+    }
+
+    // 源目录
+    for (const src of sources) {
+      args.push(src);
+    }
+
+    return args;
+  }
+
+  // 执行 scc 并解析 JSON 输出
+  runScc(args, sources) {
+    const cmd = `"${this.sccPath}" ${args.join(' ')}`;
+
+    const output = execSync(cmd, {
+      encoding: 'utf8',
+      maxBuffer: 100 * 1024 * 1024,
+      timeout: 300000,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    const sccResult = JSON.parse(output.trim());
+
+    // scc JSON 输出格式: 按语言分组
+    // [{ Name, Code, Comment, Blank, Lines, Complexity, Count, Bytes, Files:[...] }]
+    const excludeDirs = this.config.excludeDirs || [];
+    let totalCode = 0;
+    let totalComment = 0;
+    let totalBlank = 0;
+    let totalLines = 0;
+    let totalComplexity = 0;
+    let totalFiles = 0;
+
+    // 收集文件级指标
+    const fileDetails = [];
+
+    for (const lang of sccResult) {
+      // 注意：不再累加语言级汇总（含被 exclude-dirs 排除的文件），改为逐文件统计并
+      // 过滤后累加，保证 codeScale 等与 FileCollector 收集的文件范围口径一致。
+      const langFiles = lang.Files;
+      if (!langFiles || !Array.isArray(langFiles) || langFiles.length === 0) {
+        // 兜底：若某语言条目缺少/为空按文件明细（Files 缺失或为空数组），无法做文件级
+        // 排除，则按语言级汇总计入，避免该语言整体被丢弃导致总代码量/总文件数/总复杂度偏小。
+        totalCode += lang.Code || 0;
+        totalComment += lang.Comment || 0;
+        totalBlank += lang.Blank || 0;
+        totalLines += lang.Lines || 0;
+        totalComplexity += lang.Complexity || 0;
+        totalFiles += lang.Count || 0;
+        continue;
+      }
+      for (const file of langFiles) {
+          // scc 不同版本的 --by-file JSON 输出字段名可能不同：
+          //   - 旧版：Name 是完整路径
+          //   - 新版（3.x+）：Name 是文件名，Location 是完整路径
+          // 优先取完整路径字段（Location），其次 Name（可能是文件名或完整路径）
+          const fileName = file.Location || file.Name || file.Path || file.File || '';
+          // 过滤掉语言汇总行（字段为空或不含路径分隔符/扩展名的语言名）
+          if (!fileName || !this.isFilePath(fileName)) {
+            console.log(`[DEBUG] 跳过非文件条目: Name="${fileName}", Code=${file.Code || 0}, keys=${Object.keys(file).join(',')}`);
+            continue;
+          }
+          // 将绝对路径转为相对路径
+          let filePath = this.toRelativePath(fileName, sources);
+          // 后置过滤：用 FileCollector 的目录剪枝语义排除命中 exclude-dirs 的文件，
+          // 保证与 FileCollector / lizard / duplication 收集的文件范围完全一致
+          if (excludeDirs.length > 0 && FileCollector.isPathExcluded(filePath, excludeDirs)) {
+            continue;
+          }
+          const code = file.Code || 0;
+          const comment = file.Comment || 0;
+          const blank = file.Blank || 0;
+          totalCode += code;
+          totalComment += comment;
+          totalBlank += blank;
+          totalLines += (file.Lines || (code + comment + blank));
+          totalComplexity += (file.Complexity || 0);
+          totalFiles++;
+          fileDetails.push({
+            filePath: filePath,
+            language: lang.Name || '',
+            loc: code,
+            commentLines: comment
+          });
+        }
+    }
+
+    console.log(`  - Total files: ${totalFiles}`);
+    console.log(`  - Code lines (codeScale): ${totalCode}`);
+    console.log(`  - Comment lines: ${totalComment}`);
+    console.log(`  - Blank lines: ${totalBlank}`);
+    console.log(`  - Total lines: ${totalLines}`);
+    console.log(`  - Complexity: ${totalComplexity}`);
+    console.log(`  - File details count: ${fileDetails.length}`);
+
+    // 如果 scc --by-file 未产出有效文件明细，回退到逐文件统计获取明细
+    if (fileDetails.length === 0) {
+      console.log('[DEBUG] scc --by-file 未产出文件明细，回退到逐文件统计');
+      const FileCollector = __nccwpck_require__(6790);
+      const excludeDirs = this.config.excludeDirs || [];
+      const allFiles = [];
+      for (const src of sources) {
+        const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+        allFiles.push(...files);
+      }
+      const uniqueFiles = [...new Set(allFiles)];
+      for (const file of uniqueFiles) {
+        try {
+          const content = fs.readFileSync(file, 'utf8');
+          let sourceCount = 0;
+          let commentCount = 0;
+          const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('/*') && !trimmed.startsWith('*') && !trimmed.startsWith('#')) {
+              sourceCount++;
+            } else if (trimmed) {
+              commentCount++;
+            }
+          }
+          const filePath = this.toRelativePath(file, sources);
+          const ext = path.extname(file).toLowerCase();
+          const langMap = {
+            '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
+            '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
+            '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
+            '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
+            '.scala': 'Scala', '.swift': 'Swift'
+          };
+          fileDetails.push({
+            filePath: filePath,
+            language: langMap[ext] || ext.replace('.', ''),
+            loc: sourceCount,
+            commentLines: commentCount
+          });
+        } catch (e) {
+          console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
+        }
+      }
+    }
+
+    return {
+      codeScale: totalCode,
+      rawLines: totalLines,
+      commentLines: totalComment,
+      blankLines: totalBlank,
+      sourceLines: totalCode,
+      complexity: totalComplexity,
+      fileDetails: fileDetails
+    };
+  }
+
+  // 判断 Name 是否为文件路径（而非语言名）
+  isFilePath(name) {
+    if (!name) return false;
+    // 文件路径应包含扩展名（含点号）或路径分隔符
+    return name.includes('.') || name.includes('/') || name.includes('\\');
+  }
+
+  // 将绝对路径转为相对路径（统一使用 / 分隔符）
+  toRelativePath(filePath, sources) {
+    if (sources && sources.length > 0) {
+      for (const src of sources) {
+        const normalizedSrc = src.replace(/\\/g, '/');
+        const normalizedPath = filePath.replace(/\\/g, '/');
+        if (normalizedPath.startsWith(normalizedSrc)) {
+          filePath = path.relative(src, filePath);
+          break;
+        }
+      }
+    }
+    return filePath.replace(/\\/g, '/');
+  }
+
+  // 回退方案：当 scc 不可用时，逐文件读取并统计行数
+  fallbackDetect(sources, excludeDirs) {
+    const FileCollector = __nccwpck_require__(6790);
+    const allFiles = [];
+    for (const src of sources) {
+      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+      allFiles.push(...files);
+    }
+    const uniqueFiles = [...new Set(allFiles)];
+
+    if (uniqueFiles.length === 0) {
+      return { codeScale: 0, rawLines: 0, commentLines: 0, blankLines: 0, sourceLines: 0, complexity: 0, fileDetails: [] };
+    }
+
+    let totalSource = 0;
+    let totalAll = 0;
+    let totalComment = 0;
+    let totalEmpty = 0;
+
+    // 收集文件级指标
+    const fileDetails = [];
+
+    for (const file of uniqueFiles) {
+      try {
+        const content = fs.readFileSync(file, 'utf8');
+        let normalized = content.replace(/\r\n|\r/g, '\n');
+        if (normalized.slice(-1) === '\n') normalized = normalized.slice(0, -1);
+        const lines = normalized.split('\n');
+        totalAll += lines.length;
+
+        let fileSourceLines = 0;
+        let fileCommentLines = 0;
+        let inBlock = false;
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (inBlock) {
+            totalComment++;
+            fileCommentLines++;
+            if (trimmed.includes('*/')) inBlock = false;
+            continue;
+          }
+          if (trimmed === '') { totalEmpty++; continue; }
+          if (trimmed.startsWith('/*')) {
+            totalComment++;
+            fileCommentLines++;
+            if (!trimmed.includes('*/')) inBlock = true;
+            continue;
+          }
+          if (trimmed.startsWith('//')) { totalComment++; fileCommentLines++; continue; }
+          totalSource++;
+          fileSourceLines++;
+        }
+
+        // 将绝对路径转为相对路径
+        let filePath = file;
+        for (const src of sources) {
+          const normalizedSrc = src.replace(/\\/g, '/');
+          const normalizedPath = filePath.replace(/\\/g, '/');
+          if (normalizedPath.startsWith(normalizedSrc)) {
+            filePath = path.relative(src, file);
+            break;
+          }
+        }
+        filePath = filePath.replace(/\\/g, '/');
+
+        // 根据扩展名推断语言
+        const ext = path.extname(file).toLowerCase();
+        const langMap = {
+          '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
+          '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
+          '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
+          '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
+          '.scala': 'Scala', '.swift': 'Swift'
+        };
+
+        fileDetails.push({
+          filePath: filePath,
+          language: langMap[ext] || ext.replace('.', ''),
+          loc: fileSourceLines,
+          commentLines: fileCommentLines
+        });
+      } catch (e) {
+        console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
+      }
+    }
+
+    console.log(`[DEBUG] Fallback statistics (scc 不可用):`);
+    console.log(`  - Code scale: ${totalSource}`);
+
+    return {
+      codeScale: totalSource,
+      rawLines: totalAll,
+      commentLines: totalComment,
+      blankLines: totalEmpty,
+      sourceLines: totalSource,
+      complexity: 0,
+      fileDetails: fileDetails
+    };
+  }
+
+  getName() {
+    return 'sloc';
+  }
+}
+
+module.exports = SlocDetector;
+
+
+/***/ }),
+
+/***/ 9863:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const SlocDetector = __nccwpck_require__(2034);
+const LizardDetector = __nccwpck_require__(843);
+const DuplicationDetector = __nccwpck_require__(1223);
+const MetricsCalculator = __nccwpck_require__(5378);
+const CoderepoUploader = __nccwpck_require__(2890);
+const ConfigLoader = __nccwpck_require__(6145);
+const Logger = __nccwpck_require__(8467);
+const FileUtils = __nccwpck_require__(7248);
+const FileCollector = __nccwpck_require__(6790);
+const path = __nccwpck_require__(6928);
+
+// 将日期格式化为 yyyy-MM-dd HH:mm:ss
+function formatDateTime(date) {
+  // 固定按东八区输出：CI runner 容器时区多为 UTC，用本地组件取值会使检测时间比实际早 8 小时
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23'
+  });
+  // en-CA 输出形如 "2026-08-24, 11:05:29"，把逗号替换为空格统一为 yyyy-MM-dd HH:mm:ss
+  return fmt.format(date).replace(',', '');
+}
+
+class MetricsScanner {
+  constructor(config = {}) {
+    this.config = config;
+    this.logger = new Logger({ verbose: config.verbose });
+    this.workingDir = config.workingDir || process.cwd();
+
+    const allowedExtensions = config.allowedExtensions || [];
+
+    this.slocDetector = new SlocDetector({
+      excludeDirs: config.excludeDirs,
+      allowedExtensions: allowedExtensions
+    });
+
+    this.lizardDetector = new LizardDetector({
+      excludeDirs: config.excludeDirs,
+      allowedExtensions: allowedExtensions,
+      lizardPath: config.detectors?.lizard?.path || 'lizard',
+      workingDir: this.workingDir
+    });
+
+    this.duplicationDetector = new DuplicationDetector({
+      excludeDirs: config.excludeDirs,
+      allowedExtensions: allowedExtensions,
+      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"
+      // - minLines=10：连续代码块至少 10 行才算一次重复
+      minLines: config.detectors?.duplication?.minLines || 10
+    });
+
+    this.uploader = new CoderepoUploader({
+      coderepoUrl: config.uploader?.coderepoUrl,
+      timeout: (config.uploader?.timeout || 30) * 1000,
+      useOidc: config.uploader?.useOidc,
+      apigAppKey: config.uploader?.apigAppKey,
+      apigAppSecret: config.uploader?.apigAppSecret,
+      obsAk: config.uploader?.obsAk,
+      obsSk: config.uploader?.obsSk
+    });
+  }
+
+  async scan(options = {}) {
+    const startTime = new Date();
+    const startTimeFormatted = formatDateTime(startTime);
+    this.logger.info('Starting code metrics scan...');
+
+    const sourceInput = options.sourceDir || this.config.sourceDir;
+    const sources = Array.isArray(sourceInput) ? sourceInput : [sourceInput];
+    const resolvedSources = sources.map(src =>
+      path.isAbsolute(src) ? src : path.resolve(this.workingDir, src)
+    );
+
+    const previewFiles = FileCollector.collectFiles(
+      resolvedSources,
+      this.config.excludeDirs || [],
+      this.config.allowedExtensions || []
+    );
+    let slocResult = {};
+    let lizardResult = {};
+    let duplicationResult = {};
+    let status = 0;
+
+    try {
+      if (this.config.detectors?.sloc?.enabled !== false) {
+        this.logger.info('Running scc detector (code size)...');
+        slocResult = await this.slocDetector.detect(resolvedSources);
+      }
+
+      if (this.config.detectors?.lizard?.enabled !== false) {
+        this.logger.info('Running lizard detector (function complexity)...');
+        lizardResult = await this.lizardDetector.detect(resolvedSources);
+      }
+
+      if (this.config.detectors?.duplication?.enabled !== false) {
+        this.logger.info('Running duplication detector (code duplication)...');
+        // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
+        duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
+      }
+
+      const mergedMetrics = MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
+      MetricsCalculator.validate(mergedMetrics);
+      const formattedMetrics = MetricsCalculator.formatForReport(mergedMetrics);
+
+      // 从格式化结果中分离 fileDetails 和总体指标
+      const { fileDetails, ...overallMetrics } = formattedMetrics;
+
+      const endTime = new Date();
+      const endTimeFormatted = formatDateTime(endTime);
+      const durationMs = endTime.getTime() - startTime.getTime();
+
+      const result = {
+        ...overallMetrics,
+        fileDetails: fileDetails,
+        detectionInfo: {
+          startTime: startTimeFormatted,
+          endTime: endTimeFormatted,
+          durationMs: durationMs,
+          sources: resolvedSources,
+          tools: {
+            sloc: this.config.detectors?.sloc?.enabled !== false,
+            lizard: this.config.detectors?.lizard?.enabled !== false,
+            duplication: this.config.detectors?.duplication?.enabled !== false
+          }
+        }
+      };
+
+      this.logger.info(`Scan completed in ${durationMs}ms`);
+
+      // 诊断日志：输出扫描结果规模，用于定位大数据量下的序列化超限问题
+      let snapshotTotal = 0;
+      for (const fd of fileDetails || []) {
+        if (fd.snapshotData) snapshotTotal += fd.snapshotData.length;
+      }
+      this.logger.info(
+        `Result scale: fileDetails=${(fileDetails || []).length}, snapshotDataTotal=${snapshotTotal} bytes, occurrences=${(formattedMetrics.duplicationOccurrences || []).length}`
+      );
+
+      if (options.output || this.config.output) {
+        const outputPath = path.isAbsolute(options.output || this.config.output)
+          ? (options.output || this.config.output)
+          : path.resolve(this.workingDir, options.output || this.config.output);
+        // 本地输出文件剥离大数据字段（snapshotData 与 duplicationOccurrences 的明文 content），
+        // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length。
+        // - snapshotData 仅详情页展示用，DB 上报另有一份
+        // - occurrence 的明文 content 仅上报用（uploader 已 Base64 编码后分批上报），
+        //   本地保留 groupId/filePath/起止行等元数据即可
+        const compactResult = {
+          ...result,
+          fileDetails: (result.fileDetails || []).map(fd => {
+            const { snapshotData, ...rest } = fd;
+            return rest;
+          }),
+          // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
+          // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
+          duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
+            const MAX_CONTENT_CHARS = 15 * 1024;
+            if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
+              return {
+                ...occ,
+                content: this.uploader.clipOversizeContent(occ.content, MAX_CONTENT_CHARS)
+              };
+            }
+            return occ;
+          })
+        };
+        FileUtils.writeJsonFile(outputPath, compactResult);
+        this.logger.info(`Results saved to: ${outputPath}`);
+        this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
+      }
+
+      if (options.upload || this.config.uploader?.enabled) {
+        const uploadResult = await this.uploader.upload(formattedMetrics, {
+          gitUrl: options.gitUrl,
+          branchName: options.branchName,
+          pipelineRunId: options.pipelineRunId,
+          commitId: options.commitId,
+          runNumber: options.runNumber,
+          pipelineName: options.pipelineName,
+          startTime: startTimeFormatted,
+          endTime: endTimeFormatted,
+          status: status
+        });
+
+        if (uploadResult.success) {
+          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
+          this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
+          // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
+          result.uploadInfo = {
+            success: true,
+            obsUrl: uploadResult.obsUrl,
+            detailLink: uploadResult.detailLink || '',
+            tip: uploadResult.tip || ''
+          };
+        } else {
+          this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
+          result.uploadInfo = { success: false, error: uploadResult.error };
+        }
+      }
+
+      return result;
+
+    } catch (error) {
+      this.logger.error(`Scan failed: ${error.message}`);
+      if (error && error.stack) {
+        // 输出堆栈头部，辅助定位是哪个 JSON.stringify / 哪个阶段抛错
+        this.logger.error(`Stack head: ${error.stack.split('\n').slice(0, 12).join('\n')}`);
+      }
+
+      // 失败时也上传报告，附带错误信息
+      if (options.upload || this.config.uploader?.enabled) {
+        const endTimeFormatted = formatDateTime(new Date());
+        try {
+          await this.uploader.upload({}, {
+            gitUrl: options.gitUrl,
+            branchName: options.branchName,
+            pipelineRunId: options.pipelineRunId,
+            commitId: options.commitId,
+            runNumber: options.runNumber,
+            pipelineName: options.pipelineName,
+            startTime: startTimeFormatted,
+            endTime: endTimeFormatted,
+            status: 1,
+            errorMessage: error.message
+          });
+        } catch (uploadError) {
+          this.logger.error(`Failed to upload error report: ${uploadError.message}`);
+        }
+      }
+
+      throw error;
+    }
+  }
+}
+
+module.exports = {
+  MetricsScanner,
+  ConfigLoader,
+  SlocDetector,
+  LizardDetector,
+  DuplicationDetector,
+  MetricsCalculator
+};
+
+
+/***/ }),
+
+/***/ 2890:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const axios = __nccwpck_require__(7269);
+const crypto = __nccwpck_require__(6982);
+const { callApig, getCredentials } = __nccwpck_require__(6239);
+const fs = __nccwpck_require__(9896);
+const os = __nccwpck_require__(857);
+const path = __nccwpck_require__(6928);
+const { execSync, execFileSync } = __nccwpck_require__(5317);
+
+// 上报接口路径前缀：新旧网关接口与认证方式一一对应
+// - OIDC 联邦认证（新）：workflow 声明 permissions: id-token: write 时启用
+// - AK/SK 签名（旧）：存量脚本兼容，接口与认证方式保持不变
+const OIDC_API_PREFIX = '/action-api';
+const AKSK_API_PREFIX = '/openlibing-coderepo';
+
+/**
+ * 华为云 APIG 签名器（SDK-HMAC-SHA256，AK/SK 模式使用）
+ * 基于官方 SDK APIGW-javascript-sdk-2.0.6 的 signer.js 完全对齐
+ * 签名流程：CanonicalRequest → StringToSign → HMAC-SHA256 → Authorization
+ */
+class ApigSigner {
+  constructor(ak, sk) {
+    this.ak = ak;
+    this.sk = sk;
+  }
+
+  /**
+   * 对请求进行签名，返回包含签名头的完整 headers
+   * 与官方 SDK 的 Signer.prototype.Sign() 方法对齐
+   */
+  sign({ method, url, headers = {}, body = '' }) {
+    // 解析 URL，提取 host、pathname、查询参数
+    const parsed = new URL(url);
+    const host = parsed.host;
+
+    // 解析 URI 和查询参数（与官方 SDK 的 HttpRequest 构造函数对齐）
+    const uri = decodeURIComponent(parsed.pathname);
+    const query = {};
+    if (parsed.search) {
+      const searchStr = parsed.search.substring(1);
+      for (const pair of searchStr.split('&')) {
+        const idx = pair.indexOf('=');
+        const key = idx >= 0 ? pair.substring(0, idx) : pair;
+        const value = idx >= 0 ? pair.substring(idx + 1) : '';
+        if (key) {
+          const decodedKey = decodeURIComponent(key);
+          const decodedValue = decodeURIComponent(value);
+          if (query[decodedKey] === undefined) {
+            query[decodedKey] = [decodedValue];
+          } else {
+            query[decodedKey].push(decodedValue);
+          }
+        }
+      }
+    }
+
+    // 设置时间戳（检查是否已有 X-Sdk-Date 头）
+    let datetime = null;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'x-sdk-date') {
+        datetime = headers[k];
+        break;
+      }
+    }
+    if (!datetime) {
+      datetime = this._getDateTime();
+      headers['X-Sdk-Date'] = datetime;
+    }
+
+    // 非 PUT/PATCH/POST 时 body 不参与签名（官方 SDK 规范）
+    if (method !== 'PUT' && method !== 'PATCH' && method !== 'POST') {
+      body = '';
+    }
+
+    // 确保 host 头存在
+    let hasHost = false;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'host') { hasHost = true; break; }
+    }
+    if (!hasHost) {
+      headers['Host'] = host;
+    }
+
+    // 获取参与签名的 header 列表（所有 header 名称小写排序）
+    const signedHeaderNames = Object.keys(headers).map(k => k.toLowerCase()).sort();
+
+    // 构造规范化 URI：每段 URL 编码后用 / 拼接，末尾强制补 /
+    const canonicalUri = this._canonicalUri(uri);
+
+    // 构造规范化查询字符串
+    const canonicalQs = this._canonicalQueryString(query);
+
+    // 构造规范化 Headers
+    const lowerHeaders = {};
+    for (const [k, v] of Object.entries(headers)) {
+      lowerHeaders[k.toLowerCase()] = v;
+    }
+    const canonicalHeaders = signedHeaderNames
+      .map(name => `${name}:${lowerHeaders[name].trim()}`)
+      .join('\n') + '\n';
+
+    const signedHeadersStr = signedHeaderNames.join(';');
+
+    // 计算 body 哈希（如果请求头中有 x-sdk-content-sha256，直接使用其值）
+    let hashedPayload;
+    let hasContentSha256 = false;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'x-sdk-content-sha256') {
+        hashedPayload = headers[k];
+        hasContentSha256 = true;
+        break;
+      }
+    }
+    if (!hasContentSha256) {
+      hashedPayload = this._sha256Hex(body);
+    }
+
+    // 构造规范化请求
+    const canonicalRequest = [
+      method.toUpperCase(),
+      canonicalUri,
+      canonicalQs,
+      canonicalHeaders,
+      signedHeadersStr,
+      hashedPayload
+    ].join('\n');
+
+    // 构造待签名字符串
+    const stringToSign = [
+      'SDK-HMAC-SHA256',
+      datetime,
+      this._sha256Hex(canonicalRequest)
+    ].join('\n');
+
+    // 计算签名
+    const signature = this._hmacSha256Hex(this.sk, stringToSign);
+
+    // 构造 Authorization 头
+    headers['Authorization'] = `SDK-HMAC-SHA256 Access=${this.ak}, SignedHeaders=${signedHeadersStr}, Signature=${signature}`;
+
+    return headers;
+  }
+
+  /**
+   * 构造规范化 URI：每段用 SDK 的 urlEncode 编码，末尾强制补 /
+   * 与官方 SDK 的 CanonicalURI() 函数完全对齐
+   */
+  _canonicalUri(uri) {
+    if (!uri || uri === '') return '/';
+    const parts = uri.split('/');
+    const encoded = parts.map(s => this._urlEncode(s));
+    let urlpath = encoded.join('/');
+    // 末尾强制补 /（官方 SDK 规范，APIG 网关签名校验要求）
+    if (urlpath[urlpath.length - 1] !== '/') {
+      urlpath = urlpath + '/';
+    }
+    return urlpath;
+  }
+
+  /**
+   * 构造规范化查询字符串
+   * 与官方 SDK 的 CanonicalQueryString() 函数对齐
+   */
+  _canonicalQueryString(query) {
+    const keys = Object.keys(query).sort();
+    if (keys.length === 0) return '';
+    const parts = [];
+    for (const key of keys) {
+      const k = this._urlEncode(key);
+      const values = Array.isArray(query[key]) ? [...query[key]].sort() : [query[key]];
+      for (const v of values) {
+        parts.push(`${k}=${this._urlEncode(v)}`);
+      }
+    }
+    return parts.join('&');
+  }
+
+  /**
+   * URL 编码：基于 Node.js querystring 模块改写，与官方 SDK 的 urlEncode() 完全对齐
+   * 不编码字符：A-Z a-z 0-9 - . _ ~
+   * 与 encodeURIComponent 的区别：! * ' ( ) 会被编码（encodeURIComponent 不编码这些）
+   */
+  _urlEncode(str) {
+    if (typeof str !== 'string') {
+      if (typeof str === 'object') str = String(str);
+      else str += '';
+    }
+    const hexTable = [];
+    for (let i = 0; i < 256; ++i) {
+      hexTable[i] = '%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase();
+    }
+    const noEscape = [
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
+      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1,
+      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0
+    ];
+    let out = '';
+    let lastPos = 0;
+    for (let i = 0; i < str.length; ++i) {
+      // 代理对场景下需在下方重新赋值（c = 0x10000 + ...），此处必须用 let
+      let c = str.charCodeAt(i);
+      if (c < 0x80) {
+        if (noEscape[c] === 1) continue;
+        if (lastPos < i) out += str.slice(lastPos, i);
+        lastPos = i + 1;
+        out += hexTable[c];
+        continue;
+      }
+      if (lastPos < i) out += str.slice(lastPos, i);
+      if (c < 0x800) {
+        lastPos = i + 1;
+        out += hexTable[0xC0 | (c >> 6)] + hexTable[0x80 | (c & 0x3F)];
+        continue;
+      }
+      if (c < 0xD800 || c >= 0xE000) {
+        lastPos = i + 1;
+        out += hexTable[0xE0 | (c >> 12)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
+        continue;
+      }
+      ++i;
+      if (i >= str.length) throw new URIError('ERR_INVALID_URI');
+      const c2 = str.charCodeAt(i) & 0x3FF;
+      lastPos = i + 1;
+      c = 0x10000 + (((c & 0x3FF) << 10) | c2);
+      out += hexTable[0xF0 | (c >> 18)] + hexTable[0x80 | ((c >> 12) & 0x3F)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
+    }
+    if (lastPos === 0) return str;
+    if (lastPos < str.length) return out + str.slice(lastPos);
+    return out;
+  }
+
+  _getDateTime() {
+    const now = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}T${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}Z`;
+  }
+
+  _sha256Hex(data) {
+    return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
+  }
+
+  _hmacSha256Hex(key, data) {
+    return crypto.createHmac('sha256', key).update(data, 'utf8').digest('hex');
+  }
+}
+
+class CoderepoUploader {
+  constructor(config = {}) {
+    this.baseUrl = config.coderepoUrl || 'http://localhost:8080';
+    this.timeout = config.timeout || 30000;
+    // 认证模式：useOidc=true 走新接口（/action-api/...）+ OIDC 免密联邦认证；
+    // 否则走旧接口（/openlibing-coderepo/...）+ AK/SK（SDK-HMAC-SHA256）签名，兼容存量脚本
+    this.useOidc = !!config.useOidc;
+    this.apigAppKey = config.apigAppKey || '';
+    this.apigAppSecret = config.apigAppSecret || '';
+    // OBS 上传凭证（AK/SK 模式使用）：复用 openlibing 平台 gitcode-action 统一桶（私有对象，供后端按 objectKey 下载）
+    this.obsAk = config.obsAk || '';
+    this.obsSk = config.obsSk || '';
+    // 平台所有 gitcode-action 插件上报结果的统一桶，code-metrics-action 目录存放代码度量上报
+    this.obsBucket = config.obsBucket || 'openlibing-gitcode-action';
+    // OBS 写/读 endpoint（华为云西南-贵阳一）
+    this.obsEndpoint = config.obsEndpoint || 'obs.cn-southwest-2.myhuaweicloud.com';
+    this.obsutilPath = '';
+  }
+
+  /**
+   * 上报代码度量指标。
+   *
+   * 认证模式（由 workflow 是否声明 permissions: id-token: write 决定）：
+   * - OIDC 联邦认证（新）：APIG 上报走 callApig 自动换证签名；OBS 上传走 STS 临时凭证
+   * - AK/SK 签名（旧）：APIG 上报走 ApigSigner 签名；OBS 上传走 obs-ak/obs-sk 静态凭证
+   *
+   * 流程（OBS 中转 + 单接口，彻底规避 APIG 12MB 请求体上限）：
+   * 1. 组装全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences），写本地临时 json
+   * 2. 上传到 OBS（桶 openlibing-gitcode-action / code-metrics-action/ 前缀，私有对象）
+   * 3. 仅调一次 POST /metrics/code/report：只传元数据 + obsUrl（固定格式下载链接），后端按 objectKey 下载解析入库
+   *
+   * 兜底：即使第 3 步上报失败（网络原因），第 2 步 OBS 文件已完整上传，可通过平台保底定时任务
+   * （入参 objectKey）下载补导入，保证数据不丢失。
+   *
+   * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
+   */
+  async upload(metricsData, options = {}) {
+    // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
+    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
+
+    // 1. 组装全量上报文件：元数据 + 全部指标明细（含 snapshotData / contentB64 等大 payload）
+    const fullPayload = {
+      gitUrl: options.gitUrl,
+      branchName: options.branchName,
+      pipelineRunId: options.pipelineRunId,
+      commitId: options.commitId,
+      runNumber: options.runNumber,
+      // pipelineName：流水线名称（GitCode runner 注入的 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
+      pipelineName: options.pipelineName,
+      metricsData: overallMetrics,
+      detectionStartedAt: options.startTime,
+      detectionCompletedAt: options.endTime,
+      status: options.status || 0,
+      fileDetails: fileDetails || [],
+      identicalFileDetails: identicalFileDetails || [],
+      duplicationOccurrences: this.encodeOccurrences(duplicationOccurrences || [])
+    };
+    if (options.errorMessage) {
+      fullPayload.errorMessage = options.errorMessage;
+    }
+
+    // 2. 上传全量文件到 OBS，得到固定格式下载链接
+    const obsResult = await this.uploadFullPayloadToOBS(fullPayload, options);
+    if (!obsResult.success) {
+      // OBS 上传失败：数据未落盘，直接返回失败（可整体重扫重传）
+      return obsResult;
+    }
+
+    // 3. 单次 /report：只传元数据 + obsUrl（body 恒定极小，远低于 APIG 12MB 上限）
+    const payload = {
+      gitUrl: options.gitUrl,
+      branchName: options.branchName,
+      pipelineRunId: options.pipelineRunId,
+      commitId: options.commitId,
+      runNumber: options.runNumber,
+      detectionStartedAt: options.startTime,
+      detectionCompletedAt: options.endTime,
+      status: options.status || 0,
+      obsUrl: obsResult.obsUrl
+    };
+    if (options.errorMessage) {
+      payload.errorMessage = options.errorMessage;
+    }
+
+    const mainUrl = this.buildUrl('/metrics/code/report');
+    const mainBody = JSON.stringify(payload);
+    console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${obsResult.obsUrl}`);
+    const mainResult = await this.report(mainUrl, mainBody);
+    if (!mainResult.success) {
+      // 上报失败但 OBS 文件已完整上传：打印固定格式链接，提示可走保底定时任务补导入
+      console.warn(
+        `[upload] report failed: ${mainResult.error}. 全量数据已上传 OBS(${obsResult.obsUrl})，` +
+          '可通过平台保底定时任务(入参 objectKey)补导入'
+      );
+      return { ...mainResult, obsUrl: obsResult.obsUrl };
+    }
+
+    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口输出
+    return {
+      success: true,
+      recordId: mainResult.recordId,
+      obsUrl: obsResult.obsUrl,
+      detailLink: mainResult.detailLink,
+      tip: mainResult.tip
+    };
+  }
+
+  /**
+   * 组装全量上报文件并上传到 OBS，返回固定格式下载链接与 objectKey。
+   * OBS 凭证按认证模式选择：
+   * - OIDC 模式：getCredentials 获取 STS 临时凭证（短时效，仅本次流水线运行有效）
+   * - AK/SK 模式：workflow 传入的 obs-ak / obs-sk 静态凭证
+   */
+  async uploadFullPayloadToOBS(fullPayload, options) {
+    let cred;
+    if (this.useOidc) {
+      try {
+        // 获取 STS 临时凭证（SDK 内部缓存，同一次流水线运行内只换证一次）
+        cred = await getCredentials();
+      } catch (e) {
+        return { success: false, error: `获取 OIDC 临时凭证失败: ${e.message}` };
+      }
+    } else if (!this.obsAk || !this.obsSk) {
+      return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
+    }
+    // 写本地临时文件（runner 上临时目录，用完即删）
+    const tmpFile = path.join(os.tmpdir(), `code-metrics-${Date.now()}.json`);
+    fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), 'utf-8');
+
+    const objectKey = this.buildObjectKey(options);
+    try {
+      await this.uploadToOBS(cred, tmpFile, objectKey);
+      const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
+      console.log(`[upload] OBS uploaded: ${obsUrl}`);
+      return { success: true, obsUrl: obsUrl, objectKey: objectKey };
+    } catch (e) {
+      return { success: false, error: `OBS 上传失败: ${e.message}` };
+    } finally {
+      // 清理本地临时文件，避免在 runner 上残留大文件
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch (e) {
+        // 忽略清理失败
+      }
+    }
+  }
+
+  /**
+   * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
+   * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
+   *
+   * 凭证传递（按认证模式）：
+   * - OIDC 模式：STS 临时凭证，经 -e/-i/-k/-t 命令行参数传 endpoint/临时AK/临时SK/SecurityToken
+   * - AK/SK 模式：静态 obs-ak/obs-sk，经 -e/-i/-k 命令行参数传递
+   * CI 平台对 secrets/临时令牌自动掩码，不会明文落日志。
+   *
+   * 安全处理：用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
+   * 外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令。
+   */
+  async uploadToOBS(cred, localFilePath, objectKey) {
+    const obsutil = await this.ensureObsutil();
+    // 记录 obsutil 版本，便于排查 runner 与本地环境差异
+    try {
+      const versionOut = execFileSync(obsutil, ['version'], { encoding: 'utf8' }).trim();
+      console.log(`[upload] obsutil version: ${versionOut}`);
+    } catch (e) {
+      console.log(`[upload] obsutil version check failed: ${e.message}`);
+    }
+    const args = [
+      'cp',
+      localFilePath,
+      `obs://${this.obsBucket}/${objectKey}`,
+      '-f',
+      `-e=${this.obsEndpoint}`
+    ];
+    if (this.useOidc) {
+      // OIDC 模式：STS 临时凭证 + SecurityToken
+      args.push(`-i=${cred.accessKeyId}`, `-k=${cred.secretAccessKey}`, `-t=${cred.securityToken}`);
+    } else {
+      // AK/SK 模式：静态凭证
+      args.push(`-i=${this.obsAk}`, `-k=${this.obsSk}`);
+    }
+    // 打印执行命令（-k/-t 参数脱敏），便于定位上传失败原因
+    const maskedArgs = args.map(a => (a.startsWith('-k=') || a.startsWith('-t=') ? `${a.split('=')[0]}=***` : a));
+    console.log(`[upload] exec obsutil ${maskedArgs.join(' ')}`);
+    execFileSync(obsutil, args, { stdio: 'inherit' });
+  }
+
+  /**
+   * 确保 obsutil 可用：不存在时下载并解压到临时目录（与 upload-sarif-action 一致）。
+   * 下载失败时回退到系统已安装的 obsutil，避免网络抖动导致上传中断。
+   */
+  async ensureObsutil() {
+    if (this.obsutilPath && fs.existsSync(this.obsutilPath)) {
+      return this.obsutilPath;
+    }
+    const tmpDir = os.tmpdir();
+    const downloadUrl =
+      'https://obs-community.obs.cn-north-1.myhuaweicloud.com/obsutil/current/obsutil_linux_amd64.tar.gz';
+    const tarball = path.join(tmpDir, 'obsutil_linux_amd64.tar.gz');
+    const extractedDir = path.join(tmpDir, 'obsutil');
+    try {
+      if (!fs.existsSync(extractedDir)) {
+        execSync(`mkdir -p "${extractedDir}"`, { shell: '/bin/bash' });
+      }
+      execSync(
+        `wget -q "${downloadUrl}" -O "${tarball}" 2>/dev/null || curl -sL "${downloadUrl}" -o "${tarball}"`,
+        { shell: '/bin/bash' }
+      );
+      execSync(`tar zxf "${tarball}" -C "${extractedDir}" --strip-components=1`, { shell: '/bin/bash' });
+      execSync(`chmod 755 "${extractedDir}/obsutil"`, { shell: '/bin/bash' });
+      this.obsutilPath = path.join(extractedDir, 'obsutil');
+    } catch (e) {
+      // 下载失败时尝试使用系统已安装的 obsutil
+      try {
+        const existing = execSync('which obsutil', { encoding: 'utf8', shell: '/bin/bash' }).trim();
+        if (existing) {
+          this.obsutilPath = existing;
+        }
+      } catch (e2) {
+        // 无系统 obsutil，抛错
+      }
+      if (!this.obsutilPath) {
+        throw new Error(`obsutil 安装失败: ${e.message}`);
+      }
+    }
+    return this.obsutilPath;
+  }
+
+  /**
+   * 构造 OBS 对象 key（固定格式，供后端/保底任务按 objectKey 下载解析入库）。
+   * 规则：code-metrics-action/{owner}/{repo}/{pipelineRunId}/{ts}-metrics.json
+   * branchName 不进入路径（远端分支可能含 / 造成路径歧义），只放在文件内元数据中。
+   */
+  buildObjectKey(options) {
+    const ownerRepo = this.extractOwnerRepo(options.gitUrl) || 'unknown';
+    const pipelineRunId = options.pipelineRunId || 'manual';
+    const ts = this.formatDateTime(new Date());
+    return `code-metrics-action/${ownerRepo}/${pipelineRunId}/${ts}-metrics.json`;
+  }
+
+  /**
+   * 从 gitUrl 提取 owner/repo（形如 git@host:owner/repo 或 https://host/owner/repo）。
+   */
+  extractOwnerRepo(gitUrl) {
+    if (!gitUrl) {
+      return '';
+    }
+    const url = String(gitUrl).replace(/\.git$/, '').replace(/\/+$/, '');
+    const match = url.match(/(?:git@[^:]+:|https?:\/\/[^/]+\/)(.+)$/);
+    return match ? match[1] : '';
+  }
+
+  /**
+   * 格式化时间为 yyyyMMddHHmmss（OBS 对象 key 用，UTC）。
+   */
+  formatDateTime(date) {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}`;
+  }
+
+  /**
+   * 把出现位置列表中的明文 content 编码为 contentB64，移除明文字段。
+   * 已编码数据跳过（防二次编码）。
+   * 重复块内容完整编码不做截断：全量上报文件上传 OBS（不受 APIG body 限制），
+   * 入库 code_metrics_duplication_block.content_b64 为 LONGTEXT 可承载。
+   */
+  encodeOccurrences(occurrences) {
+    return occurrences.map(occ => {
+      return {
+        groupId: occ.groupId,
+        contentHash: occ.contentHash,
+        occurrenceIndex: occ.occurrenceIndex,
+        filePath: occ.filePath,
+        startLine: occ.startLine,
+        endLine: occ.endLine,
+        contentB64: this.encodeB64(occ.content)
+      };
+    });
+  }
+
+  /**
+   * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
+   * 按行省略：头/尾各保留若干整行，省略标记显示被省略的行数。
+   * 仅用于本地 metrics.json 输出文件的防护性裁剪（防 V8 单字符串上限）；
+   * 上报链路（encodeOccurrences）不截断，完整内容上传 OBS。
+   */
+  clipOversizeContent(content, maxChars) {
+    if (typeof content !== 'string' || content.length <= maxChars) {
+      return content;
+    }
+    // 按行拆分；头/尾各以预算的 35% 为字符配额累积整行，保证裁剪后总量仍受控
+    const lines = content.split('\n');
+    const totalLines = lines.length;
+    const sideChars = Math.floor(maxChars * 0.35);
+    // 头部：从首行开始累积整行，直到逼近 sideChars
+    let headLines = 0;
+    let headChars = 0;
+    for (let i = 0; i < totalLines; i++) {
+      const len = lines[i].length + 1; // 行内容 + 换行符
+      if (headLines > 0 && headChars + len > sideChars) break;
+      headChars += len;
+      headLines++;
+    }
+    // 尾部：从末行开始累积整行，直到逼近 sideChars
+    let tailLines = 0;
+    let tailChars = 0;
+    for (let i = totalLines - 1; i >= 0; i--) {
+      const len = lines[i].length + 1;
+      if (tailLines > 0 && tailChars + len > sideChars) break;
+      tailChars += len;
+      tailLines++;
+    }
+    const omittedLines = Math.max(0, totalLines - headLines - tailLines);
+    const head = lines.slice(0, headLines).join('\n');
+    const tail = lines.slice(totalLines - tailLines).join('\n');
+    const clipped =
+      (headLines > 0 ? head : '') +
+      (omittedLines > 0 ? `\n... ${omittedLines} lines omitted ...\n` : '') +
+      (tailLines > 0 ? tail : '');
+    // 兜底：单行超长导致按行裁剪后仍超限时，退化为按字符裁剪
+    if (clipped.length > maxChars) {
+      const headChars2 = Math.floor(maxChars * 0.35);
+      const tailChars2 = Math.floor(maxChars * 0.35);
+      const omittedChars = content.length - headChars2 - tailChars2;
+      return (
+        content.slice(0, headChars2) +
+        `\n... ${omittedChars} chars omitted ...\n` +
+        content.slice(content.length - tailChars2)
+      );
+    }
+    return clipped;
+  }
+
+  /**
+   * Base64 编码字符串（UTF-8）。
+   * 已编码数据（通过回检判定）跳过，防二次编码。
+   */
+  encodeB64(str) {
+    if (!str) return '';
+    // 简单回检：若解码后重新编码与原值一致，视为已编码
+    try {
+      const decoded = Buffer.from(str, 'base64').toString('utf8');
+      const reEncoded = Buffer.from(decoded, 'utf8').toString('base64');
+      if (reEncoded === str) return str;
+    } catch (e) {
+      // 解码失败说明是明文，继续编码
+    }
+    return Buffer.from(str, 'utf8').toString('base64');
+  }
+
+  /**
+   * 拼接完整请求 URL：按认证模式选择新旧接口前缀
+   * - OIDC 模式：/action-api/metrics/code/report
+   * - AK/SK 模式：/openlibing-coderepo/metrics/code/report
+   */
+  buildUrl(path) {
+    const prefix = this.useOidc ? OIDC_API_PREFIX : AKSK_API_PREFIX;
+    return this.baseUrl.replace(/\/+$/, '') + prefix + path;
+  }
+
+  /**
+   * 调用 APIG 上报接口并解析 DataResult 响应（按认证模式选择签名方式）。
+   * - OIDC 模式：SDK callApig 免密联邦认证（OIDC ID Token -> STS 临时凭证 ->
+   *   V11-HMAC-SHA256 签名 + X-Security-Token）
+   * - AK/SK 模式：ApigSigner SDK-HMAC-SHA256 签名（原有方式）
+   * 返回 { success, recordId?, detailLink?, tip?, error? }
+   */
+  async report(url, body) {
+    try {
+      let resData;
+      if (this.useOidc) {
+        const res = await callApig('POST', url, { 'Content-Type': 'application/json' }, body);
+        resData = res.data;
+
+        // 非 2xx：HTTP 层失败（网关拒绝、鉴权失败等）
+        if (res.status < 200 || res.status >= 300) {
+          const httpMsg = (resData && (resData.msg || resData.message || resData.error_msg)) || `HTTP ${res.status}`;
+          console.error(`Upload failed: HTTP ${res.status}, URL: ${url}`);
+          return { success: false, error: httpMsg };
+        }
+      } else {
+        // AK/SK 模式：凭证缺失时直接失败并给出明确提示
+        if (!this.apigAppKey || !this.apigAppSecret) {
+          return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 AK/SK 凭证（apig-app-key / apig-app-secret），无法上报' };
+        }
+        const signer = new ApigSigner(this.apigAppKey, this.apigAppSecret);
+        const headers = signer.sign({
+          method: 'POST',
+          url: url,
+          headers: { 'Content-Type': 'application/json' },
+          body: body
+        });
+        const response = await axios.post(url, body, { headers, timeout: this.timeout });
+        resData = response.data;
+      }
+
+      // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功
+      if (resData?.code !== 200) {
+        // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因
+        console.error(
+          `[upload] report business failed: code=${resData?.code}, msg=${resData?.msg}, adviceMsg=${resData?.adviceMsg}`
+        );
+        return { success: false, error: resData?.msg || 'Unknown error' };
+      }
+
+      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象；当前服务端返回 CodeMetricsReportVO
+      const recordId = resData?.data?.recordId
+        || resData?.data?.id
+        || (typeof resData?.data === 'number' || typeof resData?.data === 'string' ? resData.data : null)
+        || resData?.recordId
+        || resData?.id;
+
+      // data.detailLink：平台分支页固定单条跳转链接；data.tip：仓未录入/分支未登记提示（两者互斥，可均为空）
+      const detailLink = typeof resData?.data?.detailLink === 'string' ? resData.data.detailLink : '';
+      const tip = typeof resData?.data?.tip === 'string' ? resData.data.tip : '';
+
+      return { success: true, recordId: recordId, detailLink: detailLink, tip: tip };
+    } catch (error) {
+      // 输出详细错误信息以便排查网络问题
+      console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
+      const resData = error.response?.data;
+      const errorMsg = resData?.msg || resData?.message || error.message;
+      return { success: false, error: errorMsg };
+    }
+  }
+}
+
+module.exports = CoderepoUploader;
+
+
+/***/ }),
+
+/***/ 6790:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+
+class FileCollector {
+  // 缺省代码扩展名白名单（allowed-extensions 未配置时生效，业界惯例为白名单制，
+  // 对齐 scc/cloc 内置语言的常见子集；.gn/.gni/.prelds 为 OHOS 构建体系特有脚本）
+  static DEFAULT_CODE_EXTENSIONS = [
+    // C/C++ 家族
+    '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hxx', '.inl', '.cu', '.cuh',
+    // 主流通用语言
+    '.java', '.cs', '.go', '.rs', '.swift', '.kt', '.kts', '.scala', '.groovy',
+    '.py', '.rb', '.php', '.pl', '.pm', '.lua', '.r', '.jl', '.dart', '.m', '.mm',
+    '.tcl', '.asm', '.s',
+    // 前端
+    '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue', '.svelte',
+    '.html', '.htm', '.css', '.scss', '.less',
+    // 脚本
+    '.sh', '.bash', '.ps1', '.bat', '.cmd', '.gradle',
+    // 数据/配置（scc 亦将这些计入统计）
+    '.json', '.xml', '.yml', '.yaml', '.toml', '.ini', '.cfg', '.conf', '.properties',
+    '.sql', '.proto',
+    // 构建脚本
+    '.cmake', '.mk',
+    // OHOS 构建体系
+    '.gn', '.gni', '.prelds'
+  ];
+
+  // 文件名特例：无扩展名或需按文件名识别的构建/入口文件（对齐 scc/cloc 的文件名识别规则），
+  // 不受扩展名白名单限制，始终放行
+  static SPECIAL_FILE_NAMES = [
+    'cmakelists.txt', 'makefile', 'gnumakefile', 'dockerfile', 'jenkinsfile',
+    'rakefile', 'gemfile', 'build', 'build.bazel', 'workspace'
+  ];
+
+  // 默认跳过的隐藏目录（定向黑名单）：只排版本控制与 IDE 的私有目录，
+  // 不再按「. 开头」一刀切——否则 .gitcode 这类承载流水线配置的正式源码目录会被连带剪枝，
+  // 使本地收集范围（重复率分子）小于 scc 全量扫描范围（分母），重复率被系统性低估。
+  static DEFAULT_EXCLUDED_DIRS = ['.git', '.svn', '.hg', '.idea', '.vscode'];
+
+  /**
+   * 判断目录是否属于默认跳过的隐藏目录（版本控制/IDE 私有目录）
+   *
+   * @param {string} dirName 目录名（不含路径）
+   * @return {boolean} 命中默认跳过名单返回 true，否则返回 false
+   */
+  static isDefaultExcludedDir(dirName) {
+    return FileCollector.DEFAULT_EXCLUDED_DIRS.includes(String(dirName || '').toLowerCase());
+  }
+
+  /**
+   * 判断文件是否放行：文件名特例 > 显式 allowed-extensions > 缺省白名单。
+   * 扩展名统一小写比较；显式配置为覆盖式语义——用户指定扩展名后，
+   * 扫描范围 = 用户指定的扩展名 + 文件名特例（如指定 .h,.cpp 则只扫这两类 + CMakeLists.txt 等），
+   * 不再叠加缺省白名单。
+   */
+  static isAllowedFile(fileName, allowedExtensions) {
+    const lower = (fileName || '').toLowerCase();
+    if (FileCollector.SPECIAL_FILE_NAMES.includes(lower)) {
+      return true;
+    }
+    const normalized = (allowedExtensions || []).map(e => String(e).toLowerCase());
+    const list = normalized.length > 0 ? normalized : FileCollector.DEFAULT_CODE_EXTENSIONS;
+    const ext = path.extname(lower);
+    return list.includes(ext);
+  }
+
+  /**
+   * 判断目录/文件是否被 excludeDirs 命中（大小写敏感）。匹配目标为条目相对扫描根的路径（正斜杠）。
+   * 规则：
+   * 1. 裸名称（不含 /）：
+   *    - 无通配符：仅顶层精确匹配。例：test.ts、docs（不命中 src/test.ts；排任意层级同名文件请用 globstar 路径）
+   *    - 含通配符：任意层级匹配条目名。例：*.test.js、*test*
+   * 2. 路径（含 /）：锚定扫描根，匹配相对路径，命中目录即整棵子树剪枝。
+   *    例：src/opensource/grapesjs、src/opensource/*
+   * 前导斜杠为可选显式写法（/test.ts 仅匹配顶层 test.ts），尾部斜杠忽略（docs/ ≡ docs）。
+   * 通配符：*（单段不含 /）、**（跨目录）、?（单字符）、[abc]/[!abc]（字符类）。
+   * 目录与文件统一适用同一条规则，不按类型区分。
+   */
+  static isExcluded(name, relPath, excludeDirs) {
+    if (!excludeDirs || excludeDirs.length === 0) {
+      return false;
+    }
+    const rel = (relPath || '').replace(/\\/g, '/');
+    for (const raw of excludeDirs) {
+      let d = String(raw).trim().replace(/\\/g, '/');
+      if (!d) continue;
+      // 尾部斜杠忽略（docs/ ≡ docs），先剥离再做通配符/斜杠判定
+      d = d.replace(/\/+$/g, '');
+      if (!d) continue;
+      // 是否含斜杠决定规则：含 /（内部或前导）走路径锚定，不含 / 走名称匹配。
+      // 先判再剥前导斜杠（/i18n 含 / 应锚定顶层，剥掉后匹配串为 i18n）
+      const hasSlash = d.indexOf('/') >= 0;
+      d = d.replace(/^\/+/, '');
+      if (!d) continue;
+      // 是否含 glob 通配符（* ? [）
+      const hasWildcard = d.indexOf('*') >= 0 || d.indexOf('?') >= 0 || d.indexOf('[') >= 0;
+      if (hasSlash) {
+        // 路径规则：锚定扫描根，匹配相对路径
+        if (FileCollector.globToRegExp(d).test(rel)) {
+          return true;
+        }
+      } else if (hasWildcard) {
+        // 裸名称 + 通配符：任意层级匹配条目名
+        if (FileCollector.globToRegExp(d).test(name)) {
+          return true;
+        }
+      } else if (d === rel) {
+        // 裸名称（无通配符）：仅顶层精确匹配（等价锚定根）
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 判断某条相对路径（文件或目录）是否被 excludeDirs 整棵剪枝命中（大小写敏感）。
+   * 与 _walkDir 的目录剪枝语义一致：逐层考察「文件自身 + 所有祖先目录」，
+   * 任一层级被 isExcluded 命中即判定排除。用于对 scc 等外部扫描器的输出做后置过滤，
+   * 保证与 FileCollector 收集的文件范围完全一致。
+   * 例：excludeDirs=['go/','cpp/**'] 时，
+   *   - go/test-codeql.go：祖先目录 go 命中顶层规则 → 排除
+   *   - cpp/part_dup1.cpp：自身命中 cpp/** → 排除
+   *   - src/go/x.go：go 非顶层，不命中 go/ → 保留
+   */
+  static isPathExcluded(relPath, excludeDirs) {
+    const p = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!p) return false;
+    const parts = p.split('/');
+    let prefix = '';
+    for (let i = 0; i < parts.length; i++) {
+      prefix = prefix ? prefix + '/' + parts[i] : parts[i];
+      if (FileCollector.isExcluded(parts[i], prefix, excludeDirs)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // 将单个 glob 模式转为锚定整串匹配的正则（大小写敏感）。
+  // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
+  // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
+  static globToRegExp(glob) {
+    let re = '^';
+    for (let i = 0; i < glob.length; i++) {
+      const c = glob[i];
+      if (c === '*') {
+        // 连续 * 合并为 **（跨目录分隔符）
+        if (glob[i + 1] === '*') {
+          while (glob[i + 1] === '*') i++;
+          if (glob[i + 1] === '/') {
+            // **/：匹配 0 层或多层目录，顶层与任意深层均命中
+            re += '(?:.*/)?';
+            i++;
+          } else {
+            re += '.*';
+          }
+        } else {
+          // *：单段内任意字符（不含 /）
+          re += '[^/]*';
+        }
+      } else if (c === '?') {
+        re += '[^/]';
+      } else if (c === '[') {
+        // 字符类：[abc]、[a-z]、[!abc]（或 [^abc]）；未闭合的 [ 当作普通字符
+        let j = i + 1;
+        let negate = false;
+        if (glob[j] === '!' || glob[j] === '^') {
+          negate = true;
+          j++;
+        }
+        let cls = '';
+        let closed = false;
+        let first = true;
+        while (j < glob.length) {
+          if (glob[j] === ']' && !first) {
+            closed = true;
+            break;
+          }
+          first = false;
+          cls += glob[j];
+          j++;
+        }
+        if (closed) {
+          re += '[' + (negate ? '^' : '') + cls + ']';
+          i = j;
+        } else {
+          re += '\\[';
+        }
+      } else {
+        // 正则元字符转义，其余按字面匹配
+        re += '\\^$.|+(){}'.indexOf(c) >= 0 ? '\\' + c : c;
+      }
+    }
+    return new RegExp(re + '$');
+  }
+
+  /**
+   * 收集文件列表
+   * @param {string|string[]} source - 源代码目录或文件路径（可以是字符串或数组）
+   * @param {string[]} excludeDirs - 排除列表（目录名 / 相对路径 / 文件名，逗号分隔）
+   * @param {string[]} allowedExtensions - 允许的文件扩展名列表（配置后完全覆盖缺省白名单）
+   * @returns {string[]} 文件路径列表
+   */
+  static collectFiles(source, excludeDirs = [], allowedExtensions = []) {
+    const files = [];
+
+    // 支持传入单个路径或路径数组
+    const sources = Array.isArray(source) ? source : [source];
+
+    for (const src of sources) {
+      const absolutePath = path.resolve(src);
+
+      if (!fs.existsSync(absolutePath)) {
+        console.warn(`[WARN] 路径不存在: ${absolutePath}`);
+        continue;
+      }
+
+      const stat = fs.statSync(absolutePath);
+
+      if (stat.isDirectory()) {
+        // 如果是目录，递归遍历
+        FileCollector._walkDir(absolutePath, '', excludeDirs, allowedExtensions, files);
+      } else if (stat.isFile()) {
+        // 单文件输入：文件级排除 + 扩展名白名单双重过滤
+        const name = path.basename(absolutePath);
+        // 相对扫描根的路径取调用方传入路径（正斜杠、剥离前导 ./ 与 /），
+        // 使含斜杠的路径式规则（如 src/opensource/*）在传入相对路径时同样生效；
+        // 两种形态叠加判断，保持与目录扫描的 isExcluded 语义一致。
+        const relInput = String(src).replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
+        if (FileCollector.isPathExcluded(name, excludeDirs) || FileCollector.isPathExcluded(relInput, excludeDirs)) {
+          continue;
+        }
+        if (!FileCollector.isAllowedFile(name, allowedExtensions)) {
+          console.warn(`[WARN] 文件扩展名不在允许列表中: ${absolutePath}`);
+          continue;
+        }
+        files.push(absolutePath);
+      }
+    }
+
+    return files;
+  }
+
+  // 递归遍历目录，根据排除规则和扩展名过滤文件。
+  // relPrefix：当前目录相对扫描根的路径（用于路径式排除匹配），根目录本身为 ''
+  static _walkDir(dir, relPrefix, excludeDirs, allowedExtensions, files) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      // 当前条目相对扫描根的路径（正斜杠），用于路径式排除匹配
+      const relPath = relPrefix ? relPrefix + '/' + entry.name : entry.name;
+
+      if (entry.isDirectory()) {
+        // 跳过默认隐藏目录（版本控制/IDE 私有目录）和 excludeDirs 命中的目录
+        // （纯目录名任意层级生效；相对路径如 src/opensource/grapesjs 命中即整棵子树剪枝）
+        if (FileCollector.isDefaultExcludedDir(entry.name)
+            || FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
+          continue;
+        }
+        FileCollector._walkDir(fullPath, relPath, excludeDirs, allowedExtensions, files);
+      } else if (entry.isFile()) {
+        // 文件级排除（文件名/相对路径命中 excludeDirs 即跳过）
+        if (FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
+          continue;
+        }
+        // 白名单三段式过滤：文件名特例 > 显式扩展名 > 缺省白名单
+        if (!FileCollector.isAllowedFile(entry.name, allowedExtensions)) {
+          continue;
+        }
+        files.push(fullPath);
+      }
+    }
+  }
+}
+
+module.exports = FileCollector;
+
+
+/***/ }),
+
+/***/ 7248:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+
+class FileUtils {
+  static writeJsonFile(filePath, data, pretty = true) {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const content = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
+    fs.writeFileSync(filePath, content, 'utf8');
+  }
+
+  static ensureDirectory(dirPath) {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+    return dirPath;
+  }
+
+  static getExtension(filePath) {
+    return path.extname(filePath);
+  }
+
+  static isFileAllowed(filePath, allowedExtensions) {
+    if (!allowedExtensions || allowedExtensions.length === 0) {
+      return true;
+    }
+    const ext = this.getExtension(filePath).toLowerCase();
+    return allowedExtensions.includes(ext);
+  }
+
+  static isDirectoryExcluded(dirPath, excludeDirs) {
+    if (!excludeDirs || excludeDirs.length === 0) {
+      return false;
+    }
+    const dirName = path.basename(dirPath);
+    return excludeDirs.some(exclude => {
+      return dirName === exclude || dirPath.includes(`/${exclude}/`);
+    });
+  }
+}
+
+module.exports = FileUtils;
+
+
+/***/ }),
+
+/***/ 8467:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const winston = __nccwpck_require__(4240);
+
+class Logger {
+  constructor(config = {}) {
+    this.verbose = config.verbose || false;
+    this.logger = winston.createLogger({
+      level: this.verbose ? 'debug' : 'info',
+      format: winston.format.combine(
+        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+        winston.format.colorize(),
+        winston.format.printf(({ timestamp, level, message }) => {
+          return `${timestamp} [${level}] ${message}`;
+        })
+      ),
+      transports: [
+        new winston.transports.Console()
+      ]
+    });
+  }
+
+  // 支持多参数，拼接为一条消息
+  debug(...args) {
+    if (this.verbose) {
+      this.logger.debug(args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' '));
+    }
+  }
+
+  info(message) {
+    this.logger.info(message);
+  }
+
+  warn(message) {
+    this.logger.warn(message);
+  }
+
+  error(message) {
+    this.logger.error(message);
+  }
+}
+
+module.exports = Logger;
 
 
 /***/ }),
@@ -54278,7 +55627,7 @@ module.exports = parseParams
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
-/*! Axios v1.16.1 Copyright (c) 2026 Matt Zabriskie and contributors */
+/*! Axios v1.20.0 Copyright (c) 2026 Matt Zabriskie and contributors */
 
 
 var FormData$1 = __nccwpck_require__(6454);
@@ -54320,6 +55669,150 @@ const {
   iterator,
   toStringTag
 } = Symbol;
+
+/* Creating a function that will check if an object has a property. */
+const hasOwnProperty = (({
+  hasOwnProperty
+}) => (obj, prop) => hasOwnProperty.call(obj, prop))(Object.prototype);
+const isUnsafeObjectKey = prop => typeof prop === 'string' && (prop === '__proto__' || prop === 'constructor' || prop === 'prototype');
+
+/**
+ * Determine whether an inherited object must be treated as a shared-prototype
+ * boundary. Cross-realm Object.prototype objects cannot be distinguished
+ * reliably from application-created null-prototype objects because their
+ * properties are mutable, so all inherited terminal prototypes are excluded
+ * as a fail-closed boundary. A null-prototype source still keeps its own
+ * properties, as produced by mergeConfig and other safe materialization paths.
+ *
+ * @param {*} obj The object to inspect
+ * @param {*} prototype The object's prototype
+ * @param {boolean} source Whether obj is the original traversal source
+ *
+ * @returns {boolean} True when obj is a safe prototype traversal boundary
+ */
+const isPrototypeBoundary = (obj, prototype, source) => obj === Object.prototype || !source && prototype === null;
+
+/**
+ * Determine whether an object can retain its identity through code paths that
+ * add, replace, and remove config properties without bypassing unsafe-key
+ * filtering. Immutable objects, unsafe-key-bearing objects, and objects with
+ * accessor or restricted data properties must be materialized instead.
+ *
+ * @param {*} obj The object to inspect
+ *
+ * @returns {boolean} True when every own property is safe and fully mutable
+ */
+const isSafeAndFullyMutable = obj => {
+  if (!Object.isExtensible(obj)) {
+    return false;
+  }
+  const props = Object.getOwnPropertyNames(obj);
+  if (Object.getOwnPropertySymbols) {
+    props.push(...Object.getOwnPropertySymbols(obj));
+  }
+  return props.every(prop => {
+    if (isUnsafeObjectKey(prop)) {
+      return false;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(obj, prop);
+    return !!descriptor && descriptor.configurable && descriptor.writable === true;
+  });
+};
+
+/**
+ * Walk the prototype chain (excluding the source realm's Object.prototype)
+ * looking for an own `prop`. This distinguishes genuine own/inherited members
+ * — including class accessors and template prototypes — from members injected
+ * via Object.prototype pollution (e.g. `Object.prototype.username = '...'`),
+ * which live on Object.prototype itself and are therefore never matched.
+ *
+ * @param {*} thing The value whose chain to inspect
+ * @param {string|symbol} prop The property key to look for
+ *
+ * @returns {boolean} True when `prop` is owned below Object.prototype
+ */
+const hasOwnInPrototypeChain = (thing, prop) => {
+  let obj = thing;
+  const seen = [];
+  while (obj != null) {
+    if (seen.indexOf(obj) !== -1) {
+      return false;
+    }
+    seen.push(obj);
+    const prototype = getPrototypeOf(obj);
+    if (isPrototypeBoundary(obj, prototype, obj === thing)) {
+      return false;
+    }
+    if (hasOwnProperty(obj, prop)) {
+      return true;
+    }
+    obj = prototype;
+  }
+  return false;
+};
+
+/**
+ * Read `obj[prop]` only when it is safe from Object.prototype pollution. Own
+ * properties and members inherited from a non-Object.prototype source (a class
+ * instance or template object) are honored; a value reachable only through a
+ * polluted Object.prototype is ignored and `undefined` is returned.
+ *
+ * @param {*} obj The source object
+ * @param {string|symbol} prop The property key to read
+ *
+ * @returns {*} The resolved value, or undefined when unsafe/absent
+ */
+const getSafeProp = (obj, prop) => obj != null && hasOwnInPrototypeChain(obj, prop) ? obj[prop] : undefined;
+
+/**
+ * Flatten an object and its application-defined prototype chain into a
+ * null-prototype object. Members inherited only from the source realm's
+ * Object.prototype are deliberately excluded, while class/template members
+ * below that boundary are preserved.
+ *
+ * @param {*} thing The value to flatten
+ *
+ * @returns {*} A null-prototype copy, or the original value when it is already
+ * structurally safe or is not an object
+ */
+const toSafeFlatObject = thing => {
+  if (thing == null || typeof thing !== 'object' && typeof thing !== 'function') {
+    return thing;
+  }
+  const sourcePrototype = getPrototypeOf(thing);
+  if (sourcePrototype === null && isSafeAndFullyMutable(thing)) {
+    return thing;
+  }
+  const result = Object.create(null);
+  const merged = Object.create(null);
+  const seen = [];
+  let current = thing;
+  while (current != null) {
+    if (seen.indexOf(current) !== -1) {
+      break;
+    }
+    seen.push(current);
+    const prototype = current === thing ? sourcePrototype : getPrototypeOf(current);
+    if (isPrototypeBoundary(current, prototype, current === thing)) {
+      break;
+    }
+    const props = Object.getOwnPropertyNames(current);
+    if (Object.getOwnPropertySymbols) {
+      props.push(...Object.getOwnPropertySymbols(current));
+    }
+    for (const prop of props) {
+      if (isUnsafeObjectKey(prop)) {
+        continue;
+      }
+      if (!hasOwnProperty(merged, prop)) {
+        result[prop] = thing[prop];
+        merged[prop] = true;
+      }
+    }
+    current = prototype;
+  }
+  return result;
+};
 const kindOf = (cache => thing => {
   const str = toString.call(thing);
   return cache[str] || (cache[str] = str.slice(8, -1).toLowerCase());
@@ -54438,11 +55931,15 @@ const isBoolean = thing => thing === true || thing === false;
  * @returns {boolean} True if value is a plain Object, otherwise false
  */
 const isPlainObject = val => {
-  if (kindOf(val) !== 'object') {
+  if (!isObject(val)) {
     return false;
   }
   const prototype = getPrototypeOf(val);
-  return (prototype === null || prototype === Object.prototype || Object.getPrototypeOf(prototype) === null) && !(toStringTag in val) && !(iterator in val);
+  return (prototype === null || prototype === Object.prototype || getPrototypeOf(prototype) === null) &&
+  // Treat safe own/inherited Symbol.toStringTag or Symbol.iterator members as
+  // evidence the value is tagged/iterable, while ignoring members reachable
+  // only through shared or terminal prototype boundaries.
+  !hasOwnInPrototypeChain(val, toStringTag) && !hasOwnInPrototypeChain(val, iterator);
 };
 
 /**
@@ -54525,6 +56022,7 @@ const isBlob = kindOfTest('Blob');
  * @returns {boolean} True if value is a FileList, otherwise false
  */
 const isFileList = kindOfTest('FileList');
+const isSet = kindOfTest('Set');
 
 /**
  * Determine if a value is a Stream
@@ -54697,7 +56195,10 @@ function merge(...objs) {
     if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
       return;
     }
-    const targetKey = caseless && findKey(result, key) || key;
+
+    // findKey lowercases the key, so caseless lookup only applies to strings —
+    // symbol keys are identity-matched.
+    const targetKey = caseless && typeof key === 'string' && findKey(result, key) || key;
     // Read via own-prop only — a bare `result[targetKey]` walks the prototype
     // chain, so a polluted Object.prototype value could surface here and get
     // copied into the merged result.
@@ -54713,7 +56214,21 @@ function merge(...objs) {
     }
   };
   for (let i = 0, l = objs.length; i < l; i++) {
-    objs[i] && forEach(objs[i], assignValue);
+    const source = objs[i];
+    if (!source || isBuffer(source)) {
+      continue;
+    }
+    forEach(source, assignValue);
+    if (typeof source !== 'object' || isArray(source)) {
+      continue;
+    }
+    const symbols = Object.getOwnPropertySymbols(source);
+    for (let j = 0; j < symbols.length; j++) {
+      const symbol = symbols[j];
+      if (propertyIsEnumerable.call(source, symbol)) {
+        assignValue(source[symbol], symbol);
+      }
+    }
   }
   return result;
 }
@@ -54925,11 +56440,9 @@ const toCamelCase = str => {
     return p1.toUpperCase() + p2;
   });
 };
-
-/* Creating a function that will check if an object has a property. */
-const hasOwnProperty = (({
-  hasOwnProperty
-}) => (obj, prop) => hasOwnProperty.call(obj, prop))(Object.prototype);
+const {
+  propertyIsEnumerable
+} = Object.prototype;
 
 /**
  * Determine if a value is a RegExp object
@@ -55032,11 +56545,20 @@ const toJSONObject = obj => {
       if (!('toJSON' in source)) {
         // add-on descent / delete-on-ascent: preserves path semantics, so DAG nodes serialise at every occurrence (see #7230).
         visited.add(source);
-        const target = isArray(source) ? [] : {};
-        forEach(source, (value, key) => {
-          const reducedValue = visit(value);
-          !isUndefined(reducedValue) && (target[key] = reducedValue);
-        });
+        let target;
+        if (isSet(source)) {
+          target = [];
+          for (const value of source) {
+            const reducedValue = visit(value);
+            !isUndefined(reducedValue) && target.push(reducedValue);
+          }
+        } else {
+          target = isArray(source) ? [] : {};
+          forEach(source, (value, key) => {
+            const reducedValue = visit(value);
+            !isUndefined(reducedValue) && (target[key] = reducedValue);
+          });
+        }
         visited.delete(source);
         return target;
       }
@@ -55104,6 +56626,19 @@ const asap = typeof queueMicrotask !== 'undefined' ? queueMicrotask.bind(_global
 // *********************
 
 const isIterable = thing => thing != null && isFunction$1(thing[iterator]);
+
+/**
+ * Determine if a value is iterable via an iterator that is NOT sourced solely
+ * from a polluted Object.prototype. Use this instead of `isIterable` whenever
+ * the iterable comes from untrusted input (e.g. user-supplied header sources),
+ * so `Object.prototype[Symbol.iterator] = ...` cannot turn an ordinary object
+ * into an attacker-controlled entries iterator.
+ *
+ * @param {*} thing The value to test
+ *
+ * @returns {boolean} True if value has a non-polluted iterator
+ */
+const isSafeIterable = thing => thing != null && hasOwnInPrototypeChain(thing, iterator) && isIterable(thing);
 var utils$1 = {
   isArray,
   isArrayBuffer,
@@ -55149,6 +56684,9 @@ var utils$1 = {
   hasOwnProperty,
   hasOwnProp: hasOwnProperty,
   // an alias to avoid ESLint no-prototype-builtins detection
+  hasOwnInPrototypeChain,
+  getSafeProp,
+  toSafeFlatObject,
   reduceDescriptors,
   freezeMethods,
   toObjectSet,
@@ -55164,7 +56702,8 @@ var utils$1 = {
   isThenable,
   setImmediate: _setImmediate,
   asap,
-  isIterable
+  isIterable,
+  isSafeIterable
 };
 
 // RawAxiosHeaders whose duplicates are ignored by node
@@ -55194,17 +56733,18 @@ var parseHeaders = rawHeaders => {
     i = line.indexOf(':');
     key = line.substring(0, i).trim().toLowerCase();
     val = line.substring(i + 1).trim();
-    if (!key || parsed[key] && ignoreDuplicateOf[key]) {
+    const hasKey = utils$1.hasOwnProp(parsed, key);
+    if (!key || hasKey && utils$1.hasOwnProp(ignoreDuplicateOf, key)) {
       return;
     }
     if (key === 'set-cookie') {
-      if (parsed[key]) {
+      if (hasKey) {
         parsed[key].push(val);
       } else {
         parsed[key] = [val];
       }
     } else {
-      parsed[key] = parsed[key] ? parsed[key] + ', ' + val : val;
+      parsed[key] = hasKey ? parsed[key] + ', ' + val : val;
     }
   });
   return parsed;
@@ -55251,7 +56791,7 @@ function toByteStringHeaderObject(headers) {
   return byteStringHeaders;
 }
 
-const $internals = Symbol('internals');
+const $internals$1 = Symbol('internals');
 function normalizeHeader(header) {
   return header && String(header).trim().toLowerCase();
 }
@@ -55269,6 +56809,90 @@ function parseTokens(str) {
     tokens[match[1]] = match[2];
   }
   return tokens;
+}
+const parameterNameRE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+function trimOWS(value) {
+  let start = 0;
+  let end = value.length;
+  while (start < end) {
+    const code = value.charCodeAt(start);
+    if (code !== 0x09 && code !== 0x20) {
+      break;
+    }
+    start += 1;
+  }
+  while (end > start) {
+    const code = value.charCodeAt(end - 1);
+    if (code !== 0x09 && code !== 0x20) {
+      break;
+    }
+    end -= 1;
+  }
+  return start === 0 && end === value.length ? value : value.slice(start, end);
+}
+function decodeQuotedString(value) {
+  const last = value.length - 1;
+  if (last < 1 || value.charCodeAt(0) !== 0x22 || value.charCodeAt(last) !== 0x22) {
+    return value;
+  }
+  let decoded = '';
+  for (let i = 1; i < last; i++) {
+    const code = value.charCodeAt(i);
+    if (code === 0x22) {
+      return value;
+    }
+    if (code === 0x5c) {
+      i += 1;
+      if (i >= last) {
+        return value;
+      }
+    }
+    decoded += value[i];
+  }
+  return decoded;
+}
+function parseParameters(value) {
+  const parameters = Object.create(null);
+  const str = String(value);
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  function parseParameter(end) {
+    const part = trimOWS(str.slice(start, end));
+    const equals = part.indexOf('=');
+    if (equals < 1) {
+      return;
+    }
+    const name = trimOWS(part.slice(0, equals));
+    if (!parameterNameRE.test(name)) {
+      return;
+    }
+    const normalizedName = name.toLowerCase();
+    if (normalizedName === '__proto__' || normalizedName === 'constructor' || normalizedName === 'prototype') {
+      return;
+    }
+    const parameterValue = trimOWS(part.slice(equals + 1));
+    parameters[normalizedName] = decodeQuotedString(parameterValue);
+  }
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (quoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (code === 0x5c) {
+        escaped = true;
+      } else if (code === 0x22) {
+        quoted = false;
+      }
+    } else if (code === 0x22) {
+      quoted = true;
+    } else if (code === 0x2c || code === 0x3b) {
+      parseParameter(i);
+      start = i + 1;
+    }
+  }
+  parseParameter(str.length);
+  return parameters;
 }
 const isValidHeaderName = str => /^[-_a-zA-Z0-9^`|~,!#$%&'*+.]+$/.test(str.trim());
 function matchHeaderValue(context, value, header, filter, isHeaderNameFilter) {
@@ -55314,7 +56938,7 @@ class AxiosHeaders {
     function setHeader(_value, _header, _rewrite) {
       const lHeader = normalizeHeader(_header);
       if (!lHeader) {
-        throw new Error('header name must be a non-empty string');
+        return;
       }
       const key = utils$1.findKey(self, lHeader);
       if (!key || self[key] === undefined || _rewrite === true || _rewrite === undefined && self[key] !== false) {
@@ -55326,15 +56950,21 @@ class AxiosHeaders {
       setHeaders(header, valueOrRewrite);
     } else if (utils$1.isString(header) && (header = header.trim()) && !isValidHeaderName(header)) {
       setHeaders(parseHeaders(header), valueOrRewrite);
-    } else if (utils$1.isObject(header) && utils$1.isIterable(header)) {
-      let obj = {},
+    } else if (utils$1.isObject(header) && utils$1.isSafeIterable(header)) {
+      let obj = Object.create(null),
         dest,
         key;
       for (const entry of header) {
         if (!utils$1.isArray(entry)) {
-          throw TypeError('Object iterator must return a key-value pair');
+          throw new TypeError('Object iterator must return a key-value pair');
         }
-        obj[key = entry[0]] = (dest = obj[key]) ? utils$1.isArray(dest) ? [...dest, entry[1]] : [dest, entry[1]] : entry[1];
+        key = entry[0];
+        if (utils$1.hasOwnProp(obj, key)) {
+          dest = obj[key];
+          obj[key] = utils$1.isArray(dest) ? [...dest, entry[1]] : [dest, entry[1]];
+        } else {
+          obj[key] = entry[1];
+        }
       }
       setHeaders(obj, valueOrRewrite);
     } else {
@@ -55441,7 +57071,8 @@ class AxiosHeaders {
     return Object.entries(this.toJSON()).map(([header, value]) => header + ': ' + value).join('\n');
   }
   getSetCookie() {
-    return this.get('set-cookie') || [];
+    const value = this.get('set-cookie');
+    return utils$1.isArray(value) ? value : value == null || value === false ? [] : [value];
   }
   get [Symbol.toStringTag]() {
     return 'AxiosHeaders';
@@ -55449,13 +57080,16 @@ class AxiosHeaders {
   static from(thing) {
     return thing instanceof this ? thing : new this(thing);
   }
+  static parseParameters(value) {
+    return parseParameters(value);
+  }
   static concat(first, ...targets) {
     const computed = new this(first);
     targets.forEach(target => computed.set(target));
     return computed;
   }
   static accessor(header) {
-    const internals = this[$internals] = this[$internals] = {
+    const internals = this[$internals$1] = this[$internals$1] = {
       accessors: {}
     };
     const accessors = internals.accessors;
@@ -55543,10 +57177,46 @@ function redactConfig(config, redactKeys) {
   };
   return visit(config);
 }
+function stringifySafely$1(value) {
+  try {
+    return String(value);
+  } catch (err) {
+    return '';
+  }
+}
+function aggregateErrorMessage(error) {
+  const message = error.errors.map(entry => {
+    try {
+      return entry && entry.message ? stringifySafely$1(entry.message) : stringifySafely$1(entry);
+    } catch (err) {
+      return '';
+    }
+  }).filter(Boolean).join('; ');
+  return message || error.name || 'AggregateError';
+}
 class AxiosError extends Error {
   static from(error, code, config, request, response, customProps) {
-    const axiosError = new AxiosError(error.message, code || error.code, config, request, response);
-    axiosError.cause = error;
+    // `AggregateError` (thrown by Node on dual-stack/Happy-Eyeballs connection
+    // failures) has an empty `message`; its detail lives in `errors[]`. Without
+    // this, the wrapped error surfaces with a blank message (see #6721).
+    let message = error.message;
+    if (!message && utils$1.isArray(error.errors) && error.errors.length) {
+      message = aggregateErrorMessage(error);
+    }
+    const axiosError = new AxiosError(message, code || error.code, config, request, response);
+    // Match native `Error` `cause` semantics: non-enumerable. The wrapped
+    // error often carries circular internals (sockets, requests, agents), so
+    // an enumerable `cause` makes structured loggers (pino/winston) and any
+    // own-property walk throw "Converting circular structure to JSON".
+    // Regression from #6982; see #7205. `__proto__: null` mirrors the
+    // `message` descriptor below (prototype-pollution-safe descriptor).
+    Object.defineProperty(axiosError, 'cause', {
+      __proto__: null,
+      value: error,
+      writable: true,
+      enumerable: false,
+      configurable: true
+    });
     axiosError.name = error.name;
 
     // Preserve status from the original error if not already set from response
@@ -55637,6 +57307,19 @@ AxiosError.ERR_NOT_SUPPORT = 'ERR_NOT_SUPPORT';
 AxiosError.ERR_INVALID_URL = 'ERR_INVALID_URL';
 AxiosError.ERR_FORM_DATA_DEPTH_EXCEEDED = 'ERR_FORM_DATA_DEPTH_EXCEEDED';
 
+var PlatformBuffer = {
+  isBufferAvailable() {
+    return typeof Buffer !== 'undefined';
+  },
+  from(value) {
+    return Buffer.from(value);
+  }
+};
+
+// Default nesting limit shared with the inverse transform (formDataToJSON) so
+// the FormData <-> JSON round-trip stays symmetric.
+const DEFAULT_FORM_DATA_MAX_DEPTH = 100;
+
 /**
  * Determines if the given thing is a array or js object.
  *
@@ -55721,24 +57404,19 @@ function toFormData(obj, formData, options) {
 
   // eslint-disable-next-line no-param-reassign
   formData = formData || new (FormData$1 || FormData)();
-
-  // eslint-disable-next-line no-param-reassign
-  options = utils$1.toFlatObject(options, {
-    metaTokens: true,
-    dots: false,
-    indexes: false
-  }, false, function defined(option, source) {
-    // eslint-disable-next-line no-eq-null,eqeqeq
-    return !utils$1.isUndefined(source[option]);
-  });
-  const metaTokens = options.metaTokens;
+  const option = (name, fallback) => {
+    const value = utils$1.getSafeProp(options, name);
+    return utils$1.isUndefined(value) ? fallback : value;
+  };
+  const metaTokens = option('metaTokens', true);
   // eslint-disable-next-line no-use-before-define
-  const visitor = options.visitor || defaultVisitor;
-  const dots = options.dots;
-  const indexes = options.indexes;
-  const _Blob = options.Blob || typeof Blob !== 'undefined' && Blob;
-  const maxDepth = options.maxDepth === undefined ? 100 : options.maxDepth;
+  const visitor = option('visitor') || defaultVisitor;
+  const dots = option('dots', false);
+  const indexes = option('indexes', false);
+  const _Blob = option('Blob') || typeof Blob !== 'undefined' && Blob;
+  const maxDepth = option('maxDepth', DEFAULT_FORM_DATA_MAX_DEPTH);
   const useBlob = _Blob && utils$1.isSpecCompliantForm(formData);
+  const stack = [];
   if (!utils$1.isFunction(visitor)) {
     throw new TypeError('visitor must be a function');
   }
@@ -55754,9 +57432,37 @@ function toFormData(obj, formData, options) {
       throw new AxiosError('Blob is not supported. Use a Buffer instead.');
     }
     if (utils$1.isArrayBuffer(value) || utils$1.isTypedArray(value)) {
-      return useBlob && typeof Blob === 'function' ? new Blob([value]) : Buffer.from(value);
+      if (useBlob && typeof _Blob === 'function') {
+        return new _Blob([value]);
+      }
+      if (PlatformBuffer && PlatformBuffer.isBufferAvailable()) {
+        return PlatformBuffer.from(value);
+      }
+      throw new AxiosError('Blob is not supported. Use a Buffer instead.', AxiosError.ERR_NOT_SUPPORT);
     }
     return value;
+  }
+  function throwIfMaxDepthExceeded(depth) {
+    if (depth > maxDepth) {
+      throw new AxiosError('Object is too deeply nested (' + depth + ' levels). Max depth: ' + maxDepth, AxiosError.ERR_FORM_DATA_DEPTH_EXCEEDED);
+    }
+  }
+  function stringifyWithDepthLimit(value, depth) {
+    if (maxDepth === Infinity) {
+      return JSON.stringify(value);
+    }
+    const ancestors = [];
+    return JSON.stringify(value, function limitDepth(_key, currentValue) {
+      if (!utils$1.isObject(currentValue)) {
+        return currentValue;
+      }
+      while (ancestors.length && ancestors[ancestors.length - 1] !== this) {
+        ancestors.pop();
+      }
+      ancestors.push(currentValue);
+      throwIfMaxDepthExceeded(depth + ancestors.length - 1);
+      return currentValue;
+    });
   }
 
   /**
@@ -55780,7 +57486,7 @@ function toFormData(obj, formData, options) {
         // eslint-disable-next-line no-param-reassign
         key = metaTokens ? key : key.slice(0, -2);
         // eslint-disable-next-line no-param-reassign
-        value = JSON.stringify(value);
+        value = stringifyWithDepthLimit(value, 1);
       } else if (utils$1.isArray(value) && isFlatArray(value) || (utils$1.isFileList(value) || utils$1.endsWith(key, '[]')) && (arr = utils$1.toArray(value))) {
         // eslint-disable-next-line no-param-reassign
         key = removeBrackets(key);
@@ -55798,7 +57504,6 @@ function toFormData(obj, formData, options) {
     formData.append(renderKey(path, key, dots), convertValue(value));
     return false;
   }
-  const stack = [];
   const exposedHelpers = Object.assign(predicates, {
     defaultVisitor,
     convertValue,
@@ -55806,11 +57511,9 @@ function toFormData(obj, formData, options) {
   });
   function build(value, path, depth = 0) {
     if (utils$1.isUndefined(value)) return;
-    if (depth > maxDepth) {
-      throw new AxiosError('Object is too deeply nested (' + depth + ' levels). Max depth: ' + maxDepth, AxiosError.ERR_FORM_DATA_DEPTH_EXCEEDED);
-    }
+    throwIfMaxDepthExceeded(depth);
     if (stack.indexOf(value) !== -1) {
-      throw Error('Circular reference detected in ' + path.join('.'));
+      throw new Error('Circular reference detected in ' + path.join('.'));
     }
     stack.push(value);
     utils$1.forEach(value, function each(el, key) {
@@ -55867,9 +57570,7 @@ prototype.append = function append(name, value) {
   this._pairs.push([name, value]);
 };
 prototype.toString = function toString(encoder) {
-  const _encode = encoder ? function (value) {
-    return encoder.call(this, value, encode$1);
-  } : encode$1;
+  const _encode = encoder ? value => encoder.call(this, value, encode$1) : encode$1;
   return this._pairs.map(function each(pair) {
     return _encode(pair[0]) + '=' + _encode(pair[1]);
   }, '').join('&');
@@ -55900,11 +57601,16 @@ function buildURL(url, params, options) {
   if (!params) {
     return url;
   }
-  const _encode = options && options.encode || encode;
+  url = url || '';
   const _options = utils$1.isFunction(options) ? {
     serialize: options
   } : options;
-  const serializeFn = _options && _options.serialize;
+
+  // Read serializer options pollution-safely: own properties and methods on a
+  // class/template prototype are honored, but values injected onto a polluted
+  // Object.prototype are ignored.
+  const _encode = utils$1.getSafeProp(_options, 'encode') || encode;
+  const serializeFn = utils$1.getSafeProp(_options, 'serialize');
   let serializedParams;
   if (serializeFn) {
     serializedParams = serializeFn(params, _options);
@@ -55921,9 +57627,51 @@ function buildURL(url, params, options) {
   return url;
 }
 
+const $internals = Symbol('internals');
+
+// `handlers` is public and may be replaced with a nullish value by user code;
+// `clear()` has always tolerated that. Treat it as an empty stack rather than
+// dereferencing it.
+function countHandlers(handlers) {
+  return handlers ? handlers.length : 0;
+}
+function trimHandlers(handlers) {
+  if (!handlers) {
+    return;
+  }
+  while (handlers.length && handlers[handlers.length - 1] === null) {
+    handlers.pop();
+  }
+}
+function syncHandlerEntries(manager, internals) {
+  const handlers = manager.handlers;
+  const length = countHandlers(handlers);
+  if (handlers !== internals.handlersRef) {
+    internals.handlersRef = handlers;
+    internals.handlerEntries.clear();
+  } else if (length !== internals.handlersLength) {
+    if (!length) {
+      internals.handlerEntries.clear();
+    } else {
+      internals.handlerEntries.forEach(function removeStaleEntry(entry, id) {
+        if (handlers[entry.index] !== entry.handler) {
+          internals.handlerEntries.delete(id);
+        }
+      });
+    }
+  }
+  internals.handlersLength = length;
+}
 class InterceptorManager {
   constructor() {
     this.handlers = [];
+    this[$internals] = {
+      handlersRef: this.handlers,
+      handlersLength: this.handlers.length,
+      handlerEntries: new Map(),
+      iterationDepth: 0,
+      nextId: 0
+    };
   }
 
   /**
@@ -55936,13 +57684,25 @@ class InterceptorManager {
    * @return {Number} An ID used to remove interceptor later
    */
   use(fulfilled, rejected, options) {
-    this.handlers.push({
+    const handler = {
       fulfilled,
       rejected,
       synchronous: options ? options.synchronous : false,
       runWhen: options ? options.runWhen : null
+    };
+    const internals = this[$internals];
+    if (this.handlers == null) {
+      this.handlers = [];
+    }
+    syncHandlerEntries(this, internals);
+    const id = internals.nextId++;
+    this.handlers.push(handler);
+    internals.handlerEntries.set(id, {
+      handler,
+      index: this.handlers.length - 1
     });
-    return this.handlers.length - 1;
+    internals.handlersLength = this.handlers.length;
+    return id;
   }
 
   /**
@@ -55953,8 +57713,23 @@ class InterceptorManager {
    * @returns {void}
    */
   eject(id) {
-    if (this.handlers[id]) {
-      this.handlers[id] = null;
+    const internals = this[$internals];
+    syncHandlerEntries(this, internals);
+    const entry = internals.handlerEntries.get(id);
+    if (entry) {
+      internals.handlerEntries.delete(id);
+
+      // Ignore IDs invalidated by clear or direct replacement of handlers.
+      if (this.handlers[entry.index] !== entry.handler) {
+        return;
+      }
+      this.handlers[entry.index] = null;
+
+      // Do not reuse an index while forEach is walking its length snapshot.
+      if (!internals.iterationDepth) {
+        trimHandlers(this.handlers);
+        internals.handlersLength = this.handlers.length;
+      }
     }
   }
 
@@ -55966,6 +57741,7 @@ class InterceptorManager {
   clear() {
     if (this.handlers) {
       this.handlers = [];
+      syncHandlerEntries(this, this[$internals]);
     }
   }
 
@@ -55980,11 +57756,22 @@ class InterceptorManager {
    * @returns {void}
    */
   forEach(fn) {
-    utils$1.forEach(this.handlers, function forEachHandler(h) {
-      if (h !== null) {
-        fn(h);
+    const internals = this[$internals];
+    syncHandlerEntries(this, internals);
+    internals.iterationDepth++;
+    try {
+      utils$1.forEach(this.handlers, function forEachHandler(h) {
+        if (h !== null) {
+          fn(h);
+        }
+      });
+    } finally {
+      if (! --internals.iterationDepth) {
+        syncHandlerEntries(this, internals);
+        trimHandlers(this.handlers);
+        internals.handlersLength = countHandlers(this.handlers);
       }
-    });
+    }
   }
 }
 
@@ -55992,7 +57779,9 @@ var transitionalDefaults = {
   silentJSONParsing: true,
   forcedJSONParsing: true,
   clarifyTimeoutError: false,
-  legacyInterceptorReqResOrdering: true
+  legacyInterceptorReqResOrdering: true,
+  advertiseZstdAcceptEncoding: false,
+  validateStatusUndefinedResolves: true
 };
 
 var URLSearchParams = url.URLSearchParams;
@@ -56093,6 +57882,13 @@ function toURLEncodedForm(data, options) {
   });
 }
 
+const MAX_DEPTH = DEFAULT_FORM_DATA_MAX_DEPTH;
+function throwIfDepthExceeded(index) {
+  if (index > MAX_DEPTH) {
+    throw new AxiosError('FormData field is too deeply nested (' + index + ' levels). Max depth: ' + MAX_DEPTH, AxiosError.ERR_FORM_DATA_DEPTH_EXCEEDED);
+  }
+}
+
 /**
  * It takes a string like `foo[x][y][z]` and returns an array like `['foo', 'x', 'y', 'z']
  *
@@ -56101,13 +57897,24 @@ function toURLEncodedForm(data, options) {
  * @returns An array of strings.
  */
 function parsePropPath(name) {
-  // foo[x][y][z]
-  // foo.x.y.z
-  // foo-x-y-z
-  // foo x y z
-  return utils$1.matchAll(/\w+|\[(\w*)]/g, name).map(match => {
-    return match[0] === '[]' ? '' : match[1] || match[0];
-  });
+  // foo[x][y][z] -> ['foo', 'x', 'y', 'z']
+  // foo.x.y.z    -> ['foo', 'x', 'y', 'z']
+  // A path is split on `.` and on `[...]` groups. A segment — whether written
+  // in dot notation or captured inside brackets — may contain any character
+  // except `.`, `[` and `]`, so a key like `user-name` or `user name` is kept
+  // literal instead of being split (#5402). `.`, `[` and `]` keep their existing
+  // meaning, e.g. `foo[bar.baz]` -> ['foo', 'bar', 'baz'] and `[]` is an array push.
+  // Excluding `[` from the bracket group also makes the match fail fast at the
+  // next `[`, so a malformed name cannot rescan to the end of the string from
+  // every unmatched `[` — parsing stays linear in the length of the name.
+  const path = [];
+  const pattern = /[^.[\]]+|\[([^.[\]]*)]/g;
+  let match;
+  while ((match = pattern.exec(name)) !== null) {
+    throwIfDepthExceeded(path.length);
+    path.push(match[0] === '[]' ? '' : match[1] || match[0]);
+  }
+  return path;
 }
 
 /**
@@ -56139,6 +57946,7 @@ function arrayToObject(arr) {
  */
 function formDataToJSON(formData) {
   function buildPath(path, value, target, index) {
+    throwIfDepthExceeded(index);
     let name = path[index++];
     if (name === '__proto__') return true;
     const isNumericKey = Number.isFinite(+name);
@@ -56170,6 +57978,8 @@ function formDataToJSON(formData) {
   }
   return null;
 }
+
+const methodList = Object.freeze(['get', 'delete', 'head', 'options', 'post', 'put', 'patch', 'purge', 'link', 'unlink', 'query']);
 
 const own = (obj, key) => obj != null && utils$1.hasOwnProp(obj, key) ? obj[key] : undefined;
 
@@ -56287,7 +58097,7 @@ const defaults = {
     }
   }
 };
-utils$1.forEach(['delete', 'get', 'head', 'post', 'put', 'patch', 'query'], method => {
+utils$1.forEach(methodList, method => {
   defaults.headers[method] = {};
 });
 
@@ -56376,7 +58186,71 @@ function isAbsoluteURL(url) {
  * @returns {string} The combined URL
  */
 function combineURLs(baseURL, relativeURL) {
-  return relativeURL ? baseURL.replace(/\/?\/$/, '') + '/' + relativeURL.replace(/^\/+/, '') : baseURL;
+  if (!relativeURL) {
+    return baseURL;
+  }
+  let end = baseURL.length;
+  while (end > 0 && baseURL.charCodeAt(end - 1) === 47) {
+    end--;
+  }
+  return baseURL.slice(0, end) + '/' + relativeURL.replace(/^\/+/, '');
+}
+
+const urlParserControlCharacters = /[\t\n\r]/g;
+
+/**
+ * Match WHATWG URL preprocessing before checking a URL's protocol.
+ *
+ * @param {string} url
+ *
+ * @returns {string}
+ */
+function normalizeURLForProtocolCheck(url) {
+  if (typeof url !== 'string') {
+    return url;
+  }
+  let start = 0;
+  while (start < url.length && url.charCodeAt(start) <= 0x20) {
+    start++;
+  }
+  return url.slice(start).replace(urlParserControlCharacters, '');
+}
+
+const malformedHttpProtocol = /^https?:(?!\/\/)/i;
+
+// Redact the parts of a URL that can carry secrets before it is embedded in an
+// error message. AxiosError.toJSON() serializes `message` verbatim and errors
+// are commonly logged, while the opt-in `config.redact` model only cleans
+// config keys — it cannot reach the message. Redact only the genuinely
+// sensitive substrings — userinfo (credentials), query parameter values and
+// fragment contents — with the same REDACTED marker the config redaction uses,
+// while keeping the scheme, host, path and parameter names so the offending
+// request stays accurately identifiable.
+function redactFragment(fragment) {
+  if (!fragment) {
+    return fragment;
+  }
+  return fragment.replace(/(^|&)([^=&]*=)?[^&]+/g, (match, separator, parameterName = '') => {
+    return `${separator}${parameterName}${REDACTED}`;
+  });
+}
+function redactSensitiveURLParts(url) {
+  const redactedURL = url.replace(/^(https?:\/{0,2})[^/?#]*@/i, `$1${REDACTED}@`);
+  const fragmentIndex = redactedURL.indexOf('#');
+  const urlWithoutFragment = fragmentIndex === -1 ? redactedURL : redactedURL.slice(0, fragmentIndex);
+  const redactedURLWithoutFragment = urlWithoutFragment.replace(/([?&][^=&#]*=)[^&#]*/g, `$1${REDACTED}`);
+  if (fragmentIndex === -1) {
+    return redactedURLWithoutFragment;
+  }
+  return `${redactedURLWithoutFragment}#${redactFragment(redactedURL.slice(fragmentIndex + 1))}`;
+}
+function assertValidHttpProtocolURL(url, config) {
+  if (typeof url === 'string') {
+    const normalizedURL = normalizeURLForProtocolCheck(url);
+    if (malformedHttpProtocol.test(normalizedURL)) {
+      throw new AxiosError(`Invalid URL ${JSON.stringify(redactSensitiveURLParts(normalizedURL))}: missing "//" after protocol`, AxiosError.ERR_INVALID_URL, config);
+    }
+  }
 }
 
 /**
@@ -56389,9 +58263,11 @@ function combineURLs(baseURL, relativeURL) {
  *
  * @returns {string} The combined full path
  */
-function buildFullPath(baseURL, requestedURL, allowAbsoluteUrls) {
+function buildFullPath(baseURL, requestedURL, allowAbsoluteUrls, config) {
+  assertValidHttpProtocolURL(requestedURL, config);
   let isRelativeUrl = !isAbsoluteURL(requestedURL);
   if (baseURL && (isRelativeUrl || allowAbsoluteUrls === false)) {
+    assertValidHttpProtocolURL(baseURL, config);
     return combineURLs(baseURL, requestedURL);
   }
   return requestedURL;
@@ -56493,7 +58369,7 @@ function getEnv(key) {
   return process.env[key.toLowerCase()] || process.env[key.toUpperCase()] || '';
 }
 
-const VERSION = "1.16.1";
+const VERSION = "1.20.0";
 
 function parseProtocol(url) {
   const match = /^([-+\w]{1,25}):(?:\/\/)?/.exec(url);
@@ -56502,7 +58378,7 @@ function parseProtocol(url) {
 
 // RFC 2397: data:[<mediatype>][;base64],<data>
 // mediatype = type/subtype followed by optional ;name=value parameters
-const DATA_URL_PATTERN = /^([^,;]+\/[^,;]+)?((?:;[^,;=]+=[^,;]+)*)(;base64)?,([\s\S]*)$/;
+const DATA_URL_PATTERN = /^([^,;/]+\/[^,;/]+)?((?:;[^,;=]+=[^,;]+)*)(;base64)?,([\s\S]*)$/;
 
 /**
  * Parse data uri to a Buffer or Blob
@@ -56533,13 +58409,13 @@ function fromDataURI(uri, asBlob, options) {
 
     // RFC 2397 section 3: default mediatype is text/plain;charset=US-ASCII
     // Bare `data:,` leaves mime undefined; Blob normalises that to "" per spec.
-    let mime;
+    let mime = '';
     if (type) {
       mime = params ? type + params : type;
     } else if (params) {
       mime = 'text/plain' + params;
     }
-    const buffer = Buffer.from(decodeURIComponent(body), encoding);
+    const buffer = encoding === 'base64' ? Buffer.from(body, 'base64') : Buffer.from(decodeURIComponent(body), encoding);
     if (asBlob) {
       if (!_Blob) {
         throw new AxiosError('Blob is not supported', AxiosError.ERR_NOT_SUPPORT);
@@ -56551,6 +58427,31 @@ function fromDataURI(uri, asBlob, options) {
     return buffer;
   }
   throw new AxiosError('Unsupported protocol ' + protocol, AxiosError.ERR_NOT_SUPPORT);
+}
+
+const FORM_DATA_CONTENT_HEADERS = ['content-type', 'content-length'];
+
+/**
+ * Apply the headers generated by a FormData implementation to the request headers,
+ * honoring the `formDataHeaderPolicy` option: with 'content-only', copy only the
+ * content-* headers; otherwise merge all of them.
+ *
+ * @param {AxiosHeaders} headers - the request headers to mutate
+ * @param {Object | null | undefined} formHeaders - headers produced by the FormData implementation
+ * @param {String} [policy] - the resolved `formDataHeaderPolicy` config value
+ *
+ * @returns {void}
+ */
+function setFormDataHeaders(headers, formHeaders, policy) {
+  if (policy !== 'content-only') {
+    headers.set(formHeaders);
+    return;
+  }
+  Object.entries(formHeaders || {}).forEach(([key, val]) => {
+    if (FORM_DATA_CONTENT_HEADERS.includes(key.toLowerCase())) {
+      headers.set(key, val);
+    }
+  });
 }
 
 const kInternals = Symbol('internals');
@@ -56732,10 +58633,10 @@ const formDataToStream = (form, headersHandler, options) => {
     boundary = tag + '-' + platform.generateString(size, BOUNDARY_ALPHABET)
   } = options || {};
   if (!utils$1.isFormData(form)) {
-    throw TypeError('FormData instance required');
+    throw new TypeError('FormData instance required');
   }
   if (boundary.length < 1 || boundary.length > 70) {
-    throw Error('boundary must be 1-70 characters long');
+    throw new Error('boundary must be 1-70 characters long');
   }
   const boundaryBytes = textEncoder.encode('--' + boundary + CRLF);
   const footerBytes = textEncoder.encode('--' + boundary + '--' + CRLF);
@@ -56785,6 +58686,85 @@ class ZlibHeaderTransformStream extends stream.Transform {
   }
 }
 
+class Http2Sessions {
+  constructor() {
+    this.sessions = Object.create(null);
+  }
+  getSession(authority, options) {
+    options = Object.assign(Object.create(null), {
+      sessionTimeout: 1000
+    }, options);
+    let authoritySessions = this.sessions[authority];
+    if (authoritySessions) {
+      let len = authoritySessions.length;
+      for (let i = 0; i < len; i++) {
+        const [sessionHandle, sessionOptions] = authoritySessions[i];
+        if (!sessionHandle.destroyed && !sessionHandle.closed && util.isDeepStrictEqual(sessionOptions, options)) {
+          return sessionHandle;
+        }
+      }
+    }
+    const session = http2.connect(authority, options);
+    let removed;
+    let timer;
+    const removeSession = () => {
+      if (removed) {
+        return;
+      }
+      removed = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      let entries = authoritySessions,
+        len = entries.length,
+        i = len;
+      while (i--) {
+        if (entries[i][0] === session) {
+          if (len === 1) {
+            delete this.sessions[authority];
+          } else {
+            entries.splice(i, 1);
+          }
+          if (!session.closed) {
+            session.close();
+          }
+          return;
+        }
+      }
+    };
+    const originalRequestFn = session.request;
+    const {
+      sessionTimeout
+    } = options;
+    if (sessionTimeout != null) {
+      let streamsCount = 0;
+      session.request = function () {
+        const stream = originalRequestFn.apply(this, arguments);
+        streamsCount++;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        stream.once('close', () => {
+          if (! --streamsCount) {
+            timer = setTimeout(() => {
+              timer = null;
+              removeSession();
+            }, sessionTimeout);
+          }
+        });
+        return stream;
+      };
+    }
+    session.once('close', removeSession);
+    session.once('error', removeSession);
+    let entry = [session, options];
+    authoritySessions ? authoritySessions.push(entry) : authoritySessions = this.sessions[authority] = [entry];
+    return session;
+  }
+}
+
 const callbackify = (fn, reducer) => {
   return utils$1.isAsyncFn(fn) ? function (...args) {
     const cb = args.pop();
@@ -56798,12 +58778,138 @@ const callbackify = (fn, reducer) => {
   } : fn;
 };
 
-const LOOPBACK_HOSTNAMES = new Set(['localhost']);
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '0.0.0.0']);
+const trimTrailingDots = value => {
+  let end = value.length;
+  while (end && value.charCodeAt(end - 1) === 46) {
+    end--;
+  }
+  return end === value.length ? value : value.slice(0, end);
+};
 const isIPv4Loopback = host => {
   const parts = host.split('.');
   if (parts.length !== 4) return false;
   if (parts[0] !== '127') return false;
   return parts.every(p => /^\d+$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
+};
+
+/**
+ * Canonicalize an IPv4 address written in shorthand, octal, or hex form into
+ * dotted-decimal. IPv6 addresses and non-IP strings are returned unchanged so
+ * the existing IPv4-mapped IPv6 unmap path and the isLoopback path can still
+ * see them.
+ *
+ * Shorthand expansion mirrors Node's URL parser: literal parts fill from the
+ * left, the final part fills the remaining octets from the right with
+ * zero-padding on the left.
+ *   127.1     -> 127.0.0.1
+ *   127.0.1   -> 127.0.0.1
+ *   1.2.3     -> 1.2.0.3
+ *
+ * Each octet is parsed with an explicit base: 16 for `0x`/`0X` prefix, 8 for
+ * zero-prefixed multi-digit all-`0-7` parts, 10 otherwise. Zero-prefixed
+ * decimal-looking parts that contain `8` or `9` are rejected to match Node's
+ * URL parser, and the comparison layer falls through to non-bypass if either
+ * side rejects the form (fail-safe).
+ *
+ * Returns the input unchanged on any parse failure, out-of-range octet, or
+ * unusual shape (1-part, 5+ parts) so the comparison layer fails closed.
+ */
+const parseIPv4Octet = text => {
+  if (/^0[xX][0-9a-fA-F]+$/.test(text)) {
+    const n = parseInt(text.slice(2), 16);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (text.length > 1 && /^0[0-7]+$/.test(text)) {
+    const n = parseInt(text, 8);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (text.length > 1 && /^0[0-9]+$/.test(text)) {
+    return null;
+  }
+  if (/^[0-9]+$/.test(text)) {
+    const n = parseInt(text, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+};
+const normalizeIPAddress = host => {
+  if (typeof host !== 'string' || !host || host.indexOf(':') !== -1) {
+    return host;
+  }
+  let h = host;
+  if (h.charAt(0) === '[' && h.charAt(h.length - 1) === ']') {
+    h = h.slice(1, -1);
+  }
+  h = trimTrailingDots(h);
+
+  // Allowed characters for any IPv4 shape: digits, dot, 'x', 'X', hex digits.
+  if (!/^[0-9.xXa-fA-F]+$/.test(h)) return host;
+  const parts = h.split('.');
+
+  // No part may be empty (e.g. "127..0.1" or "127.0.0."). Trailing dots are
+  // already stripped above; this guards against the empty-middle case.
+  if (parts.some(p => p === '')) return host;
+  if (parts.length === 4) {
+    // Full IPv4 form: each part is an octet.
+    const octets = parts.map(parseIPv4Octet);
+    if (octets.some(n => n === null || n < 0 || n > 255)) return host;
+    return octets.join('.');
+  }
+  if (parts.length > 4) {
+    return host;
+  }
+
+  // Shorthand: 1..3 parts. Node's URL parser treats a 1-part input as a 32-bit
+  // integer split into octets, which has surprising semantics (e.g. "127" ->
+  // "0.0.0.127"). Reject 1-part inputs to keep the helper predictable: the
+  // fail-safe returns the input unchanged and the comparison layer falls
+  // through to non-bypass.
+  if (parts.length === 1) return host;
+
+  // 2..3 parts: literal parts fill from the left, tail fills remaining octets
+  // from the right with zero-padding.
+  const literalOctets = parts.slice(0, -1);
+  const tail = parts[parts.length - 1];
+  const tailSlots = 4 - literalOctets.length;
+
+  // Tail is parsed as a full IPv4 number (hex/octal/decimal) and packed
+  // low-byte-right into the remaining octets, matching Node's URL parser.
+  // e.g. 127.65535 (tail 0xFFFF into 3 slots) -> 127.0.255.255;
+  //      127.0x00ff (tail 0xFF into 3 slots) -> 127.0.0.255;
+  //      127.0.65535 (tail 0xFFFF into 2 slots) -> 127.0.255.255.
+  const tailValue = parseIPv4Octet(tail);
+  if (tailValue === null) return host;
+  const maxTail = (1 << 8 * tailSlots) - 1;
+  if (tailValue < 0 || tailValue > maxTail) return host;
+  const tailOctets = new Array(tailSlots).fill(0);
+  for (let i = tailSlots - 1, v = tailValue; i >= 0; i--, v >>= 8) {
+    tailOctets[i] = v & 0xff;
+  }
+  const literal = literalOctets.map(parseIPv4Octet);
+  if (literal.some(n => n === null || n < 0 || n > 255)) return host;
+  return [...literal, ...tailOctets].join('.');
+};
+const isIPv6ZeroGroup = group => /^0{1,4}$/.test(group);
+
+// The unspecified address (IPv4 0.0.0.0 / IPv6 ::) resolves to the local host
+// for outbound connections, so treat it as loopback-equivalent for NO_PROXY
+// matching. 0.0.0.0 is covered by LOOPBACK_HOSTNAMES; this handles compressed
+// and full IPv6 all-zero forms so both families bypass symmetrically.
+const isIPv6Unspecified = host => {
+  if (host === '::') return true;
+  const compressionIndex = host.indexOf('::');
+  if (compressionIndex !== -1) {
+    if (compressionIndex !== host.lastIndexOf('::')) return false;
+    const left = host.slice(0, compressionIndex);
+    const right = host.slice(compressionIndex + 2);
+    const leftGroups = left ? left.split(':') : [];
+    const rightGroups = right ? right.split(':') : [];
+    const explicitGroups = leftGroups.length + rightGroups.length;
+    return explicitGroups < 8 && leftGroups.every(isIPv6ZeroGroup) && rightGroups.every(isIPv6ZeroGroup);
+  }
+  const groups = host.split(':');
+  return groups.length === 8 && groups.every(isIPv6ZeroGroup);
 };
 const isIPv6Loopback = host => {
   // Collapse all-zero groups: any form of ::1 / 0:0:...:0:1
@@ -56837,6 +58943,7 @@ const isLoopback = host => {
   if (!host) return false;
   if (LOOPBACK_HOSTNAMES.has(host)) return true;
   if (isIPv4Loopback(host)) return true;
+  if (isIPv6Unspecified(host)) return true;
   return isIPv6Loopback(host);
 };
 const DEFAULT_PORTS = {
@@ -56889,6 +58996,40 @@ const unmapIPv4MappedIPv6 = host => {
   }
   return host;
 };
+const IPV4_OCTET_RE = /^(?:0|[1-9]\d{0,2})$/;
+const ipv4ToBytes = host => {
+  const parts = host.split('.');
+  return parts.length === 4 && parts.every(part => IPV4_OCTET_RE.test(part) && Number(part) <= 255) ? parts.map(Number) : null;
+};
+const IPV6_GROUP_RE = /^[0-9a-f]{1,4}$/i;
+const ipv6ToBytes = host => {
+  const halves = host.split('::');
+  if (halves.length > 2) {
+    return null;
+  }
+  const groups = halves[0] ? halves[0].split(':') : [];
+  if (halves.length === 2) {
+    const rear = halves[1] ? halves[1].split(':') : [];
+    const missing = 8 - groups.length - rear.length;
+    if (missing < 1) {
+      return null;
+    }
+    groups.push(...new Array(missing).fill('0'), ...rear);
+  }
+  if (groups.length !== 8 || groups.some(group => !IPV6_GROUP_RE.test(group))) {
+    return null;
+  }
+  return groups.flatMap(group => {
+    const value = Number.parseInt(group, 16);
+    return [value >> 8 & 0xff, value & 0xff];
+  });
+};
+const ipToBytes = host => {
+  if (typeof host !== 'string' || !host) {
+    return null;
+  }
+  return host.indexOf(':') !== -1 ? ipv6ToBytes(host) : ipv4ToBytes(host);
+};
 const normalizeNoProxyHost = hostname => {
   if (!hostname) {
     return hostname;
@@ -56896,7 +59037,101 @@ const normalizeNoProxyHost = hostname => {
   if (hostname.charAt(0) === '[' && hostname.charAt(hostname.length - 1) === ']') {
     hostname = hostname.slice(1, -1);
   }
-  return unmapIPv4MappedIPv6(hostname.replace(/\.+$/, ''));
+  const trimmed = trimTrailingDots(hostname);
+
+  // IPv4 shorthand/octal/hex → dotted-decimal; helper is a no-op for inputs
+  // containing ':' (IPv6 and IPv4-mapped IPv6) so we fall through to unmap.
+  const ipv4 = normalizeIPAddress(trimmed);
+  if (ipv4 !== trimmed) {
+    return ipv4;
+  }
+  return unmapIPv4MappedIPv6(trimmed);
+};
+const normalizeCidrBase = input => {
+  let base = input;
+  const startsBracket = base.charAt(0) === '[';
+  const endsBracket = base.charAt(base.length - 1) === ']';
+  const hasBracket = base.includes('[') || base.includes(']');
+  if (startsBracket || endsBracket) {
+    if (!startsBracket || !endsBracket) {
+      return null;
+    }
+    base = base.slice(1, -1);
+    if (base.indexOf(':') === -1 || base.includes('[') || base.includes(']')) {
+      return null;
+    }
+  } else if (hasBracket) {
+    return null;
+  }
+  if (!base || base.charAt(base.length - 1) === '.') {
+    return null;
+  }
+  const wasIPv6 = base.indexOf(':') !== -1;
+  if (wasIPv6) {
+    try {
+      base = new URL(`http://[${base}]/`).hostname.slice(1, -1);
+    } catch (_err) {
+      return null;
+    }
+  } else {
+    base = normalizeIPAddress(base);
+    if (!ipv4ToBytes(base)) {
+      return null;
+    }
+  }
+  return {
+    normalized: unmapIPv4MappedIPv6(base),
+    wasIPv6
+  };
+};
+const CIDR_ENTRY_RE = /^(.+)\/(0|[1-9]\d{0,2})$/;
+const parseCidrEntry = entry => {
+  if (entry.indexOf('/') === -1) {
+    return undefined;
+  }
+  const match = CIDR_ENTRY_RE.exec(entry);
+  if (!match) {
+    return null;
+  }
+  let prefix = Number(match[2]);
+  const parsedBase = normalizeCidrBase(match[1]);
+  if (!parsedBase) {
+    return null;
+  }
+  const {
+    normalized,
+    wasIPv6
+  } = parsedBase;
+  if (wasIPv6 && normalized.indexOf(':') === -1) {
+    if (prefix < 96) {
+      return null;
+    }
+    prefix -= 96;
+  }
+  const bytes = ipToBytes(normalized);
+  if (!bytes || prefix > bytes.length * 8) {
+    return null;
+  }
+  return {
+    bytes,
+    prefix
+  };
+};
+const isInSubnet = (addressBytes, networkBytes, prefix) => {
+  const fullBytes = prefix >> 3;
+  for (let i = 0; i < fullBytes; i++) {
+    if (addressBytes[i] !== networkBytes[i]) {
+      return false;
+    }
+  }
+  const remainingBits = prefix & 7;
+  if (remainingBits) {
+    const mask = 0xff << 8 - remainingBits & 0xff;
+    if ((addressBytes[fullBytes] & mask) !== (networkBytes[fullBytes] & mask)) {
+      return false;
+    }
+  }
+  return true;
 };
 function shouldBypassProxy(location) {
   let parsed;
@@ -56914,9 +59149,17 @@ function shouldBypassProxy(location) {
   }
   const port = Number.parseInt(parsed.port, 10) || DEFAULT_PORTS[parsed.protocol.split(':', 1)[0]] || 0;
   const hostname = normalizeNoProxyHost(parsed.hostname.toLowerCase());
+  const hostnameBytes = ipToBytes(hostname);
   return noProxy.split(/[\s,]+/).some(entry => {
     if (!entry) {
       return false;
+    }
+    if (entry === '*') {
+      return true;
+    }
+    const cidr = parseCidrEntry(entry);
+    if (cidr !== undefined) {
+      return cidr !== null && !!hostnameBytes && hostnameBytes.length === cidr.bytes.length && isInSubnet(hostnameBytes, cidr.bytes, cidr.prefix);
     }
     let [entryHost, entryPort] = parseNoProxyEntry(entry);
     entryHost = normalizeNoProxyHost(entryHost);
@@ -56980,7 +59223,7 @@ function speedometer(samplesCount, min) {
  * Throttle decorator
  * @param {Function} fn
  * @param {Number} freq
- * @return {Function}
+ * @return {Array<Function>}
  */
 function throttle(fn, freq) {
   let timestamp = 0;
@@ -57012,19 +59255,20 @@ function throttle(fn, freq) {
     }
   };
   const flush = () => lastArgs && invoke(lastArgs);
-  return [throttled, flush];
+  const flushWith = (...args) => invoke(args);
+  return [throttled, flush, flushWith];
 }
 
 const progressEventReducer = (listener, isDownloadStream, freq = 3) => {
   let bytesNotified = 0;
   const _speedometer = speedometer(50, 250);
   return throttle(e => {
-    if (!e || typeof e.loaded !== 'number') {
+    if (!e || !utils$1.isNumber(e.loaded)) {
       return;
     }
     const rawLoaded = e.loaded;
     const total = e.lengthComputable ? e.total : undefined;
-    const loaded = total != null ? Math.min(rawLoaded, total) : rawLoaded;
+    const loaded = Math.max(0, total != null ? Math.min(rawLoaded, total) : rawLoaded);
     const progressBytes = Math.max(0, loaded - bytesNotified);
     const rate = _speedometer(progressBytes);
     bytesNotified = Math.max(bytesNotified, loaded);
@@ -57050,18 +59294,85 @@ const progressEventDecorator = (total, throttled) => {
     loaded
   }), throttled[1]];
 };
-const asyncDecorator = fn => (...args) => utils$1.asap(() => fn(...args));
+const asyncDecorator = (fn, scheduler = utils$1.asap) => (...args) => scheduler(() => fn(...args));
 
 /**
- * Estimate decoded byte length of a data:// URL *without* allocating large buffers.
- * - For base64: compute exact decoded size using length and padding;
- *               handle %XX at the character-count level (no string allocation).
- * - For non-base64: use UTF-8 byteLength of the encoded body as a safe upper bound.
- *
- * @param {string} url
- * @returns {number}
+ * Estimate data: URL byte lengths *without* allocating large buffers.
+ * - Fetch percent-decodes a base64 body before decoding it.
+ * - Node's Buffer.from(body, 'base64') sizes its backing allocation from the
+ *   raw body, including ignored characters and content after padding.
+ * - Non-base64 data is percent-decoded and then encoded as UTF-8.
  */
-function estimateDataURLDecodedBytes(url) {
+const isHexDigit = charCode => charCode >= 48 && charCode <= 57 || charCode >= 65 && charCode <= 70 || charCode >= 97 && charCode <= 102;
+const isPercentEncodedByte = (str, i, len) => i + 2 < len && isHexDigit(str.charCodeAt(i + 1)) && isHexDigit(str.charCodeAt(i + 2));
+const hexValue = charCode => charCode <= 57 ? charCode - 48 : (charCode & 0xdf) - 55;
+const isBase64Char = charCode => charCode >= 65 && charCode <= 90 ||
+// A-Z
+charCode >= 97 && charCode <= 122 ||
+// a-z
+charCode >= 48 && charCode <= 57 ||
+// 0-9
+charCode === 43 ||
+// +
+charCode === 47 ||
+// /
+charCode === 45 ||
+// - (base64url)
+charCode === 95; // _ (base64url)
+
+const isBase64Whitespace = charCode => charCode === 9 || charCode === 10 || charCode === 12 || charCode === 13 || charCode === 32;
+const base64Bytes = significant => {
+  const groups = Math.floor(significant / 4);
+  const remainder = significant % 4;
+  return groups * 3 + (remainder === 2 ? 1 : remainder === 3 ? 2 : 0);
+};
+
+// Buffer.byteLength(body, 'base64') uses the raw string length as an allocation
+// upper bound even when Buffer.from later ignores characters or stops at '='.
+const estimateBase64BufferAllocation = body => {
+  const len = body.length;
+  let padding = 0;
+  if (len > 0 && body.charCodeAt(len - 1) === 61 /* '=' */) {
+    padding++;
+    if (len > 1 && body.charCodeAt(len - 2) === 61 /* '=' */) {
+      padding++;
+    }
+  }
+  return Math.floor((len - padding) * 3 / 4);
+};
+const estimatePercentDecodedBase64Bytes = body => {
+  const len = body.length;
+  let significant = 0;
+  let padding = 0;
+  let invalid = false;
+  for (let i = 0; i < len; i++) {
+    let code = body.charCodeAt(i);
+    if (code === 37 /* '%' */ && isPercentEncodedByte(body, i, len)) {
+      code = hexValue(body.charCodeAt(i + 1)) * 16 + hexValue(body.charCodeAt(i + 2));
+      i += 2;
+    }
+    if (isBase64Whitespace(code)) {
+      continue;
+    }
+    if (code === 61 /* '=' */) {
+      padding++;
+      continue;
+    }
+    if (!isBase64Char(code) || padding > 0) {
+      invalid = true;
+      continue;
+    }
+    significant++;
+  }
+
+  // Fetch rejects malformed forgiving-base64 input. Returning the raw-size
+  // allocation bound keeps that invalid input from becoming a pre-check bypass.
+  if (invalid || padding > 2 || padding > 0 && (significant + padding) % 4 !== 0 || significant % 4 === 1) {
+    return estimateBase64BufferAllocation(body);
+  }
+  return base64Bytes(significant);
+};
+const estimateDataURLBytes = (url, estimateBase64) => {
   if (!url || typeof url !== 'string') return 0;
   if (!url.startsWith('data:')) return 0;
   const comma = url.indexOf(',');
@@ -57070,60 +59381,20 @@ function estimateDataURLDecodedBytes(url) {
   const body = url.slice(comma + 1);
   const isBase64 = /;base64/i.test(meta);
   if (isBase64) {
-    let effectiveLen = body.length;
-    const len = body.length; // cache length
-
-    for (let i = 0; i < len; i++) {
-      if (body.charCodeAt(i) === 37 /* '%' */ && i + 2 < len) {
-        const a = body.charCodeAt(i + 1);
-        const b = body.charCodeAt(i + 2);
-        const isHex = (a >= 48 && a <= 57 || a >= 65 && a <= 70 || a >= 97 && a <= 102) && (b >= 48 && b <= 57 || b >= 65 && b <= 70 || b >= 97 && b <= 102);
-        if (isHex) {
-          effectiveLen -= 2;
-          i += 2;
-        }
-      }
-    }
-    let pad = 0;
-    let idx = len - 1;
-    const tailIsPct3D = j => j >= 2 && body.charCodeAt(j - 2) === 37 &&
-    // '%'
-    body.charCodeAt(j - 1) === 51 && (
-    // '3'
-    body.charCodeAt(j) === 68 || body.charCodeAt(j) === 100); // 'D' or 'd'
-
-    if (idx >= 0) {
-      if (body.charCodeAt(idx) === 61 /* '=' */) {
-        pad++;
-        idx--;
-      } else if (tailIsPct3D(idx)) {
-        pad++;
-        idx -= 3;
-      }
-    }
-    if (pad === 1 && idx >= 0) {
-      if (body.charCodeAt(idx) === 61 /* '=' */) {
-        pad++;
-      } else if (tailIsPct3D(idx)) {
-        pad++;
-      }
-    }
-    const groups = Math.floor(effectiveLen / 4);
-    const bytes = groups * 3 - (pad || 0);
-    return bytes > 0 ? bytes : 0;
-  }
-  if (typeof Buffer !== 'undefined' && typeof Buffer.byteLength === 'function') {
-    return Buffer.byteLength(body, 'utf8');
+    return estimateBase64(body);
   }
 
   // Compute UTF-8 byte length directly from UTF-16 code units without allocating
   // a byte buffer (TextEncoder.encode would defeat the DoS guard on large bodies).
-  // Using body.length here would undercount non-ASCII (e.g. '€' is 1 code unit
-  // but 3 UTF-8 bytes).
+  // Valid %XX triplets count as one decoded byte; this matches the bytes that
+  // decodeURIComponent(body) would produce before Buffer re-encodes the string.
   let bytes = 0;
   for (let i = 0, len = body.length; i < len; i++) {
     const c = body.charCodeAt(i);
-    if (c < 0x80) {
+    if (c === 37 /* '%' */ && isPercentEncodedByte(body, i, len)) {
+      bytes += 1;
+      i += 2;
+    } else if (c < 0x80) {
       bytes += 1;
     } else if (c < 0x800) {
       bytes += 2;
@@ -57140,6 +59411,28 @@ function estimateDataURLDecodedBytes(url) {
     }
   }
   return bytes;
+};
+
+/**
+ * Estimate the percent-decoded payload size used by Fetch data: URLs.
+ *
+ * @param {string} url
+ * @returns {number}
+ */
+function estimateDataURLDecodedBytes(url) {
+  // Fetch removes URL fragments before processing a data: URL.
+  const fragmentIndex = typeof url === 'string' ? url.indexOf('#') : -1;
+  return estimateDataURLBytes(fragmentIndex === -1 ? url : url.slice(0, fragmentIndex), estimatePercentDecodedBase64Bytes);
+}
+
+/**
+ * Estimate the Buffer backing allocation used by Node's raw base64 decoder.
+ *
+ * @param {string} url
+ * @returns {number}
+ */
+function estimateDataURLBufferAllocation(url) {
+  return estimateDataURLBytes(url, estimateBase64BufferAllocation);
 }
 
 const zlibOptions = {
@@ -57150,29 +59443,34 @@ const brotliOptions = {
   flush: zlib.constants.BROTLI_OPERATION_FLUSH,
   finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH
 };
+const zstdOptions = {
+  flush: zlib.constants.ZSTD_e_flush,
+  finishFlush: zlib.constants.ZSTD_e_flush
+};
 const isBrotliSupported = utils$1.isFunction(zlib.createBrotliDecompress);
+const isZstdSupported = utils$1.isFunction(zlib.createZstdDecompress);
+const ACCEPT_ENCODING = 'gzip, compress, deflate' + (isBrotliSupported ? ', br' : '');
+const ACCEPT_ENCODING_WITH_ZSTD = ACCEPT_ENCODING + (isZstdSupported ? ', zstd' : '');
+const scheduleProgress = typeof process !== 'undefined' && process.nextTick ? process.nextTick.bind(process) : utils$1.asap;
 const {
   http: httpFollow,
   https: httpsFollow
 } = followRedirects;
 const isHttps = /https:?/;
-const FORM_DATA_CONTENT_HEADERS$1 = ['content-type', 'content-length'];
-function setFormDataHeaders$1(headers, formHeaders, policy) {
-  if (policy !== 'content-only') {
-    headers.set(formHeaders);
-    return;
-  }
-  Object.entries(formHeaders).forEach(([key, val]) => {
-    if (FORM_DATA_CONTENT_HEADERS$1.includes(key.toLowerCase())) {
-      headers.set(key, val);
-    }
-  });
-}
 
 // Symbols used to bind a single 'error' listener to a pooled socket and track
 // the request currently owning that socket across keep-alive reuse (issue #10780).
 const kAxiosSocketListener = Symbol('axios.http.socketListener');
 const kAxiosCurrentReq = Symbol('axios.http.currentReq');
+
+// A shared listener avoids retaining an adapter context for the lifetime of a
+// pooled socket. EventEmitter invokes listeners with `this` set to the emitter.
+function handleSocketError(err) {
+  const current = this[kAxiosCurrentReq];
+  if (current && !current.destroyed) {
+    current.destroy(err);
+  }
+}
 
 // Tags HttpsProxyAgent instances installed by setProxy() so the redirect path
 // can strip them without clobbering a user-supplied agent that happens to be
@@ -57185,6 +59483,36 @@ const kAxiosInstalledTunnel = Symbol('axios.http.installedTunnel');
 // so unbounded growth is not a concern in practice.
 const tunnelingAgentCache = new Map();
 const tunnelingAgentCacheUser = new WeakMap();
+// Minimum minor versions where Node's HTTP Agent supports native proxyEnv
+// handling. Checking the selected agent below also covers startup modes such
+// as NODE_OPTIONS=--use-env-proxy and --no-use-env-proxy precedence.
+const NODE_NATIVE_ENV_PROXY_SUPPORT = {
+  22: 21,
+  24: 5
+};
+function isNodeNativeEnvProxySupported(nodeVersion = process.versions && process.versions.node) {
+  if (!nodeVersion) {
+    return false;
+  }
+  const [major, minor] = nodeVersion.split('.').map(part => Number(part));
+  if (!Number.isInteger(major) || !Number.isInteger(minor)) {
+    return false;
+  }
+  if (major > 24) {
+    return true;
+  }
+  return NODE_NATIVE_ENV_PROXY_SUPPORT[major] != null && minor >= NODE_NATIVE_ENV_PROXY_SUPPORT[major];
+}
+function isNodeEnvProxyEnabled(agent, nodeVersion = process.versions && process.versions.node) {
+  if (!isNodeNativeEnvProxySupported(nodeVersion)) {
+    return false;
+  }
+  const agentOptions = agent && agent.options;
+  return Boolean(agentOptions && utils$1.hasOwnProp(agentOptions, 'proxyEnv') && agentOptions.proxyEnv != null);
+}
+function getProxyEnvAgent(options, configHttpAgent, configHttpsAgent) {
+  return isHttps.test(options.protocol) ? configHttpsAgent || https.globalAgent : configHttpAgent || http.globalAgent;
+}
 function getTunnelingAgent(agentOptions, userHttpsAgent) {
   const key = agentOptions.protocol + '//' + agentOptions.hostname + ':' + (agentOptions.port || '') + '#' + (agentOptions.auth || '');
   const cache = userHttpsAgent ? tunnelingAgentCacheUser.get(userHttpsAgent) || tunnelingAgentCacheUser.set(userHttpsAgent, new Map()).get(userHttpsAgent) : tunnelingAgentCache;
@@ -57198,6 +59526,19 @@ function getTunnelingAgent(agentOptions, userHttpsAgent) {
     ...agentOptions
   } : agentOptions;
   agent = new HttpsProxyAgent(merged);
+  if (userHttpsAgent && userHttpsAgent.options) {
+    const originTLSOptions = {
+      ...userHttpsAgent.options
+    };
+    const callback = agent.callback;
+    agent.callback = function axiosTunnelingAgentCallback(req, opts) {
+      // HttpsProxyAgent v5 reads callback opts for the post-CONNECT origin TLS upgrade.
+      return callback.call(this, req, {
+        ...originTLSOptions,
+        ...opts
+      });
+    };
+  }
   agent[kAxiosInstalledTunnel] = true;
   cache.set(key, agent);
   return agent;
@@ -57210,7 +59551,7 @@ const supportedProtocols = platform.protocols.map(protocol => {
 // Decode before composing the `auth` option so credentials such as
 // `my%40email.com:pass` are sent as `my@email.com:pass`. Falls back to the
 // original value for malformed input so a bad encoding never throws.
-const decodeURIComponentSafe = value => {
+const decodeURIComponentSafe$1 = value => {
   if (!utils$1.isString(value)) {
     return value;
   }
@@ -57224,84 +59565,11 @@ const flushOnFinish = (stream, [throttled, flush]) => {
   stream.on('end', flush).on('error', flush);
   return throttled;
 };
-class Http2Sessions {
-  constructor() {
-    this.sessions = Object.create(null);
-  }
-  getSession(authority, options) {
-    options = Object.assign({
-      sessionTimeout: 1000
-    }, options);
-    let authoritySessions = this.sessions[authority];
-    if (authoritySessions) {
-      let len = authoritySessions.length;
-      for (let i = 0; i < len; i++) {
-        const [sessionHandle, sessionOptions] = authoritySessions[i];
-        if (!sessionHandle.destroyed && !sessionHandle.closed && util.isDeepStrictEqual(sessionOptions, options)) {
-          return sessionHandle;
-        }
-      }
-    }
-    const session = http2.connect(authority, options);
-    let removed;
-    const removeSession = () => {
-      if (removed) {
-        return;
-      }
-      removed = true;
-      let entries = authoritySessions,
-        len = entries.length,
-        i = len;
-      while (i--) {
-        if (entries[i][0] === session) {
-          if (len === 1) {
-            delete this.sessions[authority];
-          } else {
-            entries.splice(i, 1);
-          }
-          if (!session.closed) {
-            session.close();
-          }
-          return;
-        }
-      }
-    };
-    const originalRequestFn = session.request;
-    const {
-      sessionTimeout
-    } = options;
-    if (sessionTimeout != null) {
-      let timer;
-      let streamsCount = 0;
-      session.request = function () {
-        const stream = originalRequestFn.apply(this, arguments);
-        streamsCount++;
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
-        stream.once('close', () => {
-          if (! --streamsCount) {
-            timer = setTimeout(() => {
-              timer = null;
-              removeSession();
-            }, sessionTimeout);
-          }
-        });
-        return stream;
-      };
-    }
-    session.once('close', removeSession);
-    let entry = [session, options];
-    authoritySessions ? authoritySessions.push(entry) : authoritySessions = this.sessions[authority] = [entry];
-    return session;
-  }
-}
 const http2Sessions = new Http2Sessions();
 
 /**
- * If the proxy or config beforeRedirects functions are defined, call them with the options
- * object.
+ * If the proxy, auth, sensitive header, or config beforeRedirects functions are defined,
+ * call them with the options object.
  *
  * @param {Object<string, any>} options - The options object that was passed to the request.
  *
@@ -57311,8 +59579,35 @@ function dispatchBeforeRedirect(options, responseDetails, requestDetails) {
   if (options.beforeRedirects.proxy) {
     options.beforeRedirects.proxy(options);
   }
+  if (options.beforeRedirects.auth) {
+    options.beforeRedirects.auth(options);
+  }
+  if (options.beforeRedirects.sensitiveHeaders) {
+    options.beforeRedirects.sensitiveHeaders(options, requestDetails);
+  }
   if (options.beforeRedirects.config) {
     options.beforeRedirects.config(options, responseDetails, requestDetails);
+  }
+}
+function stripMatchingHeaders(headers, sensitiveSet) {
+  if (!headers) {
+    return;
+  }
+  Object.keys(headers).forEach(header => {
+    if (sensitiveSet.has(header.toLowerCase())) {
+      delete headers[header];
+    }
+  });
+}
+function isSameOriginRedirect(redirectOptions, requestDetails) {
+  if (!requestDetails) {
+    return false;
+  }
+  try {
+    return new URL(requestDetails.url).origin === new URL(redirectOptions.href).origin;
+  } catch (e) {
+    // If origin comparison fails, treat the redirect as unsafe.
+    return false;
   }
 }
 
@@ -57322,12 +59617,14 @@ function dispatchBeforeRedirect(options, responseDetails, requestDetails) {
  * @param {http.ClientRequestArgs} options
  * @param {AxiosProxyConfig} configProxy configuration from Axios options object
  * @param {string} location
+ * @param {boolean} [allowEnvProxy=true] whether environment proxy configuration can be used
  *
- * @returns {http.ClientRequestArgs}
+ * @returns {boolean} whether a proxy applies to the selected transport
  */
-function setProxy(options, configProxy, location, isRedirect, configHttpsAgent) {
+function setProxy(options, configProxy, location, isRedirect, configHttpsAgent, configHttpAgent, allowEnvProxy = true) {
   let proxy = configProxy;
-  if (!proxy && proxy !== false) {
+  const proxyEnvAgent = getProxyEnvAgent(options, configHttpAgent, configHttpsAgent);
+  if (!proxy && proxy !== false && allowEnvProxy && !isNodeEnvProxyEnabled(proxyEnvAgent)) {
     const proxyUrl = getProxyForUrl(location);
     if (proxyUrl) {
       if (!shouldBypassProxy(location)) {
@@ -57418,7 +59715,7 @@ function setProxy(options, configProxy, location, isRedirect, configHttpsAgent) 
         }
         const tunnelingAgent = getTunnelingAgent(agentOptions, configHttpsAgent);
         // Set both: `options.agent` is consumed by the native https.request path
-        // (config.maxRedirects === 0); `options.agents.https` is consumed by
+        // (maxRedirects === 0); `options.agents.https` is consumed by
         // follow-redirects, which ignores `options.agent` when `options.agents`
         // is present.
         options.agent = tunnelingAgent;
@@ -57462,8 +59759,9 @@ function setProxy(options, configProxy, location, isRedirect, configHttpsAgent) 
   options.beforeRedirects.proxy = function beforeRedirect(redirectOptions) {
     // Configure proxy for redirected request, passing the original config proxy to apply
     // the exact same logic as if the redirected request was performed by axios directly.
-    setProxy(redirectOptions, configProxy, redirectOptions.href, true, configHttpsAgent);
+    setProxy(redirectOptions, configProxy, redirectOptions.href, true, configHttpsAgent, configHttpAgent, allowEnvProxy);
   };
+  return Boolean(proxy || configProxy !== false && allowEnvProxy && isNodeEnvProxyEnabled(proxyEnvAgent));
 }
 const isHttpAdapterSupported = typeof process !== 'undefined' && utils$1.kindOf(process) === 'process';
 
@@ -57494,7 +59792,7 @@ const resolveFamily = ({
   family
 }) => {
   if (!utils$1.isString(address)) {
-    throw TypeError('address must be a string');
+    throw new AxiosError('address must be a string', AxiosError.ERR_BAD_OPTION_VALUE);
   }
   return {
     address,
@@ -57505,6 +59803,32 @@ const buildAddressEntry = (address, family) => resolveFamily(utils$1.isObject(ad
   address,
   family
 });
+const normalizedLookupCache = new WeakMap();
+const normalizeLookup = lookup => {
+  let normalized = normalizedLookupCache.get(lookup);
+  if (normalized) {
+    return normalized;
+  }
+  const callbackLookup = callbackify(lookup, value => utils$1.isArray(value) ? value : [value]);
+
+  // Support opt.all, which is required by current Node.js releases.
+  normalized = (hostname, opt, cb) => {
+    callbackLookup(hostname, opt, (err, arg0, arg1) => {
+      if (err) {
+        return cb(err);
+      }
+      let addresses;
+      try {
+        addresses = utils$1.isArray(arg0) ? arg0.map(addr => buildAddressEntry(addr)) : [buildAddressEntry(arg0, arg1)];
+      } catch (error) {
+        return cb(error);
+      }
+      opt.all ? cb(err, addresses) : cb(err, addresses[0].address, addresses[0].family);
+    });
+  };
+  normalizedLookupCache.set(lookup, normalized);
+  return normalized;
+};
 const http2Transport = {
   request(options, cb) {
     const authority = options.protocol + '//' + options.hostname + ':' + (options.port || (options.protocol === 'https:' ? 443 : 80));
@@ -57545,47 +59869,56 @@ const http2Transport = {
 /*eslint consistent-return:0*/
 var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
   return wrapAsync(async function dispatchHttpRequest(resolve, reject, onDone) {
-    const own = key => utils$1.hasOwnProp(config, key) ? config[key] : undefined;
+    // Read config pollution-safely: own properties and members inherited from
+    // a non-Object.prototype source (e.g. an Object.create(defaults) template)
+    // are honored, but values injected onto a polluted Object.prototype are
+    // ignored. All behavior-affecting reads in this adapter go through own()
+    // so the protection boundary stays consistent.
+    const own = key => utils$1.getSafeProp(config, key);
+    const transitional = own('transitional') || transitionalDefaults;
     let data = own('data');
     let lookup = own('lookup');
     let family = own('family');
     let httpVersion = own('httpVersion');
     if (httpVersion === undefined) httpVersion = 1;
+    const rawHttpVersion = httpVersion;
     let http2Options = own('http2Options');
+    const httpAgent = own('httpAgent');
+    const httpsAgent = own('httpsAgent');
+    const configProxy = own('proxy');
     const responseType = own('responseType');
     const responseEncoding = own('responseEncoding');
-    const method = config.method.toUpperCase();
+    const socketPath = own('socketPath');
+    const method = own('method').toUpperCase();
+    const maxRedirects = own('maxRedirects');
+    const maxBodyLength = own('maxBodyLength');
+    const maxContentLength = own('maxContentLength');
+    const decompress = own('decompress');
     let isDone;
     let rejected = false;
     let req;
     let connectPhaseTimer;
-    httpVersion = +httpVersion;
+    try {
+      httpVersion = +httpVersion;
+    } catch (err) {
+      throw new AxiosError('Invalid protocol version: value is not a number', AxiosError.ERR_BAD_OPTION_VALUE, config);
+    }
     if (Number.isNaN(httpVersion)) {
-      throw TypeError(`Invalid protocol version: '${config.httpVersion}' is not a number`);
+      throw new AxiosError(`Invalid protocol version: '${rawHttpVersion}' is not a number`, AxiosError.ERR_BAD_OPTION_VALUE, config);
     }
     if (httpVersion !== 1 && httpVersion !== 2) {
-      throw TypeError(`Unsupported protocol version '${httpVersion}'`);
+      throw new AxiosError(`Unsupported protocol version '${httpVersion}'`, AxiosError.ERR_BAD_OPTION_VALUE, config);
     }
     const isHttp2 = httpVersion === 2;
     if (lookup) {
-      const _lookup = callbackify(lookup, value => utils$1.isArray(value) ? value : [value]);
-      // hotfix to support opt.all option which is required for node 20.x
-      lookup = (hostname, opt, cb) => {
-        _lookup(hostname, opt, (err, arg0, arg1) => {
-          if (err) {
-            return cb(err);
-          }
-          const addresses = utils$1.isArray(arg0) ? arg0.map(addr => buildAddressEntry(addr)) : [buildAddressEntry(arg0, arg1)];
-          opt.all ? cb(err, addresses) : cb(err, addresses[0].address, addresses[0].family);
-        });
-      };
+      lookup = normalizeLookup(lookup);
     }
     const abortEmitter = new events.EventEmitter();
     function abort(reason) {
       try {
         abortEmitter.emit('abort', !reason || reason.type ? new CanceledError(null, config, req) : reason);
       } catch (err) {
-        console.warn('emit error', err);
+        // ignore emit errors
       }
     }
     function clearConnectPhaseTimer() {
@@ -57595,10 +59928,11 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       }
     }
     function createTimeoutError() {
-      let timeoutErrorMessage = config.timeout ? 'timeout of ' + config.timeout + 'ms exceeded' : 'timeout exceeded';
-      const transitional = config.transitional || transitionalDefaults;
-      if (config.timeoutErrorMessage) {
-        timeoutErrorMessage = config.timeoutErrorMessage;
+      const configTimeout = own('timeout');
+      let timeoutErrorMessage = configTimeout ? 'timeout of ' + configTimeout + 'ms exceeded' : 'timeout exceeded';
+      const configTimeoutErrorMessage = own('timeoutErrorMessage');
+      if (configTimeoutErrorMessage) {
+        timeoutErrorMessage = configTimeoutErrorMessage;
       }
       return new AxiosError(timeoutErrorMessage, transitional.clarifyTimeoutError ? AxiosError.ETIMEDOUT : AxiosError.ECONNABORTED, config, req);
     }
@@ -57641,17 +59975,22 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
     });
 
     // Parse url
-    const fullPath = buildFullPath(config.baseURL, config.url, config.allowAbsoluteUrls);
-    const parsed = new URL(fullPath, platform.hasBrowserEnv ? platform.origin : undefined);
+    const fullPath = buildFullPath(own('baseURL'), own('url'), own('allowAbsoluteUrls'), config);
+    // Unix-socket requests (own socketPath) commonly pass a path-only url
+    // like '/foo'; supply a synthetic base so new URL() can still parse it.
+    // Use the own-property value (not config.socketPath) so a polluted
+    // prototype cannot influence URL base selection.
+    const urlBase = socketPath ? 'http://localhost' : platform.hasBrowserEnv ? platform.origin : undefined;
+    const parsed = new URL(fullPath, urlBase);
     const protocol = parsed.protocol || supportedProtocols[0];
     if (protocol === 'data:') {
       // Apply the same semantics as HTTP: only enforce if a finite, non-negative cap is set.
-      if (config.maxContentLength > -1) {
-        // Use the exact string passed to fromDataURI (config.url); fall back to fullPath if needed.
-        const dataUrl = String(config.url || fullPath || '');
-        const estimated = estimateDataURLDecodedBytes(dataUrl);
-        if (estimated > config.maxContentLength) {
-          return reject(new AxiosError('maxContentLength size of ' + config.maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config));
+      if (maxContentLength > -1) {
+        // Use the exact string passed to fromDataURI (the configured url); fall back to fullPath if needed.
+        const dataUrl = String(own('url') || fullPath || '');
+        const estimated = estimateDataURLBufferAllocation(dataUrl);
+        if (estimated > maxContentLength) {
+          return reject(new AxiosError('maxContentLength size of ' + maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config));
         }
       }
       let convertedData;
@@ -57664,7 +60003,7 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
         });
       }
       try {
-        convertedData = fromDataURI(config.url, responseType === 'blob', {
+        convertedData = fromDataURI(own('url'), responseType === 'blob', {
           Blob: config.env && config.env.Blob
         });
       } catch (err) {
@@ -57715,7 +60054,7 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       });
       // support for https://www.npmjs.com/package/form-data api
     } else if (utils$1.isFormData(data) && utils$1.isFunction(data.getHeaders) && data.getHeaders !== Object.prototype.getHeaders) {
-      setFormDataHeaders$1(headers, data.getHeaders(), own('formDataHeaderPolicy'));
+      setFormDataHeaders(headers, data.getHeaders(), own('formDataHeaderPolicy'));
       if (!headers.hasContentLength()) {
         try {
           const knownLength = await util.promisify(data.getLength).call(data);
@@ -57738,7 +60077,7 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
 
       // Add Content-Length header if data exists
       headers.setContentLength(data.length, false);
-      if (config.maxBodyLength > -1 && data.length > config.maxBodyLength) {
+      if (maxBodyLength > -1 && data.length > maxBodyLength) {
         return reject(new AxiosError('Request body larger than maxBodyLength limit', AxiosError.ERR_BAD_REQUEST, config));
       }
     }
@@ -57758,34 +60097,38 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       data = stream.pipeline([data, new AxiosTransformStream({
         maxRate: utils$1.toFiniteNumber(maxUploadRate)
       })], utils$1.noop);
-      onUploadProgress && data.on('progress', flushOnFinish(data, progressEventDecorator(contentLength, progressEventReducer(asyncDecorator(onUploadProgress), false, 3))));
+      onUploadProgress && data.on('progress', flushOnFinish(data, progressEventDecorator(contentLength, progressEventReducer(asyncDecorator(onUploadProgress, scheduleProgress), false, 3))));
     }
 
     // HTTP basic authentication
     let auth = undefined;
     const configAuth = own('auth');
     if (configAuth) {
-      const username = configAuth.username || '';
-      const password = configAuth.password || '';
+      const username = utils$1.getSafeProp(configAuth, 'username') || '';
+      const password = utils$1.getSafeProp(configAuth, 'password') || '';
       auth = username + ':' + password;
     }
-    if (!auth && parsed.username) {
-      const urlUsername = decodeURIComponentSafe(parsed.username);
-      const urlPassword = decodeURIComponentSafe(parsed.password);
+    if (!auth && (parsed.username || parsed.password)) {
+      const urlUsername = decodeURIComponentSafe$1(parsed.username);
+      const urlPassword = decodeURIComponentSafe$1(parsed.password);
       auth = urlUsername + ':' + urlPassword;
     }
     auth && headers.delete('authorization');
     let path$1;
     try {
-      path$1 = buildURL(parsed.pathname + parsed.search, config.params, config.paramsSerializer).replace(/^\?/, '');
+      path$1 = buildURL(parsed.pathname + parsed.search, own('params'), own('paramsSerializer')).replace(/^\?/, '');
     } catch (err) {
-      const customErr = new Error(err.message);
-      customErr.config = config;
-      customErr.url = config.url;
-      customErr.exists = true;
-      return reject(customErr);
+      return reject(AxiosError.from(err, AxiosError.ERR_BAD_REQUEST, config, null, null, {
+        url: own('url'),
+        exists: true
+      }));
     }
-    headers.set('Accept-Encoding', 'gzip, compress, deflate' + (isBrotliSupported ? ', br' : ''), false);
+    headers.set('Accept-Encoding', utils$1.hasOwnProp(transitional, 'advertiseZstdAcceptEncoding') && transitional.advertiseZstdAcceptEncoding === true ? ACCEPT_ENCODING_WITH_ZSTD : ACCEPT_ENCODING, false);
+    if (isHttp2 && lookup) {
+      http2Options = Object.assign(Object.create(null), http2Options, {
+        lookup
+      });
+    }
 
     // Null-prototype to block prototype pollution gadgets on properties read
     // directly by Node's http.request (e.g. insecureHTTPParser, lookup).
@@ -57794,69 +60137,127 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       method: method,
       headers: toByteStringHeaderObject(headers),
       agents: {
-        http: config.httpAgent,
-        https: config.httpsAgent
+        http: httpAgent,
+        https: httpsAgent
       },
       auth,
       protocol,
       family,
       beforeRedirect: dispatchBeforeRedirect,
       beforeRedirects: Object.create(null),
-      http2Options
+      http2Options,
+      createConnection: undefined
     });
 
     // cacheable-lookup integration hotfix
     !utils$1.isUndefined(lookup) && (options.lookup = lookup);
-    if (config.socketPath) {
-      if (typeof config.socketPath !== 'string') {
+    let proxyApplied = false;
+    if (socketPath) {
+      if (typeof socketPath !== 'string') {
         return reject(new AxiosError('socketPath must be a string', AxiosError.ERR_BAD_OPTION_VALUE, config));
       }
-      if (config.allowedSocketPaths != null) {
-        const allowed = Array.isArray(config.allowedSocketPaths) ? config.allowedSocketPaths : [config.allowedSocketPaths];
-        const resolvedSocket = path.resolve(config.socketPath);
+      const allowedSocketPaths = own('allowedSocketPaths');
+      if (allowedSocketPaths != null) {
+        const allowed = Array.isArray(allowedSocketPaths) ? allowedSocketPaths : [allowedSocketPaths];
+        const resolvedSocket = path.resolve(socketPath);
         const isAllowed = allowed.some(entry => typeof entry === 'string' && path.resolve(entry) === resolvedSocket);
         if (!isAllowed) {
-          return reject(new AxiosError(`socketPath "${config.socketPath}" is not permitted by allowedSocketPaths`, AxiosError.ERR_BAD_OPTION_VALUE, config));
+          return reject(new AxiosError(`socketPath "${socketPath}" is not permitted by allowedSocketPaths`, AxiosError.ERR_BAD_OPTION_VALUE, config));
         }
       }
-      options.socketPath = config.socketPath;
+      options.socketPath = socketPath;
     } else {
       options.hostname = parsed.hostname.startsWith('[') ? parsed.hostname.slice(1, -1) : parsed.hostname;
       options.port = parsed.port;
-      setProxy(options, config.proxy, protocol + '//' + parsed.hostname + (parsed.port ? ':' + parsed.port : '') + options.path, false, config.httpsAgent);
+      proxyApplied = setProxy(options, configProxy, protocol + '//' + parsed.hostname + (parsed.port ? ':' + parsed.port : '') + options.path, false, httpsAgent, httpAgent,
+      // The HTTP/2 transport connects independently of HTTP/1 agents, so it
+      // cannot apply either axios-resolved or agent-local environment proxies.
+      // Explicit proxy config is still processed and rejected below.
+      !isHttp2);
     }
     let transport;
     let isNativeTransport = false;
+    // True only for the follow-redirects transport, which applies
+    // options.maxBodyLength itself. Every other transport (http2, native
+    // http/https, a user-supplied custom transport) needs the explicit
+    // byte-counting pipeline below to enforce maxBodyLength on streamed uploads.
+    let transportEnforcesMaxBodyLength = false;
     const isHttpsRequest = isHttps.test(options.protocol);
     // Don't clobber a CONNECT-tunneling agent installed by setProxy() for an
     // HTTPS target.
     if (options.agent == null) {
-      options.agent = isHttpsRequest ? config.httpsAgent : config.httpAgent;
+      options.agent = isHttpsRequest ? httpsAgent : httpAgent;
     }
     if (isHttp2) {
+      if (proxyApplied) {
+        return reject(new AxiosError('HTTP/2 requests with a proxy are not supported', AxiosError.ERR_NOT_SUPPORT, config));
+      }
       transport = http2Transport;
     } else {
       const configTransport = own('transport');
       if (configTransport) {
         transport = configTransport;
-      } else if (config.maxRedirects === 0) {
+      } else if (maxRedirects === 0) {
         transport = isHttpsRequest ? https : http;
         isNativeTransport = true;
       } else {
-        if (config.maxRedirects) {
-          options.maxRedirects = config.maxRedirects;
+        transportEnforcesMaxBodyLength = true;
+        options.sensitiveHeaders = [];
+        if (maxRedirects) {
+          options.maxRedirects = maxRedirects;
         }
         const configBeforeRedirect = own('beforeRedirect');
         if (configBeforeRedirect) {
           options.beforeRedirects.config = configBeforeRedirect;
         }
+        if (auth) {
+          // Restore HTTP Basic credentials on same-origin redirects only.
+          // follow-redirects >= 1.15.8 strips Authorization on every redirect (see #6929);
+          // cross-origin stripping is the documented mitigation for T-R2 in THREATMODEL.md
+          // and is preserved by deliberately not restoring on origin change.
+          const requestOrigin = parsed.origin;
+          const authToRestore = auth;
+          options.beforeRedirects.auth = function beforeRedirectAuth(redirectOptions) {
+            try {
+              if (new URL(redirectOptions.href).origin === requestOrigin) {
+                redirectOptions.auth = authToRestore;
+              }
+            } catch (e) {
+              // ignore malformed URL: leaving auth stripped is fail-safe
+            }
+          };
+        }
+        const sensitiveHeaders = own('sensitiveHeaders');
+        if (sensitiveHeaders != null) {
+          if (!utils$1.isArray(sensitiveHeaders)) {
+            return reject(new AxiosError('sensitiveHeaders must be an array of strings', AxiosError.ERR_BAD_OPTION_VALUE, config));
+          }
+          const sensitiveSet = new Set();
+          for (const header of sensitiveHeaders) {
+            if (!utils$1.isString(header)) {
+              return reject(new AxiosError('sensitiveHeaders must be an array of strings', AxiosError.ERR_BAD_OPTION_VALUE, config));
+            }
+            sensitiveSet.add(header.toLowerCase());
+          }
+          if (sensitiveSet.size) {
+            options.sensitiveHeaders = Array.from(sensitiveSet);
+            options.beforeRedirects.sensitiveHeaders = function beforeRedirectSensitiveHeaders(redirectOptions, requestDetails) {
+              if (!isSameOriginRedirect(redirectOptions, requestDetails)) {
+                stripMatchingHeaders(redirectOptions.headers, sensitiveSet);
+              }
+            };
+          }
+        }
         transport = isHttpsRequest ? httpsFollow : httpFollow;
       }
     }
-    if (config.maxBodyLength > -1) {
-      options.maxBodyLength = config.maxBodyLength;
+
+    // Set an explicit maxBodyLength option for transports that inspect it.
+    // When maxBodyLength is -1 (default/unlimited), use Infinity so
+    // follow-redirects does not fall back to its own 10MB default.
+    if (maxBodyLength > -1) {
+      options.maxBodyLength = maxBodyLength;
     } else {
-      // follow-redirects does not skip comparison, so it should always succeed for axios -1 unlimited
       options.maxBodyLength = Infinity;
     }
 
@@ -57875,7 +60276,7 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
         const transformStream = new AxiosTransformStream({
           maxRate: utils$1.toFiniteNumber(maxDownloadRate)
         });
-        onDownloadProgress && transformStream.on('progress', flushOnFinish(transformStream, progressEventDecorator(responseLength, progressEventReducer(asyncDecorator(onDownloadProgress), true, 3))));
+        onDownloadProgress && transformStream.on('progress', flushOnFinish(transformStream, progressEventDecorator(responseLength, progressEventReducer(asyncDecorator(onDownloadProgress, scheduleProgress), true, 3))));
         streams.push(transformStream);
       }
 
@@ -57886,7 +60287,7 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       const lastRequest = res.req || req;
 
       // if decompress disabled we should not decompress
-      if (config.decompress !== false && res.headers['content-encoding']) {
+      if (decompress !== false && res.headers['content-encoding']) {
         // if no content, but headers still say that it is encoded,
         // remove the header not confuse downstream operations
         if (method === 'HEAD' || res.statusCode === 204) {
@@ -57918,6 +60319,13 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
               streams.push(zlib.createBrotliDecompress(brotliOptions));
               delete res.headers['content-encoding'];
             }
+            break;
+          case 'zstd':
+            if (isZstdSupported) {
+              streams.push(zlib.createZstdDecompress(zstdOptions));
+              delete res.headers['content-encoding'];
+            }
+            break;
         }
       }
       responseStream = streams.length > 1 ? stream.pipeline(streams, utils$1.noop) : streams[0];
@@ -57931,8 +60339,8 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       if (responseType === 'stream') {
         // Enforce maxContentLength on streamed responses; previously this
         // was applied only to buffered responses.
-        if (config.maxContentLength > -1) {
-          const limit = config.maxContentLength;
+        if (maxContentLength > -1) {
+          const limit = maxContentLength;
           const source = responseStream;
           async function* enforceMaxContentLength() {
             let totalResponseBytes = 0;
@@ -57958,11 +60366,11 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
           totalResponseBytes += chunk.length;
 
           // make sure the content length is not over the maxContentLength if specified
-          if (config.maxContentLength > -1 && totalResponseBytes > config.maxContentLength) {
+          if (maxContentLength > -1 && totalResponseBytes > maxContentLength) {
             // stream.destroy() emit aborted event before calling reject() on Node.js v16
             rejected = true;
             responseStream.destroy();
-            abort(new AxiosError('maxContentLength size of ' + config.maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config, lastRequest));
+            abort(new AxiosError('maxContentLength size of ' + maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config, lastRequest));
           }
         });
         responseStream.on('aborted', function handlerStreamAborted() {
@@ -58025,20 +60433,16 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
     const boundSockets = new Set();
     req.on('socket', function handleRequestSocket(socket) {
       // default interval of sending ack packet is 1 minute
-      socket.setKeepAlive(true, 1000 * 60);
+      // proxy agents (e.g. agent-base) may return a generic Duplex stream
+      // that doesn't have setKeepAlive, so guard before calling
+      if (typeof socket.setKeepAlive === 'function') {
+        socket.setKeepAlive(true, 1000 * 60);
+      }
 
-      // Install a single 'error' listener per socket (not per request) to avoid
-      // accumulating listeners on pooled keep-alive sockets that get reassigned
-      // to new requests before the previous request's 'close' fires (issue #10780).
-      // The listener is bound to the socket's currently-active request via a
-      // symbol, which is swapped as the socket is reassigned.
+      // Install one shared 'error' listener per socket. The symbol follows the
+      // currently-active request as pooled sockets are reassigned (issue #10780).
       if (!socket[kAxiosSocketListener]) {
-        socket.on('error', function handleSocketError(err) {
-          const current = socket[kAxiosCurrentReq];
-          if (current && !current.destroyed) {
-            current.destroy(err);
-          }
-        });
+        socket.on('error', handleSocketError);
         socket[kAxiosSocketListener] = true;
       }
       socket[kAxiosCurrentReq] = req;
@@ -58055,9 +60459,9 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
     });
 
     // Handle request timeout
-    if (config.timeout) {
+    if (own('timeout')) {
       // This is forcing a int timeout to avoid problems if the `req` interface doesn't handle other types.
-      const timeout = parseInt(config.timeout, 10);
+      const timeout = parseInt(own('timeout'), 10);
       if (Number.isNaN(timeout)) {
         abort(new AxiosError('error trying to parse `config.timeout` to int', AxiosError.ERR_BAD_OPTION_VALUE, config, req));
         return;
@@ -58101,12 +60505,13 @@ var httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
         }
       });
 
-      // Enforce maxBodyLength for streamed uploads on the native http/https
-      // transport (maxRedirects === 0); follow-redirects enforces it on the
-      // other path.
+      // Enforce maxBodyLength for streamed uploads on every transport that
+      // does not apply options.maxBodyLength itself (native http/https, http2,
+      // and user-supplied custom transports). The follow-redirects transport
+      // enforces it on the redirected HTTP/1 path.
       let uploadStream = data;
-      if (config.maxBodyLength > -1 && config.maxRedirects === 0) {
-        const limit = config.maxBodyLength;
+      if (maxBodyLength > -1 && !transportEnforcesMaxBodyLength) {
+        const limit = maxBodyLength;
         let bytesSent = 0;
         uploadStream = stream.pipeline([data, new stream.Transform({
           transform(chunk, _enc, cb) {
@@ -58169,7 +60574,11 @@ var cookies = platform.hasStandardBrowserEnv ?
       const cookie = cookies[i].replace(/^\s+/, '');
       const eq = cookie.indexOf('=');
       if (eq !== -1 && cookie.slice(0, eq) === name) {
-        return decodeURIComponent(cookie.slice(eq + 1));
+        try {
+          return decodeURIComponent(cookie.slice(eq + 1));
+        } catch (e) {
+          return cookie.slice(eq + 1);
+        }
       }
     }
     return null;
@@ -58190,6 +60599,12 @@ var cookies = platform.hasStandardBrowserEnv ?
 const headersToObject = thing => thing instanceof AxiosHeaders ? {
   ...thing
 } : thing;
+const ownEnumerableKeys = thing => {
+  if (Object.getOwnPropertySymbols && Object.getOwnPropertyDescriptor) {
+    return Object.keys(thing).concat(Object.getOwnPropertySymbols(thing).filter(symbol => Object.getOwnPropertyDescriptor(thing, symbol).enumerable));
+  }
+  return Object.keys(thing);
+};
 
 /**
  * Config-specific merge-function which creates a new config-object
@@ -58202,6 +60617,7 @@ const headersToObject = thing => thing instanceof AxiosHeaders ? {
  */
 function mergeConfig(config1, config2) {
   // eslint-disable-next-line no-param-reassign
+  config1 = config1 || {};
   config2 = config2 || {};
 
   // Use a null-prototype object so that downstream reads such as `config.auth`
@@ -58253,6 +60669,23 @@ function mergeConfig(config1, config2) {
       return getMergedValue(undefined, a);
     }
   }
+  function getMergedTransitionalOption(prop) {
+    const transitional2 = utils$1.hasOwnProp(config2, 'transitional') ? config2.transitional : undefined;
+    if (!utils$1.isUndefined(transitional2)) {
+      if (utils$1.isPlainObject(transitional2)) {
+        if (utils$1.hasOwnProp(transitional2, prop)) {
+          return transitional2[prop];
+        }
+      } else {
+        return undefined;
+      }
+    }
+    const transitional1 = utils$1.hasOwnProp(config1, 'transitional') ? config1.transitional : undefined;
+    if (utils$1.isPlainObject(transitional1) && utils$1.hasOwnProp(transitional1, prop)) {
+      return transitional1[prop];
+    }
+    return undefined;
+  }
 
   // eslint-disable-next-line consistent-return
   function mergeDirectKeys(a, b, prop) {
@@ -58271,7 +60704,7 @@ function mergeConfig(config1, config2) {
     transformResponse: defaultToConfig2,
     paramsSerializer: defaultToConfig2,
     timeout: defaultToConfig2,
-    timeoutMessage: defaultToConfig2,
+    timeoutErrorMessage: defaultToConfig2,
     withCredentials: defaultToConfig2,
     withXSRFToken: defaultToConfig2,
     adapter: defaultToConfig2,
@@ -58294,7 +60727,7 @@ function mergeConfig(config1, config2) {
     validateStatus: mergeDirectKeys,
     headers: (a, b, prop) => mergeDeepProperties(headersToObject(a), headersToObject(b), prop, true)
   };
-  utils$1.forEach(Object.keys({
+  utils$1.forEach(ownEnumerableKeys({
     ...config1,
     ...config2
   }), function computeConfigValue(prop) {
@@ -58305,20 +60738,14 @@ function mergeConfig(config1, config2) {
     const configValue = merge(a, b, prop);
     utils$1.isUndefined(configValue) && merge !== mergeDirectKeys || (config[prop] = configValue);
   });
-  return config;
-}
-
-const FORM_DATA_CONTENT_HEADERS = ['content-type', 'content-length'];
-function setFormDataHeaders(headers, formHeaders, policy) {
-  if (policy !== 'content-only') {
-    headers.set(formHeaders);
-    return;
-  }
-  Object.entries(formHeaders).forEach(([key, val]) => {
-    if (FORM_DATA_CONTENT_HEADERS.includes(key.toLowerCase())) {
-      headers.set(key, val);
+  if (utils$1.hasOwnProp(config2, 'validateStatus') && utils$1.isUndefined(config2.validateStatus) && getMergedTransitionalOption('validateStatusUndefinedResolves') === false) {
+    if (utils$1.hasOwnProp(config1, 'validateStatus')) {
+      config.validateStatus = getMergedValue(undefined, config1.validateStatus);
+    } else {
+      delete config.validateStatus;
     }
-  });
+  }
+  return config;
 }
 
 /**
@@ -58329,8 +60756,8 @@ function setFormDataHeaders(headers, formHeaders, policy) {
  *
  * @returns {string} UTF-8 bytes as a Latin-1 string
  */
-const encodeUTF8 = str => encodeURIComponent(str).replace(/%([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
-var resolveConfig = config => {
+const encodeUTF8$1 = str => encodeURIComponent(str).replace(/%([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+function resolveConfig(config) {
   const newConfig = mergeConfig({}, config);
 
   // Read only own properties to prevent prototype pollution gadgets
@@ -58346,18 +60773,25 @@ var resolveConfig = config => {
   const allowAbsoluteUrls = own('allowAbsoluteUrls');
   const url = own('url');
   newConfig.headers = headers = AxiosHeaders.from(headers);
-  newConfig.url = buildURL(buildFullPath(baseURL, url, allowAbsoluteUrls), config.params, config.paramsSerializer);
+  newConfig.url = buildURL(buildFullPath(baseURL, url, allowAbsoluteUrls, newConfig), own('params'), own('paramsSerializer'));
 
   // HTTP basic authentication
   if (auth) {
-    headers.set('Authorization', 'Basic ' + btoa((auth.username || '') + ':' + (auth.password ? encodeUTF8(auth.password) : '')));
+    const username = utils$1.getSafeProp(auth, 'username') || '';
+    const password = utils$1.getSafeProp(auth, 'password') || '';
+    try {
+      headers.set('Authorization', 'Basic ' + btoa(username + ':' + (password ? encodeUTF8$1(password) : '')));
+    } catch (e) {
+      throw AxiosError.from(e, AxiosError.ERR_BAD_OPTION_VALUE, config);
+    }
   }
   if (utils$1.isFormData(data)) {
-    if (platform.hasStandardBrowserEnv || platform.hasStandardBrowserWebWorkerEnv) {
-      headers.setContentType(undefined); // browser handles it
-    } else if (utils$1.isFunction(data.getHeaders)) {
+    const getHeaders = utils$1.getSafeProp(data, 'getHeaders');
+    if (platform.hasStandardBrowserEnv || platform.hasStandardBrowserWebWorkerEnv || utils$1.isReactNative(data)) {
+      headers.setContentType(undefined); // browser/web worker/RN handles it
+    } else if (utils$1.isFunction(getHeaders)) {
       // Node.js FormData (like form-data package)
-      setFormDataHeaders(headers, data.getHeaders(), own('formDataHeaderPolicy'));
+      setFormDataHeaders(headers, getHeaders.call(data), own('formDataHeaderPolicy'));
     }
   }
 
@@ -58382,7 +60816,7 @@ var resolveConfig = config => {
     }
   }
   return newConfig;
-};
+}
 
 const isXHRAdapterSupported = typeof XMLHttpRequest !== 'undefined';
 var xhrAdapter = isXHRAdapterSupported && function (config) {
@@ -58397,7 +60831,7 @@ var xhrAdapter = isXHRAdapterSupported && function (config) {
     } = _config;
     let onCanceled;
     let uploadThrottled, downloadThrottled;
-    let flushUpload, flushDownload;
+    let flushUpload, flushDownload, flushDownloadWithEvent;
     function done() {
       flushUpload && flushUpload(); // flush events
       flushDownload && flushDownload(); // flush events
@@ -58410,10 +60844,50 @@ var xhrAdapter = isXHRAdapterSupported && function (config) {
 
     // Set the request timeout in MS
     request.timeout = _config.timeout;
-    function onloadend() {
+    function onloadend(event) {
       if (!request) {
         return;
       }
+
+      // Status 0 means no response was received, which onerror and onabort normally
+      // reject before this runs. Firefox 152 fires only readystatechange and loadend for
+      // navigation-canceled requests (https://bugzilla.mozilla.org/show_bug.cgi?id=1505389),
+      // leaving settle() to resolve them as an empty success. ECONNABORTED is the error
+      // onabort raised on Firefox 151. Reads over file:, which some environments report as
+      // status 0 on success, are excluded by the request URL's scheme after browser-style
+      // preprocessing, by the page origin's scheme for relative URLs (which inherit it), or
+      // by responseURL where implemented.
+      if (request.status === 0 && (parseProtocol(normalizeURLForProtocolCheck(_config.url)) || parseProtocol(platform.origin)) !== 'file' && !(request.responseURL && request.responseURL.startsWith('file:'))) {
+        reject(new AxiosError('Request aborted', AxiosError.ECONNABORTED, config, request));
+        done();
+
+        // Clean up request
+        request = null;
+        return;
+      }
+
+      // When loadend is still dispatching, flushing with it gives progress
+      // listeners a final delivery whose event has a live target. The legacy
+      // ready-state fallback has no event, so replay its pending progress.
+      // A throwing listener must not block settlement; rethrow asynchronously,
+      // matching how listener errors surface on the throttle timer path.
+      try {
+        if (event) {
+          flushDownloadWithEvent && flushDownloadWithEvent(event);
+        } else {
+          flushDownload && flushDownload();
+        }
+      } catch (err) {
+        setTimeout(() => {
+          throw err;
+        });
+      }
+
+      // A final progress callback can cancel the request synchronously.
+      if (!request) {
+        return;
+      }
+
       // Prepare the response
       const responseHeaders = AxiosHeaders.from('getAllResponseHeaders' in request && request.getAllResponseHeaders());
       const responseData = !responseType || responseType === 'text' || responseType === 'json' ? request.responseText : request.response;
@@ -58521,7 +60995,7 @@ var xhrAdapter = isXHRAdapterSupported && function (config) {
 
     // Handle progress if needed
     if (onDownloadProgress) {
-      [downloadThrottled, flushDownload] = progressEventReducer(onDownloadProgress, true);
+      [downloadThrottled, flushDownload, flushDownloadWithEvent] = progressEventReducer(onDownloadProgress, true);
       request.addEventListener('progress', downloadThrottled);
     }
 
@@ -58551,6 +61025,7 @@ var xhrAdapter = isXHRAdapterSupported && function (config) {
     const protocol = parseProtocol(_config.url);
     if (protocol && !platform.protocols.includes(protocol)) {
       reject(new AxiosError('Unsupported protocol ' + protocol + ':', AxiosError.ERR_BAD_REQUEST, config));
+      done();
       return;
     }
 
@@ -58589,7 +61064,18 @@ const composeSignals = (signals, timeout) => {
     });
     signals = null;
   };
-  signals.forEach(signal => signal.addEventListener('abort', onabort));
+  signals.forEach(signal => {
+    if (aborted) {
+      return;
+    }
+    if (signal.aborted) {
+      onabort.call(signal);
+      return;
+    }
+    signal.addEventListener('abort', onabort, {
+      once: true
+    });
+  });
   const {
     signal
   } = controller;
@@ -58680,15 +61166,59 @@ const trackStream = (stream, chunkSize, onProgress, onFinish) => {
 };
 
 const DEFAULT_CHUNK_SIZE = 64 * 1024;
+const DEFAULT_REQUEST_OPTIONS = {
+  cache: 'default',
+  redirect: 'follow',
+  referrer: 'about:client',
+  referrerPolicy: '',
+  mode: 'cors',
+  integrity: '',
+  keepalive: false,
+  priority: 'auto',
+  window: null
+};
 const {
   isFunction
 } = utils$1;
+
+/**
+ * Encode a UTF-8 string to a Latin-1 byte string for use with btoa().
+ * This is a modern replacement for the deprecated unescape(encodeURIComponent(str)) pattern.
+ *
+ * @param {string} str The string to encode
+ *
+ * @returns {string} UTF-8 bytes as a Latin-1 string
+ */
+const encodeUTF8 = str => encodeURIComponent(str).replace(/%([0-9A-F]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+// Node's WHATWG URL parser returns `username` and `password` percent-encoded.
+// Decode before composing the `auth` option so credentials such as
+// `my%40email.com:pass` are sent as `my@email.com:pass`. Falls back to the
+// original value for malformed input so a bad encoding never throws.
+const decodeURIComponentSafe = value => {
+  if (!utils$1.isString(value)) {
+    return value;
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    return value;
+  }
+};
 const test = (fn, ...args) => {
   try {
     return !!fn(...args);
   } catch (e) {
     return false;
   }
+};
+const maybeWithAuthCredentials = url => {
+  const protocolIndex = url.indexOf('://');
+  let urlToCheck = url;
+  if (protocolIndex !== -1) {
+    urlToCheck = urlToCheck.slice(protocolIndex + 3);
+  }
+  return urlToCheck.includes('@') || urlToCheck.includes(':');
 };
 const factory = env => {
   const globalObject = utils$1.global !== undefined && utils$1.global !== null ? utils$1.global : globalThis;
@@ -58789,10 +61319,12 @@ const factory = env => {
       withCredentials = 'same-origin',
       fetchOptions,
       maxContentLength,
-      maxBodyLength
+      maxBodyLength,
+      maxRedirects
     } = resolveConfig(config);
     const hasMaxContentLength = utils$1.isNumber(maxContentLength) && maxContentLength > -1;
     const hasMaxBodyLength = utils$1.isNumber(maxBodyLength) && maxBodyLength > -1;
+    const own = key => utils$1.hasOwnProp(config, key) ? config[key] : undefined;
     let _fetch = envFetch || fetch;
     responseType = responseType ? (responseType + '').toLowerCase() : 'text';
     let composedSignal = composeSignals([signal, cancelToken && cancelToken.toAbortSignal()], timeout);
@@ -58801,7 +61333,46 @@ const factory = env => {
       composedSignal.unsubscribe();
     });
     let requestContentLength;
+
+    // AxiosError we raise while the request body is being streamed. Captured
+    // by identity so the catch block can surface it directly, regardless of
+    // how the runtime wraps the resulting fetch rejection (undici exposes it
+    // as `err.cause`; some browsers drop the original error entirely).
+    let pendingBodyError = null;
+    const maxBodyLengthError = () => new AxiosError('Request body larger than maxBodyLength limit', AxiosError.ERR_BAD_REQUEST, config, request);
     try {
+      // HTTP basic authentication
+      let auth = undefined;
+      const configAuth = own('auth');
+      if (configAuth) {
+        const username = utils$1.getSafeProp(configAuth, 'username') || '';
+        const password = utils$1.getSafeProp(configAuth, 'password') || '';
+        auth = {
+          username,
+          password
+        };
+      }
+      if (maybeWithAuthCredentials(url)) {
+        const parsedURL = new URL(url, platform.origin);
+        if (!auth && (parsedURL.username || parsedURL.password)) {
+          const urlUsername = decodeURIComponentSafe(parsedURL.username);
+          const urlPassword = decodeURIComponentSafe(parsedURL.password);
+          auth = {
+            username: urlUsername,
+            password: urlPassword
+          };
+        }
+        if (parsedURL.username || parsedURL.password) {
+          parsedURL.username = '';
+          parsedURL.password = '';
+          url = parsedURL.href;
+        }
+      }
+      if (auth) {
+        headers.delete('authorization');
+        headers.set('Authorization', 'Basic ' + btoa(encodeUTF8((auth.username || '') + ':' + (auth.password || ''))));
+      }
+
       // Enforce maxContentLength for data: URLs up-front so we never materialize
       // an oversized payload. The HTTP adapter applies the same check (see http.js
       // "if (protocol === 'data:')" branch).
@@ -58812,30 +61383,54 @@ const factory = env => {
         }
       }
 
-      // Enforce maxBodyLength against the outbound request body before dispatch.
-      // Mirrors http.js behavior (ERR_BAD_REQUEST / 'Request body larger than
-      // maxBodyLength limit'). Skip when the body length cannot be determined
-      // (e.g. a live ReadableStream supplied by the caller).
+      // Enforce maxBodyLength against known-size bodies before dispatch using
+      // the body's *actual* size — never a caller-declared Content-Length,
+      // which could under-report to slip an oversized body past the check.
+      // Unknown-size streams return undefined here and are counted per-chunk
+      // below as fetch consumes them.
       if (hasMaxBodyLength && method !== 'get' && method !== 'head') {
-        const outboundLength = await resolveBodyLength(headers, data);
-        if (typeof outboundLength === 'number' && isFinite(outboundLength) && outboundLength > maxBodyLength) {
-          throw new AxiosError('Request body larger than maxBodyLength limit', AxiosError.ERR_BAD_REQUEST, config, request);
+        const outboundLength = await getBodyLength(data);
+        if (typeof outboundLength === 'number' && isFinite(outboundLength)) {
+          requestContentLength = outboundLength;
+          if (outboundLength > maxBodyLength) {
+            throw maxBodyLengthError();
+          }
         }
       }
-      if (onUploadProgress && supportsRequestStream && method !== 'get' && method !== 'head' && (requestContentLength = await resolveBodyLength(headers, data)) !== 0) {
-        let _request = new Request(url, {
-          method: 'POST',
-          body: data,
-          duplex: 'half'
-        });
-        let contentTypeHeader;
-        if (utils$1.isFormData(data) && (contentTypeHeader = _request.headers.get('content-type'))) {
-          headers.setContentType(contentTypeHeader);
+
+      // A streamed body under maxBodyLength must be counted as fetch consumes
+      // it; its size is never trusted from a caller-declared Content-Length.
+      const mustEnforceStreamBody = hasMaxBodyLength && (utils$1.isReadableStream(data) || utils$1.isStream(data));
+      const trackRequestStream = (stream, onProgress, flush) => trackStream(stream, DEFAULT_CHUNK_SIZE, loadedBytes => {
+        if (hasMaxBodyLength && loadedBytes > maxBodyLength) {
+          throw pendingBodyError = maxBodyLengthError();
         }
-        if (_request.body) {
-          const [onProgress, flush] = progressEventDecorator(requestContentLength, progressEventReducer(asyncDecorator(onUploadProgress)));
-          data = trackStream(_request.body, DEFAULT_CHUNK_SIZE, onProgress, flush);
+        onProgress && onProgress(loadedBytes);
+      }, flush);
+      if (supportsRequestStream && method !== 'get' && method !== 'head' && (onUploadProgress || mustEnforceStreamBody)) {
+        requestContentLength = requestContentLength == null ? await resolveBodyLength(headers, data) : requestContentLength;
+
+        // A declared length of 0 is only trusted to skip the wrap when we are
+        // not enforcing a stream limit (which must not rely on that header).
+        if (requestContentLength !== 0 || mustEnforceStreamBody) {
+          let _request = new Request(url, {
+            method: 'POST',
+            body: data,
+            duplex: 'half'
+          });
+          let contentTypeHeader;
+          if (utils$1.isFormData(data) && (contentTypeHeader = _request.headers.get('content-type'))) {
+            headers.setContentType(contentTypeHeader);
+          }
+          if (_request.body) {
+            const [onProgress, flush] = onUploadProgress && progressEventDecorator(requestContentLength, progressEventReducer(asyncDecorator(onUploadProgress))) || [];
+            data = trackRequestStream(_request.body, onProgress, flush);
+          }
         }
+      } else if (mustEnforceStreamBody && !isRequestSupported && isReadableStreamSupported && method !== 'get' && method !== 'head') {
+        data = trackRequestStream(data);
+      } else if (mustEnforceStreamBody && isRequestSupported && !supportsRequestStream && method !== 'get' && method !== 'head') {
+        throw new AxiosError('Stream request bodies are not supported by the current fetch implementation', AxiosError.ERR_NOT_SUPPORT, config, request);
       }
       if (!utils$1.isString(withCredentials)) {
         withCredentials = withCredentials ? 'include' : 'omit';
@@ -58856,22 +61451,52 @@ const factory = env => {
 
       // Set User-Agent header if not already set (fetch defaults to 'node' in Node.js)
       headers.set('User-Agent', 'axios/' + VERSION, false);
-      const resolvedOptions = {
-        ...fetchOptions,
+      const safeFetchOptions = fetchOptions == null ? fetchOptions : Object.assign(Object.create(null), fetchOptions);
+      if (safeFetchOptions) {
+        // These options are owned by Axios and are already reflected in the
+        // resolved Request passed to fetch.
+        delete safeFetchOptions.body;
+        delete safeFetchOptions.headers;
+        delete safeFetchOptions.method;
+        delete safeFetchOptions.signal;
+        delete safeFetchOptions.duplex;
+        delete safeFetchOptions.credentials;
+      }
+      const resolvedOptions = Object.assign(Object.create(null), safeFetchOptions, {
         signal: composedSignal,
         method: method.toUpperCase(),
         headers: toByteStringHeaderObject(headers.normalize()),
         body: data,
         duplex: 'half',
         credentials: isCredentialsSupported ? withCredentials : undefined
-      };
+      });
+      if (isRequestSupported) {
+        utils$1.forEach(DEFAULT_REQUEST_OPTIONS, (value, key) => {
+          if (resolvedOptions[key] === undefined) {
+            resolvedOptions[key] = value;
+          }
+        });
+        if (resolvedOptions.signal === undefined) {
+          resolvedOptions.signal = null;
+        }
+        if (resolvedOptions.body === undefined) {
+          resolvedOptions.body = null;
+        }
+      }
+      if (maxRedirects === 0) {
+        resolvedOptions.redirect = 'manual';
+        if (safeFetchOptions) {
+          safeFetchOptions.redirect = 'manual';
+        }
+      }
       request = isRequestSupported && new Request(url, resolvedOptions);
-      let response = await (isRequestSupported ? _fetch(request, fetchOptions) : _fetch(url, resolvedOptions));
+      let response = await (isRequestSupported ? _fetch(request, safeFetchOptions) : _fetch(url, resolvedOptions));
+      const responseHeaders = AxiosHeaders.from(response.headers);
 
       // Cheap pre-check: if the server honestly declares a content-length that
       // already exceeds the cap, reject before we start streaming.
       if (hasMaxContentLength) {
-        const declaredLength = utils$1.toFiniteNumber(response.headers.get('content-length'));
+        const declaredLength = utils$1.toFiniteNumber(responseHeaders.getContentLength());
         if (declaredLength != null && declaredLength > maxContentLength) {
           throw new AxiosError('maxContentLength size of ' + maxContentLength + ' exceeded', AxiosError.ERR_BAD_RESPONSE, config, request);
         }
@@ -58882,7 +61507,7 @@ const factory = env => {
         ['status', 'statusText', 'headers'].forEach(prop => {
           options[prop] = response[prop];
         });
-        const responseContentLength = utils$1.toFiniteNumber(response.headers.get('content-length'));
+        const responseContentLength = utils$1.toFiniteNumber(responseHeaders.getContentLength());
         const [onProgress, flush] = onDownloadProgress && progressEventDecorator(responseContentLength, progressEventReducer(asyncDecorator(onDownloadProgress), true)) || [];
         let bytesRead = 0;
         const onChunkProgress = loadedBytes => {
@@ -58941,13 +61566,48 @@ const factory = env => {
         const canceledError = composedSignal.reason;
         canceledError.config = config;
         request && (canceledError.request = request);
-        err !== canceledError && (canceledError.cause = err);
+        if (err !== canceledError) {
+          // Non-enumerable to match native Error `cause` semantics so loggers
+          // don't recurse into circular fetch internals (see #7205).
+          Object.defineProperty(canceledError, 'cause', {
+            __proto__: null,
+            value: err,
+            writable: true,
+            enumerable: false,
+            configurable: true
+          });
+        }
         throw canceledError;
       }
+
+      // Surface a maxBodyLength violation we raised while the request body was
+      // being streamed. Matching by identity (rather than reading
+      // `err.cause.isAxiosError`) keeps the error deterministic across runtimes
+      // and avoids both prototype-pollution reads and mis-attributing a foreign
+      // AxiosError that merely happened to land in `err.cause`.
+      if (pendingBodyError) {
+        request && !pendingBodyError.request && (pendingBodyError.request = request);
+        throw pendingBodyError;
+      }
+
+      // Re-throw AxiosErrors we raised synchronously (data: URL / content-length
+      // pre-checks, response size enforcement) without re-wrapping them.
+      if (err instanceof AxiosError) {
+        request && !err.request && (err.request = request);
+        throw err;
+      }
       if (err && err.name === 'TypeError' && /Load failed|fetch/i.test(err.message)) {
-        throw Object.assign(new AxiosError('Network Error', AxiosError.ERR_NETWORK, config, request, err && err.response), {
-          cause: err.cause || err
+        const networkError = new AxiosError('Network Error', AxiosError.ERR_NETWORK, config, request, err && err.response);
+        // Non-enumerable to match native Error `cause` semantics so loggers
+        // don't recurse into circular fetch internals (see #7205).
+        Object.defineProperty(networkError, 'cause', {
+          __proto__: null,
+          value: err.cause || err,
+          writable: true,
+          enumerable: false,
+          configurable: true
         });
+        throw networkError;
       }
       throw AxiosError.from(err, err && err.code, config, request, err && err.response);
     }
@@ -59066,7 +61726,7 @@ function getAdapter(adapters, config) {
   if (!adapter) {
     const reasons = Object.entries(rejectedReasons).map(([id, state]) => `adapter ${id} ` + (state === false ? 'is not supported by the environment' : 'is not available in the build'));
     let s = length ? reasons.length > 1 ? 'since :\n' + reasons.map(renderReason).join('\n') : ' ' + renderReason(reasons[0]) : 'as no adapter specified';
-    throw new AxiosError(`There is no suitable adapter to dispatch the request ` + s, 'ERR_NOT_SUPPORT');
+    throw new AxiosError(`There is no suitable adapter to dispatch the request ` + s, AxiosError.ERR_NOT_SUPPORT);
   }
   return adapter;
 }
@@ -59110,9 +61770,13 @@ function throwIfCancellationRequested(config) {
  *
  * @returns {Promise} The Promise to be fulfilled
  */
-function dispatchRequest(config) {
+function dispatchRequest(_config) {
+  // Interceptors may replace the merged config with an ordinary object. Flatten
+  // it at the dispatch boundary so shared prototype members cannot become
+  // request behavior, while preserving intentional template/class members.
+  const config = utils$1.toSafeFlatObject(_config);
   throwIfCancellationRequested(config);
-  config.headers = AxiosHeaders.from(config.headers);
+  config.headers = AxiosHeaders.from(utils$1.getSafeProp(config, 'headers'));
 
   // Transform request data
   config.data = transformData.call(config, config.transformRequest);
@@ -59209,7 +61873,7 @@ validators$1.spelling = function spelling(correctSpelling) {
  */
 
 function assertOptions(options, schema, allowUnknown) {
-  if (typeof options !== 'object') {
+  if (typeof options !== 'object' || options === null) {
     throw new AxiosError('options must be an object', AxiosError.ERR_BAD_OPTION_VALUE);
   }
   const keys = Object.keys(options);
@@ -59268,18 +61932,17 @@ class Axios {
       return await this._request(configOrUrl, config);
     } catch (err) {
       if (err instanceof Error) {
-        let dummy = {};
-        Error.captureStackTrace ? Error.captureStackTrace(dummy) : dummy = new Error();
-
-        // slice off the Error: ... line
-        const stack = (() => {
-          if (!dummy.stack) {
-            return '';
-          }
-          const firstNewlineIndex = dummy.stack.indexOf('\n');
-          return firstNewlineIndex === -1 ? '' : dummy.stack.slice(firstNewlineIndex + 1);
-        })();
         try {
+          let dummy = {};
+          Error.captureStackTrace ? Error.captureStackTrace(dummy) : dummy = new Error();
+          const dummyStack = dummy.stack;
+          let stack = '';
+
+          // slice off the Error: ... line
+          if (typeof dummyStack === 'string') {
+            const firstNewlineIndex = dummyStack.indexOf('\n');
+            stack = firstNewlineIndex === -1 ? '' : dummyStack.slice(firstNewlineIndex + 1);
+          }
           if (!err.stack) {
             err.stack = stack;
             // match without the 2 top stack lines
@@ -59292,7 +61955,7 @@ class Axios {
             }
           }
         } catch (e) {
-          // ignore the case where "stack" is an un-writable property
+          // Ignore failures from custom stack hooks or un-writable stack properties.
         }
       }
       throw err;
@@ -59318,7 +61981,9 @@ class Axios {
         silentJSONParsing: validators.transitional(validators.boolean),
         forcedJSONParsing: validators.transitional(validators.boolean),
         clarifyTimeoutError: validators.transitional(validators.boolean),
-        legacyInterceptorReqResOrdering: validators.transitional(validators.boolean)
+        legacyInterceptorReqResOrdering: validators.transitional(validators.boolean),
+        advertiseZstdAcceptEncoding: validators.transitional(validators.boolean),
+        validateStatusUndefinedResolves: validators.transitional(validators.boolean)
       }, false);
     }
     if (paramsSerializer != null) {
@@ -59346,11 +62011,11 @@ class Axios {
     }, true);
 
     // Set config.method
-    config.method = (config.method || this.defaults.method || 'get').toLowerCase();
+    config.method = (utils$1.getSafeProp(config, 'method') || utils$1.getSafeProp(this.defaults, 'method') || 'get').toLowerCase();
 
     // Flatten headers
     let contextHeaders = headers && utils$1.merge(headers.common, headers[config.method]);
-    headers && utils$1.forEach(['delete', 'get', 'head', 'post', 'put', 'patch', 'query', 'common'], method => {
+    headers && utils$1.forEach(methodList.concat('common'), method => {
       delete headers[method];
     });
     config.headers = AxiosHeaders.concat(contextHeaders, headers);
@@ -59395,16 +62060,29 @@ class Axios {
       const onFulfilled = requestInterceptorChain[i++];
       const onRejected = requestInterceptorChain[i++];
       try {
-        newConfig = onFulfilled(newConfig);
+        newConfig = onFulfilled ? onFulfilled(newConfig) : newConfig;
       } catch (error) {
-        onRejected.call(this, error);
+        if (!onRejected) {
+          promise = Promise.reject(error);
+          break;
+        }
+        try {
+          const rejectedResult = onRejected.call(this, error);
+          if (utils$1.isThenable(rejectedResult)) {
+            promise = Promise.resolve(rejectedResult).then(() => dispatchRequest.call(this, newConfig));
+          }
+        } catch (rejectedError) {
+          promise = Promise.reject(rejectedError);
+        }
         break;
       }
     }
-    try {
-      promise = dispatchRequest.call(this, newConfig);
-    } catch (error) {
-      return Promise.reject(error);
+    if (!promise) {
+      try {
+        promise = dispatchRequest.call(this, newConfig);
+      } catch (error) {
+        promise = Promise.reject(error);
+      }
     }
     i = 0;
     len = responseInterceptorChain.length;
@@ -59415,7 +62093,7 @@ class Axios {
   }
   getUri(config) {
     config = mergeConfig(this.defaults, config);
-    const fullPath = buildFullPath(config.baseURL, config.url, config.allowAbsoluteUrls);
+    const fullPath = buildFullPath(config.baseURL, config.url, config.allowAbsoluteUrls, config);
     return buildURL(fullPath, config.params, config.paramsSerializer);
   }
 }
@@ -59427,7 +62105,7 @@ utils$1.forEach(['delete', 'get', 'head', 'options'], function forEachMethodNoDa
     return this.request(mergeConfig(config || {}, {
       method,
       url,
-      data: (config || {}).data
+      data: config && utils$1.hasOwnProp(config, 'data') ? config.data : undefined
     }));
   };
 });
@@ -59643,14 +62321,22 @@ const HttpStatusCode = {
   Gone: 410,
   LengthRequired: 411,
   PreconditionFailed: 412,
+  /**
+   * @deprecated Use `ContentTooLarge` instead.
+   */
   PayloadTooLarge: 413,
+  ContentTooLarge: 413,
   UriTooLong: 414,
   UnsupportedMediaType: 415,
   RangeNotSatisfiable: 416,
   ExpectationFailed: 417,
   ImATeapot: 418,
   MisdirectedRequest: 421,
+  /**
+   * @deprecated Use `UnprocessableContent` instead.
+   */
   UnprocessableEntity: 422,
+  UnprocessableContent: 422,
   Locked: 423,
   FailedDependency: 424,
   TooEarly: 425,
@@ -59670,6 +62356,7 @@ const HttpStatusCode = {
   LoopDetected: 508,
   NotExtended: 510,
   NetworkAuthenticationRequired: 511,
+  WebServerReturnsAnUnknownError: 520,
   WebServerIsDown: 521,
   ConnectionTimedOut: 522,
   OriginIsUnreachable: 523,
@@ -59678,7 +62365,9 @@ const HttpStatusCode = {
   InvalidSslCertificate: 526
 };
 Object.entries(HttpStatusCode).forEach(([key, value]) => {
-  HttpStatusCode[value] = key;
+  if (HttpStatusCode[value] === undefined) {
+    HttpStatusCode[value] = key;
+  }
 });
 
 /**
@@ -59746,7 +62435,6 @@ axios.HttpStatusCode = HttpStatusCode;
 axios.default = axios;
 
 module.exports = axios;
-//# sourceMappingURL=axios.cjs.map
 
 
 /***/ }),
@@ -59807,10 +62495,10 @@ module.exports = {"version":"3.19.0"};
 /************************************************************************/
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
-const { MetricsScanner, ConfigLoader } = __nccwpck_require__(6863);
+const { MetricsScanner, ConfigLoader } = __nccwpck_require__(9863);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
-const { execSync } = __nccwpck_require__(5317);
+const { execSync, execFile } = __nccwpck_require__(5317);
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -59818,6 +62506,61 @@ function getInput(name) {
   const hyphenKey = `INPUT_${name.toUpperCase().replace(/-/g, '-')}`;
   const underscoreKey = `INPUT_${name.toUpperCase().replace(/-/g, '_')}`;
   return process.env[hyphenKey] || process.env[underscoreKey] || core.getInput(name) || '';
+}
+
+// ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
+// 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个作为本次安装的 PIP_INDEX_URL，
+// 避免执行机到某个源出网被重置（Connection reset by peer）时安装必然失败
+const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
+const PIP_ORIGINAL = 'https://pypi.org/simple';
+const PIP_SPEED_TEST_TIMEOUT = 5;
+
+// 探测索引源首字节耗时（毫秒），超时或不可达返回 -1。
+// 只请求该索引下 lizard 单包页面的首个字节（-r 0-0 + time_starttransfer）：
+// 整个 simple 索引页面体积很大，5 秒内拉不完会被误判为不可达，导致测速失去区分度
+function testUrlSpeed(indexUrl) {
+  const probeUrl = `${indexUrl.replace(/\/$/, '')}/lizard/`;
+  return new Promise((resolve) => {
+    execFile(
+      'curl',
+      [
+        '-s', '-o', '/dev/null', '-w', '%{time_starttransfer}',
+        '--max-time', String(PIP_SPEED_TEST_TIMEOUT),
+        '-r', '0-0', probeUrl
+      ],
+      { encoding: 'utf8', timeout: (PIP_SPEED_TEST_TIMEOUT + 2) * 1000 },
+      (err, stdout) => {
+        // 镜像忽略 Range 返回全量时会被 --max-time 截断（err 非空），
+        // 但首字节耗时已由 -w 写出，仍可据此比较，故 err 非空也尝试解析
+        const seconds = parseFloat((stdout || '').trim());
+        resolve(isNaN(seconds) || seconds <= 0 ? -1 : Math.round(seconds * 1000));
+      }
+    );
+  });
+}
+
+// 并行测速 PyPI 源站与华为镜像（串行探测在双超时场景下要白等两倍时间），
+// 返回可用且更快的索引地址
+async function detectPipIndexUrl() {
+  core.info('Probing pip index reachability...');
+  const [originalMs, mirrorMs] = await Promise.all([
+    testUrlSpeed(PIP_ORIGINAL),
+    testUrlSpeed(PIP_MIRROR_DEFAULT)
+  ]);
+  core.info(`pypi.org: ${originalMs >= 0 ? originalMs + 'ms' : 'unreachable'}`);
+  core.info(`huaweicloud mirror: ${mirrorMs >= 0 ? mirrorMs + 'ms' : 'unreachable'}`);
+  // 两侧都不可达时回退源站（与 pre-commit-action 行为一致）
+  if (originalMs < 0 && mirrorMs < 0) {
+    core.warning('Both pypi.org and huaweicloud mirror are unreachable, fallback to pypi.org');
+    return PIP_ORIGINAL;
+  }
+  if (originalMs < 0) {
+    return PIP_MIRROR_DEFAULT;
+  }
+  if (mirrorMs < 0) {
+    return PIP_ORIGINAL;
+  }
+  return originalMs <= mirrorMs ? PIP_ORIGINAL : PIP_MIRROR_DEFAULT;
 }
 
 async function run() {
@@ -59842,12 +62585,15 @@ async function run() {
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
     // coderepo 服务地址硬编码到插件（部署时确定的固定值）
-    // APIG 凭证通过 apig-app-key / apig-app-secret 输入参数获取（工作流 with 传入）
-    const coderepoUrl = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com';
+    const coderepoUrl = 'https://apig.openlibing.com:443';
+    // 认证模式判定（OIDC 联邦认证标识）：workflow 声明 permissions: id-token: write 时，
+    // runner 注入 ACTIONS_ID_TOKEN_REQUEST_URL，走新接口（/action-api/...）+ OIDC 免密认证；
+    // 未声明时走旧接口（/openlibing-coderepo/...）+ AK/SK 签名，兼容尚未适配的存量脚本
+    const useOidc = !!process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+    // AK/SK 凭证（仅 AK/SK 模式使用，OIDC 模式无需传入）：
+    // apig-app-key/apig-app-secret 用于 APIG 上报签名，obs-ak/obs-sk 用于 OBS 全量文件上传
     const apigAppKey = getInput('apig-app-key') || '';
     const apigAppSecret = getInput('apig-app-secret') || '';
-    // OBS 上传凭证（复用 upload-sarif-action 同一套 OBS AK/SK）：
-    // 全量上报文件先上传到 openlibing-gitcode-action 桶，再通过单接口上报 obsUrl
     const obsAk = getInput('obs-ak') || '';
     const obsSk = getInput('obs-sk') || '';
 
@@ -59896,13 +62642,18 @@ async function run() {
       branchName = atomgitRefName || '';
     }
 
-    // repository 字段已移除：写死 source-dir 后插件只能扫描工作流所在仓，
-    // 工作流所在仓 git_url 即扫描仓，后端从 gitUrl 提取 owner/repo 拼接流水线链接
+    // repository 字段已移除：写死 source-dir 后，工作流所在仓 git_url 即扫描仓，
+    // 后端从 gitUrl 提取 owner/repo 拼接流水线链接
     // pipelineRunId / runNumber：优先用 GitCode runner 自动注入的 ATOMGIT_RUN_ID / ATOMGIT_RUN_NUMBER，
     // 兼容 workflow 手动注入的 PIPELINE_RUN_ID / PIPELINE_RUN_NUMBER（旧配置）
     const pipelineRunId = process.env['ATOMGIT_RUN_ID'] || process.env['PIPELINE_RUN_ID'] || '';
     // runNumber 从环境变量获取，仅作记录
     const runNumber = process.env['ATOMGIT_RUN_NUMBER'] || process.env['PIPELINE_RUN_NUMBER'] || '';
+    // commitId：触发本次工作流的提交 SHA（ATOMGIT_SHA），口径与 CodeQL 上报（openlibing-upload-sarif）一致
+    const commitId = process.env['ATOMGIT_SHA'] || '';
+    // pipelineName：流水线名称（GitCode runner 自动注入的 ATOMGIT_WORKFLOW），
+    // 口径与安全编译选项插件（security-compilation-options-action）一致，供度量数据下钻页展示来源流水线
+    const pipelineName = process.env['ATOMGIT_WORKFLOW'] || '';
 
     // 加载配置
     let config;
@@ -59933,27 +62684,52 @@ async function run() {
         enabled: true,
         coderepoUrl: coderepoUrl,
         timeout: 60000,
+        useOidc: useOidc,
         apigAppKey: apigAppKey,
         apigAppSecret: apigAppSecret,
-        // OBS 上传凭证（复用 upload-sarif-action 同一套 OBS AK/SK）
         obsAk: obsAk,
         obsSk: obsSk
       };
     }
 
+    core.info(`Upload auth mode: ${useOidc ? 'oidc (new endpoint /action-api)' : 'aksk (legacy endpoint /openlibing-coderepo)'}`);
+
     // 自动安装 Python 依赖（用户无需在 workflow 中手动配置 install_dependency 步骤）
-    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    // 固定 lizard 版本，避免不同执行机装到不同版本导致指标基线不可比
+    const LIZARD_VERSION = '1.24.0';
+    // 先测速选定 pip 索引源；仅在本次安装子进程中通过 PIP_INDEX_URL 注入，
+    // 不改写执行机的 pip 配置文件（self-hosted 常驻机上写全局配置会跨任务持久生效）
+    const pipIndexUrl = await detectPipIndexUrl();
+    // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
+    // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
+    let supportsBreakSystemPackages = false;
+    try {
+      const pipInstallHelp = execSync('python3 -m pip install --help', {
+        encoding: 'utf8',
+        timeout: 30000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
+    } catch (e) {
+      // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
+      core.debug(`pip install --help probe failed: ${e.message}`);
+    }
     const pipInstallArgs = [
-      '-m', 'pip', 'install', '--break-system-packages', 'lizard',
-      '-i', 'https://mirrors.aliyun.com/pypi/simple/',
-      '--trusted-host', 'mirrors.aliyun.com'
+      '-m', 'pip', 'install',
+      ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
+      `lizard==${LIZARD_VERSION}`
     ];
     try {
-      core.info('Installing Python dependencies (lizard)...');
-      execSync([pythonCmd, ...pipInstallArgs].join(' '), { stdio: 'inherit', timeout: 120000 });
+      core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
+      execSync(['python3', ...pipInstallArgs].join(' '), {
+        stdio: 'inherit',
+        timeout: 120000,
+        env: { ...process.env, PIP_INDEX_URL: pipIndexUrl }
+      });
       core.info('Python dependencies installed successfully');
     } catch (e) {
-      core.warning(`Python dependency installation failed: ${e.message}. The scan may fail if dependencies are missing.`);
+      // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
+      core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
     }
 
     core.info('Starting code metrics scan...');
@@ -59962,6 +62738,8 @@ async function run() {
     core.info(`gitUrl: ${gitUrl || '(empty)'}`);
     core.info(`branchName: ${branchName || '(empty)'}`);
     core.info(`pipelineRunId: ${pipelineRunId || '(empty)'}`);
+    core.info(`commitId: ${commitId || '(empty)'}`);
+    core.info(`pipelineName: ${pipelineName || '(empty)'}`);
 
     const scanner = new MetricsScanner(config);
     const result = await scanner.scan({
@@ -59971,7 +62749,9 @@ async function run() {
       gitUrl: gitUrl,
       branchName: branchName,
       pipelineRunId: pipelineRunId,
-      runNumber: runNumber
+      runNumber: runNumber,
+      commitId: commitId,
+      pipelineName: pipelineName
     });
 
     // 设置输出
@@ -59980,6 +62760,48 @@ async function run() {
     core.setOutput('avg-cyclomatic-complexity', result.avgCyclomaticComplexity);
     core.setOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
     core.setOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
+
+    // 输出概览结果（按固定顺序输出每项指标，标识为 中文名（英文名），重复率带 %），写入 ATOMGIT_OUTPUT 便于工作流直接展示
+    const overviewDisplay = [
+      ['codeScale', '代码规模（codeScale）', String(result.codeScale)],
+      ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', String(result.avgFunctionLoc)],
+      ['avgCyclomaticComplexity', '平均圈复杂度（avgCyclomaticComplexity）', String(result.avgCyclomaticComplexity)],
+      ['totalCodeDuplicationRate', '总代码重复率（totalCodeDuplicationRate）', `${result.totalCodeDuplicationRate}%`],
+      ['totalFileDuplicationRate', '总文件重复率（totalFileDuplicationRate）', `${result.totalFileDuplicationRate}%`]
+    ];
+    try {
+      const overviewOutputFile = process.env['ATOMGIT_OUTPUT'];
+      if (overviewOutputFile) {
+        // 每行一个 标识=值 键值对，避免单行 JSON 多行转义问题
+        const lines = overviewDisplay.map(item => `${item[1]}=${item[2]}`);
+        fs.appendFileSync(overviewOutputFile, lines.join('\n') + '\n', 'utf8');
+      }
+    } catch (e) {
+      core.warning(`写入 ATOMGIT_OUTPUT 概览结果失败: ${e.message}`);
+    }
+
+    // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥），仅写 ATOMGIT_OUTPUT
+    // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出
+    const DETAIL_LINK_LABEL = '代码度量指标扫描结果';
+    const detailLink = result.uploadInfo?.detailLink || '';
+    const detailTip = result.uploadInfo?.tip || '';
+    if (detailLink) {
+      core.info(`${DETAIL_LINK_LABEL}: ${detailLink}`);
+    } else if (detailTip) {
+      core.info(`${DETAIL_LINK_LABEL}: ${detailTip}`);
+    } else {
+      core.info(`${DETAIL_LINK_LABEL}: 无链接（上报失败或链接构建异常，不输出）`);
+    }
+    try {
+      const detailOutputFile = process.env['ATOMGIT_OUTPUT'];
+      if (detailOutputFile && (detailLink || detailTip)) {
+        // 链接行 key 以 url 结尾：平台按 key 末尾小写 url 判定 type=link 渲染为可点击链接；提示行 key 不带 url 后缀，避免提示文本被渲染成无效链接
+        const detailOutputLine = detailLink ? `扫描结果url=${detailLink}` : `扫描结果=${detailTip}`;
+        fs.appendFileSync(detailOutputFile, detailOutputLine + '\n', 'utf8');
+      }
+    } catch (e) {
+      core.warning(`写入 ATOMGIT_OUTPUT 链接结果失败: ${e.message}`);
+    }
 
     core.info('Code metrics scan completed successfully');
     core.info(`Code scale: ${result.codeScale}`);

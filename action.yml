@@ -1,10 +1,10 @@
 name: "openlibing-code-metrics-action"
 author: "openLiBing"
-version: 1.0.6
+version: 1.0.3
 description: "代码度量扫描插件 - 检测代码规模、平均函数代码行数、平均圈复杂度、代码重复率和文件重复率"
 inputs:
   exclude-dirs:
-    description: "排除目录列表，逗号分隔"
+    description: "排除目录/文件列表，逗号分隔，支持通配符 *、**、?、[abc]；裸名称仅匹配顶层，含 / 路径锚定扫描根"
     required: false
     default: ""
     layout:
@@ -40,44 +40,48 @@ inputs:
       validation:
         required_message: ""
   apig-app-key:
-    description: "APIG 网关 AppKey（AK），用于上传检测结果到 openLiBing 平台。上传功能默认开启，此项必填"
-    required: true
+    description: "APIG 网关 AppKey（AK），仅 AK/SK 模式使用。workflow 已声明 permissions: id-token: write 时走 OIDC 免密联邦认证，无需传入"
+    required: false
+    default: ""
     layout:
       type: "input"
-      label: "APIG AppKey"
+      label: "APIG AppKey（AK/SK 模式）"
       extend_prop:
         visible_conditions: []
         disabled_conditions: []
       validation:
         required_message: ""
   apig-app-secret:
-    description: "APIG 网关 AppSecret（SK），用于上传检测结果到 openLiBing 平台。上传功能默认开启，此项必填"
-    required: true
+    description: "APIG 网关 AppSecret（SK），与 apig-app-key 配套，仅 AK/SK 模式使用"
+    required: false
+    default: ""
     layout:
       type: "input"
-      label: "APIG AppSecret"
+      label: "APIG AppSecret（AK/SK 模式）"
       extend_prop:
         visible_conditions: []
         disabled_conditions: []
       validation:
         required_message: ""
   obs-ak:
-    description: "OBS 访问密钥（AK），用于把全量上报文件上传到 openLiBing 平台统一桶（openlibing-gitcode-action / code-metrics-action/）。与 upload-sarif-action 复用同一套 OBS 凭证，此项必填"
-    required: true
+    description: "OBS 访问密钥 AK，仅 AK/SK 模式使用（全量上报文件上传到 openlibing-gitcode-action 桶）。OIDC 模式使用 STS 临时凭证，无需传入"
+    required: false
+    default: ""
     layout:
       type: "input"
-      label: "OBS AK"
+      label: "OBS AK（AK/SK 模式）"
       extend_prop:
         visible_conditions: []
         disabled_conditions: []
       validation:
         required_message: ""
   obs-sk:
-    description: "OBS 访问密钥（SK），与 obs-ak 配套。此项必填"
-    required: true
+    description: "OBS 访问密钥 SK，与 obs-ak 配套，仅 AK/SK 模式使用"
+    required: false
+    default: ""
     layout:
       type: "input"
-      label: "OBS SK"
+      label: "OBS SK（AK/SK 模式）"
       extend_prop:
         visible_conditions: []
         disabled_conditions: []

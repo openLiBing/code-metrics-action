@@ -1,34 +1,49 @@
 const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const BaseDetector = require('./BaseDetector');
+const FileCollector = require('../utils/fileCollector');
 
-// scc 二进制文件路径：优先使用项目内置的 bin 目录，其次从 PATH 查找
+// scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
 function getSccPath() {
   // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
-  // - ncc bundle：模块级 __dirname 指向打包缓存目录，须用 ncc 注入的
-  //   __nccwpck_require__.ab（bundle 根 = dist/）定位内置 bin，否则回退裸 scc 报 not found
-  // - 源码结构：无 __nccwpck_require__ 全局，__dirname 即 dist/detectors，上溯一层为 dist/
-  const baseDir = (typeof __nccwpck_require__ !== 'undefined')
+  // - ncc bundle：用 ncc 注入的 __nccwpck_require__.ab（bundle 根 = dist/）定位内置 bin
+  // - 源码结构：无 __nccwpck_require__ 全局，__dirname 即 src/detectors
+  const bundleRoot = (typeof __nccwpck_require__ !== 'undefined')
     ? __nccwpck_require__.ab
-    : path.join(__dirname, '..');
-  const binDir = path.join(baseDir, 'bin');
-  const ext = os.platform() === 'win32' ? '.exe' : '';
-  const localScc = path.join(binDir, `scc${ext}`);
-  if (fs.existsSync(localScc)) {
-    // 非 Windows 环境：zip 打包 / git clone 在 Linux 解压后可能丢失可执行权限位，
-    // 导致 "Permission denied"。此处运行时强制赋予 0o755，保证可执行。
-    if (os.platform() !== 'win32') {
+    : null;
+  // 候选顺序：
+  // 1. bundle 根 + bin/（标准 ncc 打包形态，asset 随目录分发）
+  // 2. bundle 根根目录平铺（部分平台分发时把 asset 平铺到 dist/ 根）
+  // 3. 源码结构：__dirname=src/detectors，上溯一层为 src/（即 src/bin/scc）
+  const candidates = [];
+  if (bundleRoot) {
+    candidates.push(path.join(bundleRoot, 'bin', 'scc'));
+    candidates.push(path.join(bundleRoot, 'scc'));
+  }
+  candidates.push(path.join(__dirname, 'bin', 'scc'));
+  candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
+  candidates.push(path.join(__dirname, 'scc'));
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755，保证可执行
       try {
-        fs.chmodSync(localScc, 0o755);
+        fs.chmodSync(candidate, 0o755);
       } catch (e) {
         console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
       }
+      return candidate;
     }
-    return localScc;
   }
-  return 'scc';
+  // PATH 探测：确认 runner 环境本身安装了 scc 才使用裸命令名，
+  // 避免执行注定失败的命令产生误导性报错
+  try {
+    execSync('command -v scc', { stdio: 'ignore' });
+    return 'scc';
+  } catch (e) {
+    console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
+    return null;
+  }
 }
 
 class SlocDetector extends BaseDetector {
@@ -44,6 +59,12 @@ class SlocDetector extends BaseDetector {
 
     const sccArgs = this.buildSccArgs(sources, excludeDirs);
 
+    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接回退本地逐文件统计，
+    // 跳过注定失败的命令执行
+    if (!this.sccPath) {
+      return this.fallbackDetect(sources, excludeDirs);
+    }
+
     try {
       const result = this.runScc(sccArgs, sources);
       return result;
@@ -57,10 +78,9 @@ class SlocDetector extends BaseDetector {
   buildSccArgs(sources, excludeDirs) {
     const args = ['-f', 'json', '--no-cocomo', '--no-size', '--by-file'];
 
-    // 排除目录
-    for (const dir of excludeDirs) {
-      args.push('--exclude-dir', dir);
-    }
+    // 不再向 scc 传 --exclude-dir：scc 自身的排除规则不支持 ** 等 glob 通配符，
+    // 无法与 FileCollector 的 exclude-dirs 语义对齐。改为扫描全量后，在 runScc 里
+    // 用 FileCollector.isPathExcluded 对每个文件做后置过滤，保证与其余指标完全一致。
 
     // 限制文件扩展名
     if (this.allowedExtensions.length > 0) {
@@ -93,6 +113,7 @@ class SlocDetector extends BaseDetector {
 
     // scc JSON 输出格式: 按语言分组
     // [{ Name, Code, Comment, Blank, Lines, Complexity, Count, Bytes, Files:[...] }]
+    const excludeDirs = this.config.excludeDirs || [];
     let totalCode = 0;
     let totalComment = 0;
     let totalBlank = 0;
@@ -104,16 +125,21 @@ class SlocDetector extends BaseDetector {
     const fileDetails = [];
 
     for (const lang of sccResult) {
-      totalCode += lang.Code || 0;
-      totalComment += lang.Comment || 0;
-      totalBlank += lang.Blank || 0;
-      totalLines += lang.Lines || 0;
-      totalComplexity += lang.Complexity || 0;
-      totalFiles += lang.Count || 0;
-
-      // 解析 --by-file 输出的每个文件
-      if (lang.Files && Array.isArray(lang.Files)) {
-        for (const file of lang.Files) {
+      // 注意：不再累加语言级汇总（含被 exclude-dirs 排除的文件），改为逐文件统计并
+      // 过滤后累加，保证 codeScale 等与 FileCollector 收集的文件范围口径一致。
+      const langFiles = lang.Files;
+      if (!langFiles || !Array.isArray(langFiles) || langFiles.length === 0) {
+        // 兜底：若某语言条目缺少/为空按文件明细（Files 缺失或为空数组），无法做文件级
+        // 排除，则按语言级汇总计入，避免该语言整体被丢弃导致总代码量/总文件数/总复杂度偏小。
+        totalCode += lang.Code || 0;
+        totalComment += lang.Comment || 0;
+        totalBlank += lang.Blank || 0;
+        totalLines += lang.Lines || 0;
+        totalComplexity += lang.Complexity || 0;
+        totalFiles += lang.Count || 0;
+        continue;
+      }
+      for (const file of langFiles) {
           // scc 不同版本的 --by-file JSON 输出字段名可能不同：
           //   - 旧版：Name 是完整路径
           //   - 新版（3.x+）：Name 是文件名，Location 是完整路径
@@ -126,13 +152,27 @@ class SlocDetector extends BaseDetector {
           }
           // 将绝对路径转为相对路径
           let filePath = this.toRelativePath(fileName, sources);
+          // 后置过滤：用 FileCollector 的目录剪枝语义排除命中 exclude-dirs 的文件，
+          // 保证与 FileCollector / lizard / duplication 收集的文件范围完全一致
+          if (excludeDirs.length > 0 && FileCollector.isPathExcluded(filePath, excludeDirs)) {
+            continue;
+          }
+          const code = file.Code || 0;
+          const comment = file.Comment || 0;
+          const blank = file.Blank || 0;
+          totalCode += code;
+          totalComment += comment;
+          totalBlank += blank;
+          totalLines += (file.Lines || (code + comment + blank));
+          totalComplexity += (file.Complexity || 0);
+          totalFiles++;
           fileDetails.push({
             filePath: filePath,
             language: lang.Name || '',
-            loc: file.Code || 0
+            loc: code,
+            commentLines: comment
           });
         }
-      }
     }
 
     console.log(`  - Total files: ${totalFiles}`);
@@ -158,11 +198,14 @@ class SlocDetector extends BaseDetector {
         try {
           const content = fs.readFileSync(file, 'utf8');
           let sourceCount = 0;
+          let commentCount = 0;
           const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
           for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('/*') && !trimmed.startsWith('*') && !trimmed.startsWith('#')) {
               sourceCount++;
+            } else if (trimmed) {
+              commentCount++;
             }
           }
           const filePath = this.toRelativePath(file, sources);
@@ -177,7 +220,8 @@ class SlocDetector extends BaseDetector {
           fileDetails.push({
             filePath: filePath,
             language: langMap[ext] || ext.replace('.', ''),
-            loc: sourceCount
+            loc: sourceCount,
+            commentLines: commentCount
           });
         } catch (e) {
           console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
@@ -249,21 +293,24 @@ class SlocDetector extends BaseDetector {
         totalAll += lines.length;
 
         let fileSourceLines = 0;
+        let fileCommentLines = 0;
         let inBlock = false;
         for (const line of lines) {
           const trimmed = line.trim();
           if (inBlock) {
             totalComment++;
+            fileCommentLines++;
             if (trimmed.includes('*/')) inBlock = false;
             continue;
           }
           if (trimmed === '') { totalEmpty++; continue; }
           if (trimmed.startsWith('/*')) {
             totalComment++;
+            fileCommentLines++;
             if (!trimmed.includes('*/')) inBlock = true;
             continue;
           }
-          if (trimmed.startsWith('//')) { totalComment++; continue; }
+          if (trimmed.startsWith('//')) { totalComment++; fileCommentLines++; continue; }
           totalSource++;
           fileSourceLines++;
         }
@@ -293,7 +340,8 @@ class SlocDetector extends BaseDetector {
         fileDetails.push({
           filePath: filePath,
           language: langMap[ext] || ext.replace('.', ''),
-          loc: fileSourceLines
+          loc: fileSourceLines,
+          commentLines: fileCommentLines
         });
       } catch (e) {
         console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
