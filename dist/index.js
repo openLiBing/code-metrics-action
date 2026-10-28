@@ -53775,6 +53775,8 @@ function sanitize(value, maxLen = MAX_LOG_LINE_LEN) {
     return value;
   }
   // 控制字符（含 \r \n \t）折叠为单空格，压缩连续空格
+  // 匹配控制字符正是本函数的功能本体，豁免 no-control-regex（与 sec-comp #37 同款实现）
+  // eslint-disable-next-line no-control-regex
   const cleaned = value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/ {2,}/g, ' ').trim();
   if (cleaned.length > maxLen) {
     return cleaned.slice(0, maxLen) + '...(truncated)';
