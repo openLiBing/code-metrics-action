@@ -3,6 +3,30 @@ author: "openLiBing"
 version: 1.0.3
 description: "代码度量扫描插件 - 检测代码规模、平均函数代码行数、平均圈复杂度、代码重复率和文件重复率"
 inputs:
+  config-file:
+    description: "自定义配置文件路径（YAML，覆盖默认配置）。未配置时使用内置默认配置"
+    required: false
+    default: ""
+    layout:
+      type: "input"
+      label: "自定义配置文件路径"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
+  min-lines:
+    description: "重复代码检测阈值：连续代码块至少多少行才算一次重复（与华为云 cmetrics 官方定义对齐，默认 10）"
+    required: false
+    default: "10"
+    layout:
+      type: "input"
+      label: "重复检测最小行数"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
   exclude-dirs:
     description: "排除目录/文件列表，逗号分隔，支持通配符 *、**、?、[abc]；裸名称仅匹配顶层，含 / 路径锚定扫描根"
     required: false

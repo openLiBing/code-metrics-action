@@ -251,7 +251,9 @@ class ApigSigner {
 
 class CoderepoUploader {
   constructor(config = {}) {
-    this.baseUrl = config.coderepoUrl || 'http://localhost:8080';
+    // coderepoUrl 由调用方恒传（src/index.js 部署固定常量），无 localhost 死 fallback
+    // （Ref #51，与 sec-comp #26/#31 同款：原 fallback 在真实调用链下不可达，删除即等价加固）
+    this.baseUrl = config.coderepoUrl;
     this.timeout = config.timeout || 30000;
     // 认证模式：useOidc=true 走新接口（/action-api/...）+ OIDC 免密联邦认证；
     // 否则走旧接口（/openlibing-coderepo/...）+ AK/SK（SDK-HMAC-SHA256）签名，兼容存量脚本
@@ -376,8 +378,10 @@ class CoderepoUploader {
       return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
     }
     // 写本地临时文件（runner 上临时目录，用完即删）
-    const tmpFile = path.join(os.tmpdir(), `code-metrics-${Date.now()}.json`);
-    fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), 'utf-8');
+    // 随机文件名（crypto.randomUUID，不可预测）+ 0600 权限（同机其他账户/进程不可读）
+    // （Ref #50 #42：原毫秒时间戳文件名可预测、默认权限 644 可读）
+    const tmpFile = path.join(os.tmpdir(), `code-metrics-${crypto.randomUUID()}.json`);
+    fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), { encoding: 'utf8', mode: 0o600 });
 
     const objectKey = this.buildObjectKey(options);
     try {
