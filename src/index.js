@@ -3,6 +3,7 @@ const { MetricsScanner, ConfigLoader } = require('./scanner');
 const path = require('path');
 const fs = require('fs');
 const { execSync, execFile } = require('child_process');
+const { sanitize } = require('./utils/sanitize');
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -128,8 +129,9 @@ async function run() {
     }
     try {
       const remoteUrl = execSync('git remote get-url origin', { encoding: 'utf8', cwd: gitCwd }).trim();
-      // 清洗掉 url 中可能存在的 token（https://x-access-token:xxx@host/...）
-      gitUrl = remoteUrl.replace(/https:\/\/[^@]+@/, 'https://');
+      // 清洗掉 url 中可能存在的内嵌凭证（任意 scheme 的 userinfo，如 http://user:pass@host/），
+      // 保留 ssh://git@ 标准用户名（Ref #45 #66，与 sec-comp #38 已批准实施同款）
+      gitUrl = remoteUrl.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)(?!git@)[^@\/]+@/, '$1');
       branchName = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', cwd: gitCwd }).trim();
       // detached HEAD（如 checkout 了 tag）时尝试获取 tag 名
       if (branchName === 'HEAD') {
@@ -237,10 +239,12 @@ async function run() {
     }
 
     core.info('Starting code metrics scan...');
-    core.info(`Source directory: ${config.sourceDir}`);
-    // 输出上报关键字段，便于排查 atomgit 上下文异常
-    core.info(`gitUrl: ${gitUrl || '(empty)'}`);
-    core.info(`branchName: ${branchName || '(empty)'}`);
+    // 只输出目录基名，不落 runner 绝对路径（Ref #60，与 sec-comp #36 同款）
+    core.info(`Source directory: ${path.basename(config.sourceDir)}`);
+    // 输出上报关键字段，便于排查 atomgit 上下文异常；
+    // gitUrl/branchName 为外部可控字符串（git remote / 环境变量），过 sanitize 防换行注入（Ref #64）
+    core.info(`gitUrl: ${sanitize(gitUrl) || '(empty)'}`);
+    core.info(`branchName: ${sanitize(branchName) || '(empty)'}`);
     core.info(`pipelineRunId: ${pipelineRunId || '(empty)'}`);
     core.info(`commitId: ${commitId || '(empty)'}`);
     core.info(`pipelineName: ${pipelineName || '(empty)'}`);
@@ -287,8 +291,9 @@ async function run() {
     // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥），仅写 ATOMGIT_OUTPUT
     // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出
     const DETAIL_LINK_LABEL = '代码度量指标扫描结果';
-    const detailLink = result.uploadInfo?.detailLink || '';
-    const detailTip = result.uploadInfo?.tip || '';
+    // detailLink/tip 为服务端响应字段，拼进日志/输出行前过 sanitize 防换行注入（Ref #64）
+    const detailLink = sanitize(result.uploadInfo?.detailLink || '');
+    const detailTip = sanitize(result.uploadInfo?.tip || '');
     if (detailLink) {
       core.info(`${DETAIL_LINK_LABEL}: ${detailLink}`);
     } else if (detailTip) {

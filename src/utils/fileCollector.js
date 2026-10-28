@@ -231,7 +231,7 @@ class FileCollector {
           continue;
         }
         if (!FileCollector.isAllowedFile(name, allowedExtensions)) {
-          console.warn(`[WARN] 文件扩展名不在允许列表中: ${absolutePath}`);
+          console.warn(`[WARN] 文件扩展名不在允许列表中: ${path.basename(absolutePath)}`);
           continue;
         }
         files.push(absolutePath);
