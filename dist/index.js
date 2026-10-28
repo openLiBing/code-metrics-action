@@ -50608,8 +50608,7 @@ class DuplicationDetector extends BaseDetector {
         fileSourceLineMaps.set(file, sourceLineMap);
         totalSourceLines += sourceLineMap.sourceCount;
       } catch (error) {
-        // 只输出文件基名，不落 runner 绝对路径（Ref #60）
-        console.warn(`[WARN] Failed to read file ${path.basename(file)}: ${error.message}`);
+        console.warn(`[WARN] Failed to read file ${file}: ${error.message}`);
       }
     }
     if (binarySkipped > 0) {
@@ -50812,7 +50811,7 @@ class DuplicationDetector extends BaseDetector {
       return new Map();
     }
     const os = __nccwpck_require__(857);
-    const { execSync } = __nccwpck_require__(5317);
+    const { execFileSync } = __nccwpck_require__(5317);
     const sccPath = DuplicationDetector.getSccBinPath();
     // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
     // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
@@ -50836,8 +50835,7 @@ class DuplicationDetector extends BaseDetector {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
       }
-      const cmd = `"${sccPath}" -f json --no-cocomo --no-size --by-file "${tmpRoot}"`;
-      const output = execSync(cmd, {
+      const output = execFileSync(sccPath, ['-f', 'json', '--no-cocomo', '--no-size', '--by-file', tmpRoot], {
         encoding: 'utf8',
         maxBuffer: 100 * 1024 * 1024,
         timeout: 300000,
@@ -52043,7 +52041,7 @@ module.exports = LizardDetector;
 /***/ 2034:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const { execSync } = __nccwpck_require__(5317);
+const { execSync, execFileSync } = __nccwpck_require__(5317);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
 const BaseDetector = __nccwpck_require__(658);
@@ -52143,11 +52141,12 @@ class SlocDetector extends BaseDetector {
     return args;
   }
 
-  // 执行 scc 并解析 JSON 输出
+  // 执行 scc 并解析 JSON 输出。
+  // execFileSync 参数数组直传，不经 shell 解析（Ref #49 #57 #29，与 pre-commit-action #26 同款）：
+  // 消除 sources / --include-ext（来自 allowed-extensions input）等外部输入包含
+  // shell 特殊字符（; ` $() 等）时的命令注入面
   runScc(args, sources) {
-    const cmd = `"${this.sccPath}" ${args.join(' ')}`;
-
-    const output = execSync(cmd, {
+    const output = execFileSync(this.sccPath, args, {
       encoding: 'utf8',
       maxBuffer: 100 * 1024 * 1024,
       timeout: 300000,
@@ -52269,8 +52268,7 @@ class SlocDetector extends BaseDetector {
             commentLines: commentCount
           });
         } catch (e) {
-          // 只输出文件基名，不落 runner 绝对路径（Ref #60）
-          console.warn(`[WARN] 跳过文件 ${path.basename(file)}: ${e.message}`);
+          console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
         }
       }
     }
@@ -52390,8 +52388,7 @@ class SlocDetector extends BaseDetector {
           commentLines: fileCommentLines
         });
       } catch (e) {
-        // 只输出文件基名，不落 runner 绝对路径（Ref #60）
-        console.warn(`[WARN] 跳过文件 ${path.basename(file)}: ${e.message}`);
+        console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
       }
     }
 
@@ -52432,7 +52429,6 @@ const Logger = __nccwpck_require__(8467);
 const FileUtils = __nccwpck_require__(7248);
 const FileCollector = __nccwpck_require__(6790);
 const path = __nccwpck_require__(6928);
-const { sanitize } = __nccwpck_require__(9900);
 
 // 将日期格式化为 yyyy-MM-dd HH:mm:ss
 function formatDateTime(date) {
@@ -52591,8 +52587,7 @@ class MetricsScanner {
           })
         };
         FileUtils.writeJsonFile(outputPath, compactResult);
-        // 只输出文件基名，不落 runner 绝对路径（Ref #60）
-        this.logger.info(`Results saved to: ${path.basename(outputPath)}`);
+        this.logger.info(`Results saved to: ${outputPath}`);
         this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
       }
 
@@ -52610,9 +52605,8 @@ class MetricsScanner {
         });
 
         if (uploadResult.success) {
-          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯；
-          // obsUrl 内嵌从 gitUrl 提取的 owner/repo（外部可控），过 sanitize 防换行注入（Ref #64）
-          this.logger.info(`Successfully uploaded metrics, obsUrl: ${sanitize(uploadResult.obsUrl)}`);
+          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
+          this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
           // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
           result.uploadInfo = {
             success: true,
@@ -52621,7 +52615,7 @@ class MetricsScanner {
             tip: uploadResult.tip || ''
           };
         } else {
-          this.logger.error(`Failed to upload metrics: ${sanitize(uploadResult.error)}`);
+          this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
           result.uploadInfo = { success: false, error: uploadResult.error };
         }
       }
@@ -52683,7 +52677,6 @@ const fs = __nccwpck_require__(9896);
 const os = __nccwpck_require__(857);
 const path = __nccwpck_require__(6928);
 const { execSync, execFileSync } = __nccwpck_require__(5317);
-const { sanitize } = __nccwpck_require__(9900);
 
 // 上报接口路径前缀：新旧网关接口与认证方式一一对应
 // - OIDC 联邦认证（新）：workflow 声明 permissions: id-token: write 时启用
@@ -53013,13 +53006,12 @@ class CoderepoUploader {
 
     const mainUrl = this.buildUrl('/metrics/code/report');
     const mainBody = JSON.stringify(payload);
-    // obsUrl 内嵌从 gitUrl 提取的 owner/repo（外部可控），过 sanitize 防换行注入（Ref #64）
-    console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${sanitize(obsResult.obsUrl)}`);
+    console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${obsResult.obsUrl}`);
     const mainResult = await this.report(mainUrl, mainBody);
     if (!mainResult.success) {
       // 上报失败但 OBS 文件已完整上传：打印固定格式链接，提示可走保底定时任务补导入
       console.warn(
-        `[upload] report failed: ${sanitize(mainResult.error)}. 全量数据已上传 OBS(${sanitize(obsResult.obsUrl)})，` +
+        `[upload] report failed: ${mainResult.error}. 全量数据已上传 OBS(${obsResult.obsUrl})，` +
           '可通过平台保底定时任务(入参 objectKey)补导入'
       );
       return { ...mainResult, obsUrl: obsResult.obsUrl };
@@ -53061,7 +53053,7 @@ class CoderepoUploader {
     try {
       await this.uploadToOBS(cred, tmpFile, objectKey);
       const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
-      console.log(`[upload] OBS uploaded: ${sanitize(obsUrl)}`);
+      console.log(`[upload] OBS uploaded: ${obsUrl}`);
       return { success: true, obsUrl: obsUrl, objectKey: objectKey };
     } catch (e) {
       return { success: false, error: `OBS 上传失败: ${e.message}` };
@@ -53327,10 +53319,9 @@ class CoderepoUploader {
 
       // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功
       if (resData?.code !== 200) {
-        // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因；
-        // msg/adviceMsg 为服务端响应字段，过 sanitize 防换行注入（Ref #64）
+        // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因
         console.error(
-          `[upload] report business failed: code=${resData?.code}, msg=${sanitize(resData?.msg)}, adviceMsg=${sanitize(resData?.adviceMsg)}`
+          `[upload] report business failed: code=${resData?.code}, msg=${resData?.msg}, adviceMsg=${resData?.adviceMsg}`
         );
         return { success: false, error: resData?.msg || 'Unknown error' };
       }
@@ -53598,7 +53589,7 @@ class FileCollector {
           continue;
         }
         if (!FileCollector.isAllowedFile(name, allowedExtensions)) {
-          console.warn(`[WARN] 文件扩展名不在允许列表中: ${path.basename(absolutePath)}`);
+          console.warn(`[WARN] 文件扩展名不在允许列表中: ${absolutePath}`);
           continue;
         }
         files.push(absolutePath);
@@ -53747,42 +53738,6 @@ class Logger {
 }
 
 module.exports = Logger;
-
-
-/***/ }),
-
-/***/ 9900:
-/***/ ((module) => {
-
-/**
- * 日志/输出行注入清洗（Ref #64）。
- *
- * 外部可控字符串（环境变量注入的 branchName、git remote 返回的 gitUrl、
- * 服务端响应字段 detailLink/tip/msg/adviceMsg）拼进日志或 ATOMGIT_OUTPUT
- * 输出行前必须过本函数：去掉换行与控制字符（防止 CRLF 伪造日志行/平台输出行），
- * 折叠为单行并做长度截断（防刷屏）。
- *
- * 清洗仅作用于人类可读的日志/输出文本，不改上报 payload JSON 契约。
- * 正常值（无控制字符）清洗前后逐字节一致，属恒等变换。
- * 与 security-compilation-options-action #37 已验证实现同款。
- */
-
-/** 日志/输出行最大长度（字符） */
-const MAX_LOG_LINE_LEN = 2048;
-
-function sanitize(value, maxLen = MAX_LOG_LINE_LEN) {
-  if (typeof value !== 'string') {
-    return value;
-  }
-  // 控制字符（含 \r \n \t）折叠为单空格，压缩连续空格
-  const cleaned = value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/ {2,}/g, ' ').trim();
-  if (cleaned.length > maxLen) {
-    return cleaned.slice(0, maxLen) + '...(truncated)';
-  }
-  return cleaned;
-}
-
-module.exports = { sanitize };
 
 
 /***/ }),
@@ -62543,8 +62498,8 @@ const core = __nccwpck_require__(7484);
 const { MetricsScanner, ConfigLoader } = __nccwpck_require__(9863);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
-const { execSync, execFile } = __nccwpck_require__(5317);
-const { sanitize } = __nccwpck_require__(9900);
+const os = __nccwpck_require__(857);
+const { execSync, execFile, execFileSync } = __nccwpck_require__(5317);
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -62670,9 +62625,8 @@ async function run() {
     }
     try {
       const remoteUrl = execSync('git remote get-url origin', { encoding: 'utf8', cwd: gitCwd }).trim();
-      // 清洗掉 url 中可能存在的内嵌凭证（任意 scheme 的 userinfo，如 http://user:pass@host/），
-      // 保留 ssh://git@ 标准用户名（Ref #45 #66，与 sec-comp #38 已批准实施同款）
-      gitUrl = remoteUrl.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)(?!git@)[^@\/]+@/, '$1');
+      // 清洗掉 url 中可能存在的 token（https://x-access-token:xxx@host/...）
+      gitUrl = remoteUrl.replace(/https:\/\/[^@]+@/, 'https://');
       branchName = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', cwd: gitCwd }).trim();
       // detached HEAD（如 checkout 了 tag）时尝试获取 tag 名
       if (branchName === 'HEAD') {
@@ -62747,45 +62701,59 @@ async function run() {
     // 先测速选定 pip 索引源；仅在本次安装子进程中通过 PIP_INDEX_URL 注入，
     // 不改写执行机的 pip 配置文件（self-hosted 常驻机上写全局配置会跨任务持久生效）
     const pipIndexUrl = await detectPipIndexUrl();
-    // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
-    // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
-    let supportsBreakSystemPackages = false;
+    // pip 探测与安装统一在临时空目录执行（Ref #71，与 sec-comp #39 同款）：
+    // python -m 会把 cwd 置于 sys.path 首位，被测仓根目录的 pip.py / pip/ 可遮蔽官方 pip
+    // 实现任意代码执行；空目录 cwd 使工作区不再位于 sys.path，遮蔽面消除。
+    // 同时改用 execFileSync 参数数组直传，不经 shell 解析（Ref #26 同类面）
+    const pipCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pip-install-'));
     try {
-      const pipInstallHelp = execSync('python3 -m pip install --help', {
-        encoding: 'utf8',
-        timeout: 30000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-      supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
-    } catch (e) {
-      // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
-      core.debug(`pip install --help probe failed: ${e.message}`);
-    }
-    const pipInstallArgs = [
-      '-m', 'pip', 'install',
-      ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
-      `lizard==${LIZARD_VERSION}`
-    ];
-    try {
-      core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
-      execSync(['python3', ...pipInstallArgs].join(' '), {
-        stdio: 'inherit',
-        timeout: 120000,
-        env: { ...process.env, PIP_INDEX_URL: pipIndexUrl }
-      });
-      core.info('Python dependencies installed successfully');
-    } catch (e) {
-      // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
-      core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+      // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
+      // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
+      let supportsBreakSystemPackages = false;
+      try {
+        const pipInstallHelp = execFileSync('python3', ['-m', 'pip', 'install', '--help'], {
+          encoding: 'utf8',
+          timeout: 30000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: pipCwd
+        });
+        supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
+      } catch (e) {
+        // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
+        core.debug(`pip install --help probe failed: ${e.message}`);
+      }
+      const pipInstallArgs = [
+        '-m', 'pip', 'install',
+        ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
+        `lizard==${LIZARD_VERSION}`
+      ];
+      try {
+        core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
+        execFileSync('python3', pipInstallArgs, {
+          stdio: 'inherit',
+          timeout: 120000,
+          env: { ...process.env, PIP_INDEX_URL: pipIndexUrl },
+          cwd: pipCwd
+        });
+        core.info('Python dependencies installed successfully');
+      } catch (e) {
+        // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
+        core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+      }
+    } finally {
+      // 清理临时目录，不在 runner 上残留
+      try {
+        fs.rmSync(pipCwd, { recursive: true, force: true });
+      } catch (e) {
+        // 忽略清理失败
+      }
     }
 
     core.info('Starting code metrics scan...');
-    // 只输出目录基名，不落 runner 绝对路径（Ref #60，与 sec-comp #36 同款）
-    core.info(`Source directory: ${path.basename(config.sourceDir)}`);
-    // 输出上报关键字段，便于排查 atomgit 上下文异常；
-    // gitUrl/branchName 为外部可控字符串（git remote / 环境变量），过 sanitize 防换行注入（Ref #64）
-    core.info(`gitUrl: ${sanitize(gitUrl) || '(empty)'}`);
-    core.info(`branchName: ${sanitize(branchName) || '(empty)'}`);
+    core.info(`Source directory: ${config.sourceDir}`);
+    // 输出上报关键字段，便于排查 atomgit 上下文异常
+    core.info(`gitUrl: ${gitUrl || '(empty)'}`);
+    core.info(`branchName: ${branchName || '(empty)'}`);
     core.info(`pipelineRunId: ${pipelineRunId || '(empty)'}`);
     core.info(`commitId: ${commitId || '(empty)'}`);
     core.info(`pipelineName: ${pipelineName || '(empty)'}`);
@@ -62832,9 +62800,8 @@ async function run() {
     // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥），仅写 ATOMGIT_OUTPUT
     // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出
     const DETAIL_LINK_LABEL = '代码度量指标扫描结果';
-    // detailLink/tip 为服务端响应字段，拼进日志/输出行前过 sanitize 防换行注入（Ref #64）
-    const detailLink = sanitize(result.uploadInfo?.detailLink || '');
-    const detailTip = sanitize(result.uploadInfo?.tip || '');
+    const detailLink = result.uploadInfo?.detailLink || '';
+    const detailTip = result.uploadInfo?.tip || '';
     if (detailLink) {
       core.info(`${DETAIL_LINK_LABEL}: ${detailLink}`);
     } else if (detailTip) {
