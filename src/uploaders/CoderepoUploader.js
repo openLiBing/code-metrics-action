@@ -1,10 +1,10 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const { callApig, getCredentials } = require('@openlibing/huaweicloud-oidc-client');
+const ObsClient = require('esdk-obs-nodejs');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execSync, execFileSync } = require('child_process');
 const { sanitize } = require('../utils/sanitize');
 
 // 上报接口路径前缀：新旧网关接口与认证方式一一对应
@@ -267,7 +267,6 @@ class CoderepoUploader {
     this.obsBucket = config.obsBucket || 'openlibing-gitcode-action';
     // OBS 写/读 endpoint（华为云西南-贵阳一）
     this.obsEndpoint = config.obsEndpoint || 'obs.cn-southwest-2.myhuaweicloud.com';
-    this.obsutilPath = '';
   }
 
   /**
@@ -402,85 +401,56 @@ class CoderepoUploader {
   }
 
   /**
-   * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
-   * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
+   * 用 esdk-obs-nodejs SDK 上传本地文件到 OBS（Ref #36 #46 #55 #59 #23 #24 #47，
+   * 与 upload-sarif-action 已验证的 SDK 迁移同款路径）。
+   * 私有对象（不设置 ACL）；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
    *
-   * 凭证传递（按认证模式）：
-   * - OIDC 模式：STS 临时凭证，经 -e/-i/-k/-t 命令行参数传 endpoint/临时AK/临时SK/SecurityToken
-   * - AK/SK 模式：静态 obs-ak/obs-sk，经 -e/-i/-k 命令行参数传递
-   * CI 平台对 secrets/临时令牌自动掩码，不会明文落日志。
+   * 凭证全程内存传递（ObsClient 构造参数），消除 obsutil 子进程 argv 暴露面
+   * （同机进程可经 /proc/<pid>/cmdline 读取 -i/-k/-t 凭证；CI 平台掩码只覆盖日志）：
+   * - OIDC 模式：STS 临时凭证（accessKeyId / secretAccessKey / securityToken）
+   * - AK/SK 模式：静态 obs-ak / obs-sk
    *
-   * 安全处理：用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
-   * 外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令。
+   * 迁移同时删除 ensureObsutil() 在线下载链路（Ref #58 #69 #63 #33：
+   * 下载/解压/执行行为不复存在）与 obsutil 执行日志（Ref #47：掩码不完整的
+   * -i/-k/-t 命令行打印随之消失）。
    */
   async uploadToOBS(cred, localFilePath, objectKey) {
-    const obsutil = await this.ensureObsutil();
-    // 记录 obsutil 版本，便于排查 runner 与本地环境差异
+    const server = `https://${this.obsEndpoint}`;
+    const client = this.useOidc
+      ? new ObsClient({
+          access_key_id: cred.accessKeyId,
+          secret_access_key: cred.secretAccessKey,
+          security_token: cred.securityToken,
+          server,
+          sslVerify: true
+        })
+      : new ObsClient({
+          access_key_id: this.obsAk,
+          secret_access_key: this.obsSk,
+          server,
+          sslVerify: true
+        });
+    // esdk-obs-nodejs 的 initFactory 为 fire-and-forget（内部 await refresh 后才设置签名上下文），
+    // 构造后立即 putObject 会读到 null signatureContext，让出一个微任务等待初始化完成
+    await Promise.resolve();
     try {
-      const versionOut = execFileSync(obsutil, ['version'], { encoding: 'utf8' }).trim();
-      console.log(`[upload] obsutil version: ${versionOut}`);
-    } catch (e) {
-      console.log(`[upload] obsutil version check failed: ${e.message}`);
-    }
-    const args = [
-      'cp',
-      localFilePath,
-      `obs://${this.obsBucket}/${objectKey}`,
-      '-f',
-      `-e=${this.obsEndpoint}`
-    ];
-    if (this.useOidc) {
-      // OIDC 模式：STS 临时凭证 + SecurityToken
-      args.push(`-i=${cred.accessKeyId}`, `-k=${cred.secretAccessKey}`, `-t=${cred.securityToken}`);
-    } else {
-      // AK/SK 模式：静态凭证
-      args.push(`-i=${this.obsAk}`, `-k=${this.obsSk}`);
-    }
-    // 打印执行命令（-k/-t 参数脱敏），便于定位上传失败原因
-    const maskedArgs = args.map(a => (a.startsWith('-k=') || a.startsWith('-t=') ? `${a.split('=')[0]}=***` : a));
-    console.log(`[upload] exec obsutil ${maskedArgs.join(' ')}`);
-    execFileSync(obsutil, args, { stdio: 'inherit' });
-  }
-
-  /**
-   * 确保 obsutil 可用：不存在时下载并解压到临时目录（与 upload-sarif-action 一致）。
-   * 下载失败时回退到系统已安装的 obsutil，避免网络抖动导致上传中断。
-   */
-  async ensureObsutil() {
-    if (this.obsutilPath && fs.existsSync(this.obsutilPath)) {
-      return this.obsutilPath;
-    }
-    const tmpDir = os.tmpdir();
-    const downloadUrl =
-      'https://obs-community.obs.cn-north-1.myhuaweicloud.com/obsutil/current/obsutil_linux_amd64.tar.gz';
-    const tarball = path.join(tmpDir, 'obsutil_linux_amd64.tar.gz');
-    const extractedDir = path.join(tmpDir, 'obsutil');
-    try {
-      if (!fs.existsSync(extractedDir)) {
-        execSync(`mkdir -p "${extractedDir}"`, { shell: '/bin/bash' });
+      const result = await client.putObject({
+        Bucket: this.obsBucket,
+        Key: objectKey,
+        SourceFile: localFilePath
+      });
+      // putObject 结果校验：HTTP 状态 2xx 视为成功，否则抛错（供上层返回失败原因）
+      const msg = (result && result.CommonMsg) || {};
+      if (!(msg.Status >= 200 && msg.Status < 300)) {
+        throw new Error(`OBS putObject failed (${msg.Status})${msg.Code ? ` [${msg.Code}]` : ''}: ${msg.Message || '未知错误'}`);
       }
-      execSync(
-        `wget -q "${downloadUrl}" -O "${tarball}" 2>/dev/null || curl -sL "${downloadUrl}" -o "${tarball}"`,
-        { shell: '/bin/bash' }
-      );
-      execSync(`tar zxf "${tarball}" -C "${extractedDir}" --strip-components=1`, { shell: '/bin/bash' });
-      execSync(`chmod 755 "${extractedDir}/obsutil"`, { shell: '/bin/bash' });
-      this.obsutilPath = path.join(extractedDir, 'obsutil');
-    } catch (e) {
-      // 下载失败时尝试使用系统已安装的 obsutil
+    } finally {
       try {
-        const existing = execSync('which obsutil', { encoding: 'utf8', shell: '/bin/bash' }).trim();
-        if (existing) {
-          this.obsutilPath = existing;
-        }
-      } catch (e2) {
-        // 无系统 obsutil，抛错
-      }
-      if (!this.obsutilPath) {
-        throw new Error(`obsutil 安装失败: ${e.message}`);
+        await client.close();
+      } catch (e) {
+        // 忽略关闭异常
       }
     }
-    return this.obsutilPath;
   }
 
   /**
