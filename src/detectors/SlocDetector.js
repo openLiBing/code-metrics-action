@@ -224,7 +224,8 @@ class SlocDetector extends BaseDetector {
             commentLines: commentCount
           });
         } catch (e) {
-          console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
+          // 只输出文件基名，不落 runner 绝对路径（Ref #60）
+          console.warn(`[WARN] 跳过文件 ${path.basename(file)}: ${e.message}`);
         }
       }
     }
@@ -344,7 +345,8 @@ class SlocDetector extends BaseDetector {
           commentLines: fileCommentLines
         });
       } catch (e) {
-        console.warn(`[WARN] 跳过文件 ${file}: ${e.message}`);
+        // 只输出文件基名，不落 runner 绝对路径（Ref #60）
+        console.warn(`[WARN] 跳过文件 ${path.basename(file)}: ${e.message}`);
       }
     }
 

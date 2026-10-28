@@ -8,6 +8,7 @@ const Logger = require('./utils/logger');
 const FileUtils = require('./utils/fileUtils');
 const FileCollector = require('./utils/fileCollector');
 const path = require('path');
+const { sanitize } = require('./utils/sanitize');
 
 // 将日期格式化为 yyyy-MM-dd HH:mm:ss
 function formatDateTime(date) {
@@ -166,7 +167,8 @@ class MetricsScanner {
           })
         };
         FileUtils.writeJsonFile(outputPath, compactResult);
-        this.logger.info(`Results saved to: ${outputPath}`);
+        // 只输出文件基名，不落 runner 绝对路径（Ref #60）
+        this.logger.info(`Results saved to: ${path.basename(outputPath)}`);
         this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
       }
 
@@ -184,8 +186,9 @@ class MetricsScanner {
         });
 
         if (uploadResult.success) {
-          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯
-          this.logger.info(`Successfully uploaded metrics, obsUrl: ${uploadResult.obsUrl}`);
+          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯；
+          // obsUrl 内嵌从 gitUrl 提取的 owner/repo（外部可控），过 sanitize 防换行注入（Ref #64）
+          this.logger.info(`Successfully uploaded metrics, obsUrl: ${sanitize(uploadResult.obsUrl)}`);
           // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
           result.uploadInfo = {
             success: true,
@@ -194,7 +197,7 @@ class MetricsScanner {
             tip: uploadResult.tip || ''
           };
         } else {
-          this.logger.error(`Failed to upload metrics: ${uploadResult.error}`);
+          this.logger.error(`Failed to upload metrics: ${sanitize(uploadResult.error)}`);
           result.uploadInfo = { success: false, error: uploadResult.error };
         }
       }
