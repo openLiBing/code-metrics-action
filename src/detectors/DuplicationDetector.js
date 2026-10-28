@@ -288,7 +288,7 @@ class DuplicationDetector extends BaseDetector {
       return new Map();
     }
     const os = require('os');
-    const { execSync } = require('child_process');
+    const { execFileSync } = require('child_process');
     const sccPath = DuplicationDetector.getSccBinPath();
     // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
     // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
@@ -312,8 +312,7 @@ class DuplicationDetector extends BaseDetector {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
       }
-      const cmd = `"${sccPath}" -f json --no-cocomo --no-size --by-file "${tmpRoot}"`;
-      const output = execSync(cmd, {
+      const output = execFileSync(sccPath, ['-f', 'json', '--no-cocomo', '--no-size', '--by-file', tmpRoot], {
         encoding: 'utf8',
         maxBuffer: 100 * 1024 * 1024,
         timeout: 300000,

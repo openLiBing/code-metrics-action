@@ -572,8 +572,8 @@ class OidcClient {
             const res = yield httpclient
                 .getJson(id_token_url)
                 .catch(error => {
-                throw new Error(`Failed to get ID Token. \n
-        Error Code : ${error.statusCode}\n
+                throw new Error(`Failed to get ID Token. \n 
+        Error Code : ${error.statusCode}\n 
         Error Message: ${error.message}`);
             });
             const id_token = (_a = res.result) === null || _a === void 0 ? void 0 : _a.value;
@@ -3534,7 +3534,7 @@ var diagnostics = create(function dev(namespace, options) {
   if (!dev.enabled(namespace) && !(options.force || dev.force)) {
     return dev.nope(options);
   }
-
+  
   return dev.yep(options);
 });
 
@@ -50811,7 +50811,7 @@ class DuplicationDetector extends BaseDetector {
       return new Map();
     }
     const os = __nccwpck_require__(857);
-    const { execSync } = __nccwpck_require__(5317);
+    const { execFileSync } = __nccwpck_require__(5317);
     const sccPath = DuplicationDetector.getSccBinPath();
     // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
     // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
@@ -50835,8 +50835,7 @@ class DuplicationDetector extends BaseDetector {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
       }
-      const cmd = `"${sccPath}" -f json --no-cocomo --no-size --by-file "${tmpRoot}"`;
-      const output = execSync(cmd, {
+      const output = execFileSync(sccPath, ['-f', 'json', '--no-cocomo', '--no-size', '--by-file', tmpRoot], {
         encoding: 'utf8',
         maxBuffer: 100 * 1024 * 1024,
         timeout: 300000,
@@ -52042,7 +52041,7 @@ module.exports = LizardDetector;
 /***/ 2034:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const { execSync } = __nccwpck_require__(5317);
+const { execSync, execFileSync } = __nccwpck_require__(5317);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
 const BaseDetector = __nccwpck_require__(658);
@@ -52142,11 +52141,12 @@ class SlocDetector extends BaseDetector {
     return args;
   }
 
-  // 执行 scc 并解析 JSON 输出
+  // 执行 scc 并解析 JSON 输出。
+  // execFileSync 参数数组直传，不经 shell 解析（Ref #49 #57 #29，与 pre-commit-action #26 同款）：
+  // 消除 sources / --include-ext（来自 allowed-extensions input）等外部输入包含
+  // shell 特殊字符（; ` $() 等）时的命令注入面
   runScc(args, sources) {
-    const cmd = `"${this.sccPath}" ${args.join(' ')}`;
-
-    const output = execSync(cmd, {
+    const output = execFileSync(this.sccPath, args, {
       encoding: 'utf8',
       maxBuffer: 100 * 1024 * 1024,
       timeout: 300000,
@@ -62459,7 +62459,7 @@ module.exports = {"version":"3.19.0"};
 /************************************************************************/
 /******/ 	// The module cache
 /******/ 	var __webpack_module_cache__ = {};
-/******/
+/******/ 	
 /******/ 	// The require function
 /******/ 	function __nccwpck_require__(moduleId) {
 /******/ 		// Check if module is in cache
@@ -62473,7 +62473,7 @@ module.exports = {"version":"3.19.0"};
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
 /******/ 		};
-/******/
+/******/ 	
 /******/ 		// Execute the module function
 /******/ 		var threw = true;
 /******/ 		try {
@@ -62482,23 +62482,24 @@ module.exports = {"version":"3.19.0"};
 /******/ 		} finally {
 /******/ 			if(threw) delete __webpack_module_cache__[moduleId];
 /******/ 		}
-/******/
+/******/ 	
 /******/ 		// Return the exports of the module
 /******/ 		return module.exports;
 /******/ 	}
-/******/
+/******/ 	
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat */
-/******/
+/******/ 	
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
-/******/
+/******/ 	
 /************************************************************************/
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
 const { MetricsScanner, ConfigLoader } = __nccwpck_require__(9863);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
-const { execSync, execFile } = __nccwpck_require__(5317);
+const os = __nccwpck_require__(857);
+const { execSync, execFile, execFileSync } = __nccwpck_require__(5317);
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -62700,36 +62701,52 @@ async function run() {
     // 先测速选定 pip 索引源；仅在本次安装子进程中通过 PIP_INDEX_URL 注入，
     // 不改写执行机的 pip 配置文件（self-hosted 常驻机上写全局配置会跨任务持久生效）
     const pipIndexUrl = await detectPipIndexUrl();
-    // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
-    // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
-    let supportsBreakSystemPackages = false;
+    // pip 探测与安装统一在临时空目录执行（Ref #71，与 sec-comp #39 同款）：
+    // python -m 会把 cwd 置于 sys.path 首位，被测仓根目录的 pip.py / pip/ 可遮蔽官方 pip
+    // 实现任意代码执行；空目录 cwd 使工作区不再位于 sys.path，遮蔽面消除。
+    // 同时改用 execFileSync 参数数组直传，不经 shell 解析（Ref #26 同类面）
+    const pipCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pip-install-'));
     try {
-      const pipInstallHelp = execSync('python3 -m pip install --help', {
-        encoding: 'utf8',
-        timeout: 30000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-      supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
-    } catch (e) {
-      // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
-      core.debug(`pip install --help probe failed: ${e.message}`);
-    }
-    const pipInstallArgs = [
-      '-m', 'pip', 'install',
-      ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
-      `lizard==${LIZARD_VERSION}`
-    ];
-    try {
-      core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
-      execSync(['python3', ...pipInstallArgs].join(' '), {
-        stdio: 'inherit',
-        timeout: 120000,
-        env: { ...process.env, PIP_INDEX_URL: pipIndexUrl }
-      });
-      core.info('Python dependencies installed successfully');
-    } catch (e) {
-      // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
-      core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+      // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
+      // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
+      let supportsBreakSystemPackages = false;
+      try {
+        const pipInstallHelp = execFileSync('python3', ['-m', 'pip', 'install', '--help'], {
+          encoding: 'utf8',
+          timeout: 30000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: pipCwd
+        });
+        supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
+      } catch (e) {
+        // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
+        core.debug(`pip install --help probe failed: ${e.message}`);
+      }
+      const pipInstallArgs = [
+        '-m', 'pip', 'install',
+        ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
+        `lizard==${LIZARD_VERSION}`
+      ];
+      try {
+        core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
+        execFileSync('python3', pipInstallArgs, {
+          stdio: 'inherit',
+          timeout: 120000,
+          env: { ...process.env, PIP_INDEX_URL: pipIndexUrl },
+          cwd: pipCwd
+        });
+        core.info('Python dependencies installed successfully');
+      } catch (e) {
+        // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
+        core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+      }
+    } finally {
+      // 清理临时目录，不在 runner 上残留
+      try {
+        fs.rmSync(pipCwd, { recursive: true, force: true });
+      } catch (e) {
+        // 忽略清理失败
+      }
     }
 
     core.info('Starting code metrics scan...');
