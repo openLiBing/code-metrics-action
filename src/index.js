@@ -15,8 +15,10 @@ function getInput(name) {
 // ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
 // 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个作为本次安装的 PIP_INDEX_URL，
 // 避免执行机到某个源出网被重置（Connection reset by peer）时安装必然失败
-const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
-const PIP_ORIGINAL = 'https://pypi.org/simple';
+// 镜像地址改为环境变量注入（PIP_MIRROR_DEFAULT），源码不再硬编码第三方镜像公网地址；
+// 未配置时回退默认值（与原硬编码值一致，等价变换）（Ref #22，与 pre-commit-action #12 同款）
+const PIP_MIRROR_DEFAULT = process.env.PIP_MIRROR_DEFAULT || 'https://mirrors.huaweicloud.com/repository/pypi/simple';
+const PIP_ORIGINAL = 'https://pypi.org/simple'; // gitleaks:allow 官方 PyPI 源，功能必需
 const PIP_SPEED_TEST_TIMEOUT = 5;
 
 // 探测索引源首字节耗时（毫秒），超时或不可达返回 -1。
@@ -88,8 +90,9 @@ async function run() {
     // GitCode runner 自动注入 ATOMGIT_REF_NAME / ATOMGIT_TOKEN 等环境变量
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
-    // coderepo 服务地址硬编码到插件（部署时确定的固定值）
-    const coderepoUrl = 'https://apig.openlibing.com:443';
+    // coderepo 服务地址硬编码到插件（部署时确定的固定值）；
+    // 自家平台 APIG 网关端点，非第三方地址，登记白名单（合规例外）（Ref #22）
+    const coderepoUrl = 'https://apig.openlibing.com:443'; // gitleaks:allow 自家平台 APIG 网关，功能必需
     // 认证模式判定（OIDC 联邦认证标识）：workflow 声明 permissions: id-token: write 时，
     // runner 注入 ACTIONS_ID_TOKEN_REQUEST_URL，走新接口（/action-api/...）+ OIDC 免密认证；
     // 未声明时走旧接口（/openlibing-coderepo/...）+ AK/SK 签名，兼容尚未适配的存量脚本
