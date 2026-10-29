@@ -572,8 +572,8 @@ class OidcClient {
             const res = yield httpclient
                 .getJson(id_token_url)
                 .catch(error => {
-                throw new Error(`Failed to get ID Token. \n
-        Error Code : ${error.statusCode}\n
+                throw new Error(`Failed to get ID Token. \n 
+        Error Code : ${error.statusCode}\n 
         Error Message: ${error.message}`);
             });
             const id_token = (_a = res.result) === null || _a === void 0 ? void 0 : _a.value;
@@ -3534,7 +3534,7 @@ var diagnostics = create(function dev(namespace, options) {
   if (!dev.enabled(namespace) && !(options.force || dev.force)) {
     return dev.nope(options);
   }
-
+  
   return dev.yep(options);
 });
 
@@ -8839,6 +8839,243 @@ CombinedStream.prototype._emitError = function(err) {
 
 /***/ }),
 
+/***/ 876:
+/***/ ((module) => {
+
+"use strict";
+
+
+function padWithZeros(vNumber, width) {
+  var numAsString = vNumber.toString();
+  while (numAsString.length < width) {
+    numAsString = "0" + numAsString;
+  }
+  return numAsString;
+}
+
+function addZero(vNumber) {
+  return padWithZeros(vNumber, 2);
+}
+
+/**
+ * Formats the TimeOffset
+ * Thanks to http://www.svendtofte.com/code/date_format/
+ * @private
+ */
+function offset(timezoneOffset) {
+  var os = Math.abs(timezoneOffset);
+  var h = String(Math.floor(os / 60));
+  var m = String(os % 60);
+  h = ("0" + h).slice(-2);
+  m = ("0" + m).slice(-2);
+  return timezoneOffset === 0 ? "Z" : (timezoneOffset < 0 ? "+" : "-") + h + ":" + m;
+}
+
+function asString(format, date) {
+  if (typeof format !== "string") {
+    date = format;
+    format = module.exports.ISO8601_FORMAT;
+  }
+  if (!date) {
+    date = module.exports.now();
+  }
+
+  // Issue # 14 - Per ISO8601 standard, the time string should be local time
+  // with timezone info.
+  // See https://en.wikipedia.org/wiki/ISO_8601 section "Time offsets from UTC"
+
+  var vDay = addZero(date.getDate());
+  var vMonth = addZero(date.getMonth() + 1);
+  var vYearLong = addZero(date.getFullYear());
+  var vYearShort = addZero(vYearLong.substring(2, 4));
+  var vYear = format.indexOf("yyyy") > -1 ? vYearLong : vYearShort;
+  var vHour = addZero(date.getHours());
+  var vMinute = addZero(date.getMinutes());
+  var vSecond = addZero(date.getSeconds());
+  var vMillisecond = padWithZeros(date.getMilliseconds(), 3);
+  var vTimeZone = offset(date.getTimezoneOffset());
+  var formatted = format
+    .replace(/dd/g, vDay)
+    .replace(/MM/g, vMonth)
+    .replace(/y{1,4}/g, vYear)
+    .replace(/hh/g, vHour)
+    .replace(/mm/g, vMinute)
+    .replace(/ss/g, vSecond)
+    .replace(/SSS/g, vMillisecond)
+    .replace(/O/g, vTimeZone);
+  return formatted;
+}
+
+function setDatePart(date, part, value, local) {
+  date['set' + (local ? '' : 'UTC') + part](value);
+}
+
+function extractDateParts(pattern, str, missingValuesDate) {
+  // Javascript Date object doesn't support custom timezone.  Sets all felds as
+  // GMT based to begin with.  If the timezone offset is provided, then adjust
+  // it using provided timezone, otherwise, adjust it with the system timezone.
+  var local = pattern.indexOf('O') < 0;
+  var monthOverflow = false;
+  var matchers = [
+    {
+      pattern: /y{1,4}/,
+      regexp: "\\d{1,4}",
+      fn: function(date, value) {
+        setDatePart(date, 'FullYear', value, local);
+      }
+    },
+    {
+      pattern: /MM/,
+      regexp: "\\d{1,2}",
+      fn: function(date, value) {
+        setDatePart(date, 'Month', (value - 1), local);
+        if (date.getMonth() !== (value - 1)) {
+          // in the event of 31 May --> 31 Feb --> 3 Mar
+          // this is correct behavior if no Date is involved
+          monthOverflow = true;
+        }
+      }
+    },
+    {
+      pattern: /dd/,
+      regexp: "\\d{1,2}",
+      fn: function(date, value) {
+        // in the event of 31 May --> 31 Feb --> 3 Mar
+        // reset Mar back to Feb, before setting the Date
+        if (monthOverflow) {
+          setDatePart(date, 'Month', (date.getMonth() - 1), local);
+        }
+        setDatePart(date, 'Date', value, local);
+      }
+    },
+    {
+      pattern: /hh/,
+      regexp: "\\d{1,2}",
+      fn: function(date, value) {
+        setDatePart(date, 'Hours', value, local);
+      }
+    },
+    {
+      pattern: /mm/,
+      regexp: "\\d\\d",
+      fn: function(date, value) {
+        setDatePart(date, 'Minutes', value, local);
+      }
+    },
+    {
+      pattern: /ss/,
+      regexp: "\\d\\d",
+      fn: function(date, value) {
+        setDatePart(date, 'Seconds', value, local);
+      }
+    },
+    {
+      pattern: /SSS/,
+      regexp: "\\d\\d\\d",
+      fn: function(date, value) {
+        setDatePart(date, 'Milliseconds', value, local);
+      }
+    },
+    {
+      pattern: /O/,
+      regexp: "[+-]\\d{1,2}:?\\d{2}?|Z",
+      fn: function(date, value) {
+        if (value === "Z") {
+          value = 0;
+        }
+        else {
+          value = value.replace(":", "");
+        }
+        var offset = Math.abs(value);
+        var timezoneOffset = (value > 0 ? -1 :  1 ) * ((offset % 100) + Math.floor(offset / 100) * 60);
+        // Per ISO8601 standard: UTC = local time - offset
+        //
+        // For example, 2000-01-01T01:00:00-0700
+        //   local time: 2000-01-01T01:00:00
+        //   ==> UTC   : 2000-01-01T08:00:00 ( 01 - (-7) = 8 )
+        //
+        // To make it even more confusing, the date.getTimezoneOffset() is
+        // opposite sign of offset string in the ISO8601 standard.  So if offset
+        // is '-0700' the getTimezoneOffset() would be (+)420. The line above
+        // calculates timezoneOffset to matche Javascript's behavior.
+        //
+        // The date/time of the input is actually the local time, so the date
+        // object that was constructed is actually local time even thought the
+        // UTC setters are used.  This means the date object's internal UTC
+        // representation was wrong.  It needs to be fixed by substracting the
+        // offset (or adding the offset minutes as they are opposite sign).
+        //
+        // Note: the time zone has to be processed after all other fields are
+        // set.  The result would be incorrect if the offset was calculated
+        // first then overriden by the other filed setters.
+        date.setUTCMinutes(date.getUTCMinutes() + timezoneOffset);
+      }
+    }
+  ];
+
+  var parsedPattern = matchers.reduce(
+    function(p, m) {
+      if (m.pattern.test(p.regexp)) {
+        m.index = p.regexp.match(m.pattern).index;
+        p.regexp = p.regexp.replace(m.pattern, "(" + m.regexp + ")");
+      } else {
+        m.index = -1;
+      }
+      return p;
+    },
+    { regexp: pattern, index: [] }
+  );
+
+  var dateFns = matchers.filter(function(m) {
+    return m.index > -1;
+  });
+  dateFns.sort(function(a, b) {
+    return a.index - b.index;
+  });
+
+  var matcher = new RegExp(parsedPattern.regexp);
+  var matches = matcher.exec(str);
+  if (matches) {
+    var date = missingValuesDate || module.exports.now();
+    dateFns.forEach(function(f, i) {
+      f.fn(date, matches[i + 1]);
+    });
+
+    return date;
+  }
+
+  throw new Error(
+    "String '" + str + "' could not be parsed as '" + pattern + "'"
+  );
+}
+
+function parse(pattern, str, missingValuesDate) {
+  if (!pattern) {
+    throw new Error("pattern must be supplied");
+  }
+
+  return extractDateParts(pattern, str, missingValuesDate);
+}
+
+/**
+ * Used for testing - replace this function with a fixed date.
+ */
+function now() {
+  return new Date();
+}
+
+module.exports = asString;
+module.exports.asString = asString;
+module.exports.parse = parse;
+module.exports.now = now;
+module.exports.ISO8601_FORMAT = "yyyy-MM-ddThh:mm:ss.SSS";
+module.exports.ISO8601_WITH_TZ_OFFSET_FORMAT = "yyyy-MM-ddThh:mm:ss.SSSO";
+module.exports.DATETIME_FORMAT = "dd MM yyyy hh:mm:ss.SSS";
+module.exports.ABSOLUTETIME_FORMAT = "hh:mm:ss.SSS";
+
+
+/***/ }),
+
 /***/ 6110:
 /***/ ((module, exports, __nccwpck_require__) => {
 
@@ -10056,6 +10293,17225 @@ module.exports = function setToStringTag(object, value) {
 	}
 };
 
+
+/***/ }),
+
+/***/ 8208:
+/***/ ((__unused_webpack_module, exports) => {
+
+/**
+ * Copyright 2019 Huawei Technologies Co.,Ltd.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed
+ * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ */
+
+exports.AclPrivate = 'private';
+exports.AclPublicRead = 'public-read';
+exports.AclPublicReadWrite = 'public-read-write';
+exports.AclPublicReadDelivered = 'public-read-delivered';
+exports.AclPublicReadWriteDelivered = 'public-read-write-delivered';
+exports.AclAuthenticatedRead = 'authenticated-read';
+exports.AclBucketOwnerRead = 'bucket-owner-read';
+exports.AclBucketOwnerFullControl = 'bucket-owner-full-control';
+exports.AclLogDeliveryWrite = 'log-delivery-write';
+
+exports.StorageClassStandard = 'STANDARD';
+exports.StorageClassWarm = 'WARM';
+exports.StorageClassCold = 'COLD';
+exports.StorageClassDeepArchive = 'DEEP_ARCHIVE';
+exports.StorageClassIntelligentTiering = 'INTELLIGENT_TIERING';
+
+exports.PermissionRead = 'READ';
+exports.PermissionWrite = 'WRITE';
+exports.PermissionReadAcp = 'READ_ACP';
+exports.PermissionWriteAcp = 'WRITE_ACP';
+exports.PermissionFullControl = 'FULL_CONTROL';
+
+exports.GroupAllUsers = 'AllUsers';
+exports.GroupAuthenticatedUsers = 'AuthenticatedUsers';
+exports.GroupLogDelivery = 'LogDelivery';
+
+exports.RestoreTierExpedited = 'Expedited';
+exports.RestoreTierStandard = 'Standard';
+exports.RestoreTierBulk = 'Bulk';
+
+exports.GranteeGroup = 'Group';
+exports.GranteeUser = 'CanonicalUser';
+
+exports.CopyMetadata = 'COPY';
+exports.ReplaceMetadata = 'REPLACE';
+
+exports.EventObjectCreatedAll = 'ObjectCreated:*';
+exports.EventObjectCreatedPut = 'ObjectCreated:Put';
+exports.EventObjectCreatedPost = 'ObjectCreated:Post';
+exports.EventObjectCreatedCopy = 'ObjectCreated:Copy';
+exports.EventObjectCreatedCompleteMultipartUpload = 'ObjectCreated:CompleteMultipartUpload';
+exports.EventObjectRemovedAll = 'ObjectRemoved:*';
+exports.EventObjectRemovedDelete = 'ObjectRemoved:Delete';
+exports.EventObjectRemovedDeleteMarkerCreated = 'ObjectRemoved:DeleteMarkerCreated';
+
+const KB = 1024;
+const MB = 1024 * KB;
+const GB = 1024 * MB;
+
+exports.KB = KB;
+exports.MB = MB;
+exports.GB = GB;
+
+exports.MAX_UPLOAD_PART_COUNT = 10000;
+exports.MAX_UPLOAD_PART_SIZE = 5 * GB;
+exports.DEFAULT_UPLOAD_PART_SIZE = 5 * MB;
+exports.MIN_UPLOAD_PART_SIZE = 100 * KB;
+
+exports.MAX_DOWNLOAD_PART_SIZE = 5 * GB;
+exports.DEFAULT_DOWNLOAD_PART_SIZE = 5 * MB;
+exports.MIN_DOWNLOAD_PART_SIZE = 100 * KB;
+
+exports.IAM_DOMAIN_PATH_EXTENSION = '/v3.0/OS-CREDENTIAL/securitytokens'; 
+
+
+/***/ }),
+
+/***/ 9904:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Copyright 2019 Huawei Technologies Co.,Ltd.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed
+ * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ */
+
+
+
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
+const log4js = __nccwpck_require__(892);
+
+function checkAndCreateDir(dir,path){
+	if(!fs.existsSync(dir)){
+		let rout = path.dirname(dir);
+		if(!fs.existsSync(rout)){
+			checkAndCreateDir(rout);
+		}
+		fs.mkdirSync(dir);
+	}
+}
+
+function LogUtil(){
+	this.loggerInf = null;
+	this.loggerRun = null;
+	this.consoleLog = null;
+}
+
+LogUtil.prototype.initLog = function(filename, maxLogSize, backups, level, logToConsole, name, logger){
+	if(logger){
+		this.loggerInf = logger;
+		return;
+	}
+	
+	if(!filename){
+		return;
+	}
+	
+	let dir = path.dirname(filename);
+	checkAndCreateDir(dir, path);
+	let ext = path.extname(filename);
+	let file = path.basename(filename, ext);
+	if(!ext){
+		ext = '.log';
+	}
+	
+	level = level === undefined ? 'info' : String(level);
+	maxLogSize = maxLogSize === undefined ? 102400 : parseInt(maxLogSize, 10);
+	backups = backups === undefined ? 10 : parseInt(backups, 10);
+	
+	let fileInterface = path.join(dir, file + ext);
+	let layoutFormat = '%d{yyyy/MM/dd hh:mm:ss SSS}|%c|%-5p|%m';
+	let cateInterface = 'sdk-file';
+	let cateConsole = 'sdk-console';
+	if(name){
+		cateInterface += ':' + String(name);
+		cateConsole += ':' + String(name);
+	}
+	
+	let appenders = {};
+	appenders[cateConsole] = {
+        type:'console',
+    };
+	appenders[cateInterface] = {
+        type: 'file',
+        filename: fileInterface,
+        maxLogSize:maxLogSize,
+        backups:backups,
+        layout: {
+            type: 'pattern',
+            pattern : layoutFormat,
+        }
+    };
+	
+	let categories = {
+		default: { appenders: [cateConsole], level: 'off' }
+	};
+	categories[cateInterface] =  { appenders: [cateInterface], level:level.toLowerCase()};
+	categories[cateConsole] =  { appenders: [cateConsole], level:level.toLowerCase()};
+	
+	log4js.configure({
+		categories: categories,
+	    appenders: appenders,
+	    replaceConsole: true
+	});
+	
+	this.loggerInf = log4js.getLogger(cateInterface);
+	if(logToConsole){
+		this.consoleLog = log4js.getLogger(cateConsole);
+	}
+};
+
+LogUtil.prototype._doLog = function(level, form){
+	if(level.toLowerCase() === 'debug'){
+		if(this.loggerInf){
+			this.loggerInf.debug(form);
+		}
+		if(this.consoleLog){
+			this.consoleLog.debug(form);
+		}
+	}else if(level.toLowerCase() === 'info'){
+		if(this.loggerInf){
+			this.loggerInf.info(form);
+		}
+		if(this.consoleLog){
+			this.consoleLog.info(form);
+		}
+	}else if(level.toLowerCase() === 'warn'){
+		if(this.loggerInf){
+			this.loggerInf.warn(form);
+		}
+		if(this.consoleLog){
+			this.consoleLog.warn(form);
+		}
+	}else if(level.toLowerCase() === 'error'){
+		if(this.loggerInf){
+			this.loggerInf.error(form);
+		}
+		if(this.consoleLog){
+			this.consoleLog.error(form);
+		}
+	}
+};
+
+LogUtil.prototype.isLevelEnabled = function(level){
+	return (this.loggerInf && this.loggerInf.isLevelEnabled(level)) || (this.consoleLog && this.consoleLog.isLevelEnabled(level));
+};
+
+LogUtil.prototype.runLog = function(level, methodName, msg){
+	if(!this.loggerInf && !this.consoleLog){
+		return;
+	}
+	let form = methodName + '|' + msg;
+	this._doLog(level, form);
+};
+
+
+module.exports = LogUtil;
+
+
+/***/ }),
+
+/***/ 1728:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Copyright 2019 Huawei Technologies Co.,Ltd.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed
+ * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ */
+
+const util = __nccwpck_require__(9023);
+const Utils = __nccwpck_require__(395);
+const LogUtil = __nccwpck_require__(9904);
+const enums = __nccwpck_require__(8208);
+const {
+	MAX_UPLOAD_PART_COUNT,
+
+	MIN_UPLOAD_PART_SIZE,
+	MAX_UPLOAD_PART_SIZE,
+	DEFAULT_UPLOAD_PART_SIZE,
+
+	MIN_DOWNLOAD_PART_SIZE,
+	MAX_DOWNLOAD_PART_SIZE,
+	DEFAULT_DOWNLOAD_PART_SIZE,
+} = enums;
+function ObsClient(param){
+	this.factory(param);
+}
+
+function capitalize(key){
+	return key.slice(0,1).toUpperCase() + key.slice(1);
+}
+
+const methods = [
+    'headBucket',
+    'getBucketMetadata',
+    'deleteBucket',
+    'setBucketQuota',
+    'getBucketQuota',
+    'getBucketStorageInfo',
+    'setBucketPolicy',
+    'getBucketPolicy',
+    'deleteBucketPolicy',
+    'setBucketVersioningConfiguration',
+    'getBucketVersioningConfiguration',
+    'getBucketLocation',
+    'listVersions',
+    'listObjects',
+    'setBucketLifecycleConfiguration',
+    'getBucketLifecycleConfiguration',
+    'deleteBucketLifecycleConfiguration',
+    'setBucketAcl',
+    'getBucketAcl',
+    'setBucketLoggingConfiguration',
+    'getBucketLoggingConfiguration',
+    'setBucketWebsiteConfiguration',
+    'getBucketWebsiteConfiguration',
+    'deleteBucketWebsiteConfiguration',
+    'setBucketNotification',
+    'getBucketNotification',
+    'setBucketTagging',
+    'deleteBucketTagging',
+    'getBucketTagging',
+    'setObjectTagging',
+    'deleteObjectTagging',
+    'getObjectTagging',
+    'setBucketReplication',
+    'deleteBucketReplication',
+    'getBucketReplication',
+    'getObject',
+    'setObjectMetadata',
+    'getObjectMetadata',
+    'setObjectAcl',
+    'getObjectAcl',
+    'deleteObject',
+    'deleteObjects',
+    'listMultipartUploads',
+    'listParts',
+    'abortMultipartUpload',
+    'completeMultipartUpload',
+    'setBucketCors',
+    'getBucketCors',
+    'deleteBucketCors',
+    'optionsBucket',
+    'optionsObject',
+    'setBucketStoragePolicy',
+    'getBucketStoragePolicy',
+    'getBucketEncryption',
+    'setBucketEncryption',
+    'deleteBucketEncryption',
+    'getBucketDirectColdAccess',
+    'setBucketDirectColdAccess',
+    'deleteBucketDirectColdAccess',
+    'renameObject',
+    'getBucketRequesterPayment',
+    'setBucketRequesterPayment',
+    'putBucketPublicAccessBlock',
+    'getBucketPublicAccessBlock',
+    'deleteBucketPublicAccessBlock',
+    'getBucketPolicyPublicStatus',
+    'getBucketPublicStatus',
+    'setBucketCustomDomain',
+    'getBucketCustomDomain',
+    'deleteBucketCustomDomain',
+];
+
+function createAction(method){
+	return function(param, callback){
+		this.exec(capitalize(method), param, callback);
+	};
+}
+
+for(let i=0;i<methods.length;i++){
+	let method = methods[i];
+	ObsClient.prototype[method] = createAction(method);
+}
+
+ObsClient.prototype.createBucket = function(param, callback){
+	if(this.util && this.util.isCname){
+		return callback('createBucket is not allowed in customdomain mode', null);
+	}
+	this.exec('CreateBucket', param, callback);
+};
+
+ObsClient.prototype.listBuckets = function(param, callback){
+	if(this.util && this.util.isCname){
+		return callback('listBuckets is not allowed in customdomain mode', null);
+	}
+	this.exec('ListBuckets', param, callback);
+};
+
+ObsClient.prototype.putObject = function(param, callback){
+	
+	if(('Body' in param) && ('SourceFile' in param)){
+		let err = 'the input body and sourcefile exist at same time,please specify one of eigther a string or file to be send!';
+		if(this.log.isLevelEnabled('error')){
+			this.log.runLog('error', 'PutObject', err);
+		}
+		return callback(new Error(err), null);
+	}
+	
+	if(!('ContentType' in param)){
+		if('Key' in param){
+			param.ContentType = this.util.mimeTypes[param.Key.substring(param.Key.lastIndexOf('.') + 1)];
+		}
+		if(!param.ContentType && ('SourceFile' in param)){
+			param.ContentType = this.util.mimeTypes[param.SourceFile.substring(param.SourceFile.lastIndexOf('.') + 1)];
+		}
+	}
+	
+	this.exec('PutObject', param, callback);
+};
+
+ObsClient.prototype.modifyObject = function(param, callback){
+
+	if(('Body' in param) && ('SourceFile' in param)){
+		let err = 'the input body and sourcefile exist at same time,please specify one of eigther a string or file to be send!';
+		if(this.log.isLevelEnabled('error')){
+			this.log.runLog('error', 'ModifyObject', err);
+		}
+		return callback(new Error(err), null);
+	}
+
+	if(!('ContentType' in param)){
+		if('Key' in param){
+			param.ContentType = this.util.mimeTypes[param.Key.substring(param.Key.lastIndexOf('.') + 1)];
+		}
+		if(!param.ContentType && ('SourceFile' in param)){
+			param.ContentType = this.util.mimeTypes[param.SourceFile.substring(param.SourceFile.lastIndexOf('.') + 1)];
+		}
+	}
+
+	this.exec('ModifyObject', param, callback);
+};
+
+ObsClient.prototype.appendObject = function(param, callback){
+	
+	if(('Body' in param) && ('SourceFile' in param)){
+		let err = 'the input body and sourcefile exist at same time,please specify one of eigther a string or file to be send!';
+		if(this.log.isLevelEnabled('error')){
+			this.log.runLog('error', 'PutObject', err);
+		}
+		return callback(new Error(err), null);
+	}
+	
+	if(!('ContentType' in param)){
+		if('Key' in param){
+			param.ContentType = this.util.mimeTypes[param.Key.substring(param.Key.lastIndexOf('.') + 1)];
+		}
+		if(!param.ContentType && ('SourceFile' in param)){
+			param.ContentType = this.util.mimeTypes[param.SourceFile.substring(param.SourceFile.lastIndexOf('.') + 1)];
+		}
+	}
+	
+	this.exec('AppendObject', param, callback);
+};
+
+ObsClient.prototype.copyObject = function(param, callback){
+	let key = 'CopySource';
+	if(key in param){
+		let val = param[key];
+		let index = val.lastIndexOf('?versionId=');
+		if(index > 0){
+			param[key] = this.util.encodeURIWithSafe(val.slice(0, index)) + val.slice(index);
+		}else{
+			param[key] = this.util.encodeURIWithSafe(val);
+		}
+	}
+	this.exec('CopyObject', param, callback);
+};
+
+ObsClient.prototype.copyPart = function(param, callback){
+	let key = 'CopySource';
+	if(key in param){
+		let val = param[key];
+		let index = val.lastIndexOf('?versionId=');
+		if(index > 0){
+			param[key] = this.util.encodeURIWithSafe(val.slice(0, index)) + val.slice(index);
+		}else{
+			param[key] = this.util.encodeURIWithSafe(val);
+		}
+	}
+	this.exec('CopyPart', param, callback);
+};
+
+ObsClient.prototype.restoreObject = function(param, callback){
+	this.exec('RestoreObject', param, function(err, result){
+		if(!err && result.InterfaceResult && result.CommonMsg.Status < 300){
+			result.InterfaceResult.RestoreStatus = result.CommonMsg.Status === 200 ? 'AVALIABLE' : 'INPROGRESS';
+		}
+		callback(err, result);
+	});
+};
+
+ObsClient.prototype.initiateMultipartUpload = function(param, callback){
+	if(!('ContentType' in param) && 'Key' in param){
+		param.ContentType = this.util.mimeTypes[param.Key.substring(param.Key.lastIndexOf('.') + 1)];
+	}
+	this.exec('InitiateMultipartUpload', param, callback);
+};
+
+
+ObsClient.prototype.uploadPart = function(param, callback){
+	if(('Body' in param) && ('SourceFile' in param)){
+		let err = 'the input body and sourcefile exist at same time,please specify one of eigther a string or file to be send!';
+		if(this.log.isLevelEnabled('error')){
+			this.log.runLog('error', 'UploadPart', err);
+		}
+		return callback(new Error(err), null);
+	}
+	this.exec('UploadPart', param, callback);
+};
+
+
+ObsClient.prototype.uploadFile = function(param, callback){
+	param = param || {};
+	let _log = this.log;
+	let obsClient = this;
+	let funcName = 'uploadFile';
+	let start = new Date().getTime();
+	// 接收参数
+	let progressCallback = param.ProgressCallback || function(){};
+	let resumeCallback = param.ResumeCallback || function(){};
+	callback = callback || function(){};
+	let _callback = function(code, message, result){
+		if(_log.isLevelEnabled('info')){
+			_log.runLog('info', funcName, 'ObsClient cost ' +  (new Date().getTime()-start) + ' ms');
+		}
+		if(typeof code === 'string'){
+			if(message){
+				code += ':' + String(message);
+			}
+			callback(code, result);
+			return;
+		}
+		callback(code ? (code.CommonMsg.Code + ':' + code.CommonMsg.Message) : null, result);
+	};
+	
+	if(_log.isLevelEnabled('info')){
+		_log.runLog('info', funcName, 'enter ' + funcName + '...' );
+	}
+
+	let bucket = param.Bucket;
+	if(!bucket){
+		_callback('InvalidArgument','Bucket is a required element!');
+		return;
+	}
+	bucket = String(bucket);
+
+	let key = param.Key;
+	if(!key){
+		_callback('InvalidArgument', 'Key is a required element!');
+		return;
+	}
+	key = String(key);
+
+	let uploadFile = param.UploadFile;
+	if(!uploadFile){
+		_callback('InvalidArgument', 'UploadFile is a required element!');
+		return;
+	}
+	let fs = __nccwpck_require__(9896);
+	uploadFile = String(uploadFile); 
+	
+	if(!fs.existsSync(uploadFile)){
+		_callback('InvalidArgument', 'UploadFile does not exist!');
+		return;
+	}
+	let fstat = fs.statSync(uploadFile);
+	if(!fstat.isFile()){
+		_callback('InvalidArgument', 'UploadFile is not a file!');
+		return;
+	}
+	
+	let fileSize = fstat.size;
+	
+	let enableCheckpoint = param.EnableCheckpoint;
+	let checkpointFile = null;
+	let enableCheckSum = false;
+
+	let taskNum = parseInt(param.TaskNum, 10) || 20;
+	
+	if(enableCheckpoint){
+		checkpointFile = param.CheckpointFile;
+		checkpointFile = (checkpointFile && checkpointFile !== '') ? String(checkpointFile) : uploadFile + '.upload_record';
+		let pathLib = __nccwpck_require__(6928);
+		let fileDir = pathLib.dirname(checkpointFile);
+		if(!fs.existsSync(fileDir)){
+			let mkdirsSync = function(dirname){
+			    if(fs.existsSync(dirname)){
+			        return true;
+			    }else{
+			        if(mkdirsSync(pathLib.dirname(dirname))){
+			            fs.mkdirSync(dirname);
+			            return true;
+			        }
+			    }
+			};
+			mkdirsSync(fileDir);
+		}
+		enableCheckSum = param.EnableCheckSum;
+	}
+	if(_log.isLevelEnabled('debug')){
+		_log.runLog('debug', funcName, 'Begin to uploadFile to OBS from file:' + uploadFile);
+	}
+	
+	let events = __nccwpck_require__(4434);
+	let eventEmitter = new events.EventEmitter();
+	
+	let calculateUploadCheckpointMD5 = function(uploadCheckpoint){
+		let data = [];
+		data.push(uploadCheckpoint.bucketName);
+		data.push(uploadCheckpoint.objectKey);
+		data.push(uploadCheckpoint.uploadFile);
+		data.push(String(uploadCheckpoint.partSize));
+		data.push(String(uploadCheckpoint.partCount));
+		if(uploadCheckpoint.contentType){
+			data.push(uploadCheckpoint.contentType);
+		}
+		if(uploadCheckpoint.acl){
+			data.push(uploadCheckpoint.acl);
+		}
+		if(uploadCheckpoint.websiteRedirectLocation){
+			data.push(uploadCheckpoint.websiteRedirectLocation);
+		}
+		if(uploadCheckpoint.sseKms){
+			data.push(uploadCheckpoint.sseKms);
+		}
+		if(uploadCheckpoint.sseKmsKey){
+			data.push(uploadCheckpoint.sseKmsKey);
+		}
+		if(uploadCheckpoint.sseC){
+			data.push(uploadCheckpoint.sseC);
+		}
+		if(uploadCheckpoint.sseCKey){
+			data.push(uploadCheckpoint.sseCKey);
+		}
+		if(uploadCheckpoint.metadata){
+			data.push(JSON.stringify(uploadCheckpoint.metadata));
+		}
+		if(uploadCheckpoint.uploadId){
+			data.push(uploadCheckpoint.uploadId);
+		}
+		if(uploadCheckpoint.partsMeta && (uploadCheckpoint.partsMeta instanceof Object)){
+			for(let key in uploadCheckpoint.partsMeta){
+				if ({}.hasOwnProperty.call(uploadCheckpoint.partsMeta, key)) {
+					data.push(String(key));
+					let partMeta = uploadCheckpoint.partsMeta[key];
+					if(partMeta){
+						data.push(String(partMeta.offset));
+						data.push(String(partMeta.partSize));
+						data.push(String(partMeta.isCompleted));
+						data.push(String(partMeta.etag));
+					}
+				}
+			}
+		}
+		return obsClient.util.bufMD5(Buffer.from(data.join(''), 'utf8'));
+	};
+	
+	let writeCheckpointFileSync = function(checkpointFile, uploadCheckpoint){
+		try{
+			fs.writeFileSync(checkpointFile, JSON.stringify(uploadCheckpoint));
+			return true;
+		}catch(e){
+			_callback('WriteCheckpointFileError', e);
+			if(_log.isLevelEnabled('debug')){
+				_log.runLog('debug', funcName, 'Write checkpoint file failed and abort upload, uploadId ' + uploadCheckpoint.uploadId);
+			}
+			if(uploadCheckpoint.uploadId){
+				obsClient.abortMultipartUpload({
+					Bucket:uploadCheckpoint.bucketName,
+					Key:uploadCheckpoint.objectKey,
+					UploadId:uploadCheckpoint.uploadId,
+				},function(e, r){
+					if(!e && (r.CommonMsg.Status < 300 || r.CommonMsg.Status === 404)){
+						fs.unlink(checkpointFile, function(){});
+					}
+				});
+			}else{
+				fs.unlink(checkpointFile, function(){});
+			}
+			return false;
+		}
+	};
+	
+	let abortRequest = function(uploadCheckpoint, checkpointFile, code, message){
+		if(uploadCheckpoint && uploadCheckpoint.uploadId){
+			obsClient.abortMultipartUpload({
+				Bucket:uploadCheckpoint.bucketName,
+				Key:uploadCheckpoint.objectKey,
+				UploadId:uploadCheckpoint.uploadId,
+			},function(e, r){
+				if(!e && (r.CommonMsg.Status < 300 || r.CommonMsg.Status === 404)){
+					if(checkpointFile){
+						fs.unlink(checkpointFile, function(){});
+					}
+				}
+				_callback(code, message);
+			});
+		}else{
+			if(checkpointFile){
+				fs.unlink(checkpointFile, function(){});
+			}
+			_callback(code, message);
+		}
+	};
+	
+	let transResultToError = function(result){
+		let ret = [];
+		if(result && result.CommonMsg){
+			ret.push('Status:' + result.CommonMsg.Status);
+			ret.push('Code:' + result.CommonMsg.Code);
+			ret.push('Message:' + result.CommonMsg.Message);
+		}
+		return ret.join(',');
+	};
+	
+	eventEmitter.on('start to uploadFile', function(uploadCheckpoint){
+		if(!uploadCheckpoint){
+			uploadCheckpoint = {};
+		}
+		if(!uploadCheckpoint.partsMeta){
+			uploadCheckpoint.partsMeta = {};
+		}
+		let startToUploadFile = function(uploadId){
+			let finishedCount = 0;
+			let hasError = false;
+			let isAbort = false;
+			let finishedBytes = 0;
+			if(uploadCheckpoint.partsMeta){
+				for(let i of Object.keys(uploadCheckpoint.partsMeta)){
+					if(uploadCheckpoint.partsMeta[i].isCompleted){
+						finishedBytes += uploadCheckpoint.partSize
+					}
+				}
+			}
+			let partsLoaded = {};
+			let startTime = new Date().getTime();
+
+			resumeCallback({
+				cancel : function(){
+					isAbort = true;
+					_callback('Upload suspened', 'The process of uploadFile is suspened, you can try again')
+				},
+				abort : function(){
+					isAbort = true;
+					abortRequest(uploadCheckpoint, checkpointFile, 'Upload isAbort', 'The process of uploadFile is isAbort');
+				},
+			});
+
+			let progressCallbacks = function(partNumber, loaded){
+				if(isAbort){
+					return;
+				}
+				finishedBytes += loaded;
+				if(partsLoaded[partNumber]){
+					finishedBytes -= partsLoaded[partNumber];
+				}
+				partsLoaded[partNumber] = loaded;
+				progressCallback(finishedBytes, uploadCheckpoint.uploadFileStat.fileSize, (new Date().getTime() - startTime) / 1000);
+			}; 
+
+			// 段进度
+			let createProgressCallbackByPartNumber = function(partNumber){
+				return function(loaded, total, cost){
+					progressCallbacks(partNumber, loaded);
+				};
+			};
+			let completedRequest = function(){
+				if(finishedCount === uploadCheckpoint.partCount){
+					if(!hasError){
+						let parts = [];
+						for(let partNumber in uploadCheckpoint.partsMeta){
+							if ({}.hasOwnProperty.call(uploadCheckpoint.partsMeta, partNumber)) {
+								parts.push({
+									PartNumber : partNumber,
+									ETag : uploadCheckpoint.partsMeta[partNumber].etag
+								});
+							}
+						}
+						obsClient.completeMultipartUpload({
+							Bucket: uploadCheckpoint.bucketName,
+							Key : uploadCheckpoint.objectKey,
+							UploadId : uploadId,
+							Parts: parts
+						}, function(err, result){
+							if(err || result.CommonMsg.Status >= 500){ 
+								if(checkpointFile){
+									_callback('IncompletedUpload', err ? err : transResultToError(result));
+								}else{
+									abortRequest(uploadCheckpoint, checkpointFile, 'UploadFileFailed', err ? err : transResultToError(result));
+								}
+							}else if(result.CommonMsg.Status >= 300 && result.CommonMsg.Status < 500){
+								abortRequest(uploadCheckpoint, checkpointFile, result.CommonMsg.Code, result.CommonMsg.Message);
+							}else{
+								if(checkpointFile){
+									fs.unlink(checkpointFile, function(){});
+								}
+								_callback(null, null, result);
+							}
+						});
+					}else{
+						if(checkpointFile){
+							_callback('IncompletedUpload','UploadFile finished with error, you can retry with the same parameters');
+						}else{
+							abortRequest(uploadCheckpoint, checkpointFile, 'UploadFileFailed', 'UploadFile finished with error!');
+						}
+					}
+				}
+			};
+			
+			eventEmitter.on('doUpload', function(currentGroupIndex, groupCount, taskNum){
+				let start = (currentGroupIndex - 1) * taskNum;
+				let end = (currentGroupIndex === groupCount) ? uploadCheckpoint.partCount : currentGroupIndex * taskNum;
+				let finishedCountGroup = 0;
+				while(start<end){
+					if(isAbort){
+						return
+					}
+					let partNumber = start + 1;
+					if(uploadCheckpoint.partsMeta[partNumber] && uploadCheckpoint.partsMeta[partNumber].isCompleted){
+						finishedCount++;
+						finishedCountGroup++;
+						let _taskNum = (currentGroupIndex === groupCount) ? (uploadCheckpoint.partCount - (currentGroupIndex - 1) * taskNum) : taskNum;
+						if(finishedCountGroup === _taskNum && finishedCount < uploadCheckpoint.partCount){
+							eventEmitter.emit('doUpload', currentGroupIndex + 1, groupCount, taskNum);
+						}
+						completedRequest();
+					}else{
+						let offset = start * uploadCheckpoint.partSize;
+						let currPartSize = (start + 1 === uploadCheckpoint.partCount) ? uploadCheckpoint.uploadFileStat.fileSize - offset : uploadCheckpoint.partSize;
+						obsClient.uploadPart({
+							Bucket : uploadCheckpoint.bucketName,
+							Key: uploadCheckpoint.objectKey,
+							PartNumber: partNumber,
+							UploadId : uploadId,
+							SourceFile: uploadCheckpoint.uploadFile,
+							Offset : offset,
+							PartSize : currPartSize,
+							SseC : uploadCheckpoint.sseC,
+							SseCKey : uploadCheckpoint.sseCKey,
+							ProgressCallback : createProgressCallbackByPartNumber(partNumber),
+						}, function(err, result) {
+							if(isAbort){
+								return
+							}
+							let partMeta = {offset : offset, partSize : currPartSize};
+							if(err || result.CommonMsg.Status >= 500){
+								partMeta.isCompleted = false;
+								hasError = true;
+							}else if(result.CommonMsg.Status >= 300 && result.CommonMsg.Status < 500){
+								isAbort = true;
+								abortRequest(uploadCheckpoint, checkpointFile, result.CommonMsg.Code, result.CommonMsg.Message);
+								return;
+							}else{
+								partMeta.etag = result.InterfaceResult.ETag;
+								partMeta.isCompleted = true;
+							}
+							uploadCheckpoint.partsMeta[partNumber] = partMeta;
+							if(_log.isLevelEnabled('debug')){
+								_log.runLog('debug', funcName, 'Part ' + String(partNumber) + ' is finished, uploadId ' + uploadId);
+							}
+							uploadCheckpoint.md5 = calculateUploadCheckpointMD5(uploadCheckpoint);
+							if(checkpointFile && !writeCheckpointFileSync(checkpointFile, uploadCheckpoint)){
+								return;
+							}
+							finishedCount++;
+							finishedCountGroup++;
+							let _taskNum = (currentGroupIndex === groupCount) ? (uploadCheckpoint.partCount - (currentGroupIndex - 1) * taskNum) : taskNum;
+							if(finishedCountGroup === _taskNum && finishedCount < uploadCheckpoint.partCount){
+								eventEmitter.emit('doUpload', currentGroupIndex + 1, groupCount, taskNum);
+							}
+							completedRequest();
+						});
+					}
+					start++;
+				}
+			});
+			
+			let groupCount = (uploadCheckpoint.partCount % taskNum === 0) ? (uploadCheckpoint.partCount / taskNum) : (Math.floor(uploadCheckpoint.partCount / taskNum) + 1);
+			eventEmitter.emit('doUpload', 1, groupCount, taskNum);
+		};
+		
+		let uploadId = uploadCheckpoint.uploadId;
+		if(!uploadId){
+			let contentType = uploadCheckpoint.contentType ? uploadCheckpoint.contentType : obsClient.util.mimeTypes[key.substring(key.lastIndexOf('.') + 1)];
+			
+			if(!contentType){
+				contentType = obsClient.util.mimeTypes[uploadFile.substring(uploadFile.lastIndexOf('.') + 1)];
+			}
+			
+			obsClient.initiateMultipartUpload({
+				Bucket : uploadCheckpoint.bucketName,
+				Key : uploadCheckpoint.objectKey,
+				ACL : uploadCheckpoint.acl,
+				Metadata : uploadCheckpoint.metadata,
+				WebsiteRedirectLocation : uploadCheckpoint.websiteRedirectLocation,
+				ContentType : contentType,
+				SseKms : uploadCheckpoint.sseKms,
+				SseKmsKey : uploadCheckpoint.sseKmsKey,
+				SseC : uploadCheckpoint.sseC,
+				SseCKey : uploadCheckpoint.sseCKey,
+				Expires : uploadCheckpoint.expires
+			}, function(err, result){
+				if(err){
+					if(checkpointFile){
+						fs.unlink(checkpointFile, function(){});
+					}
+					_callback('InitateMultipartUploadFailed',err);
+					return;
+				}
+				if(result.CommonMsg.Status >= 300){
+					if(checkpointFile){
+						fs.unlink(checkpointFile, function(){});
+					}
+					_callback(result);
+					return;
+				}
+				
+				uploadId = result.InterfaceResult.UploadId;
+				uploadCheckpoint.uploadId = uploadId;
+				uploadCheckpoint.md5 = calculateUploadCheckpointMD5(uploadCheckpoint);
+				if(_log.isLevelEnabled('debug')){
+					_log.runLog('debug', funcName, 'Claim a new upload id ' + uploadId);
+				}
+				if(checkpointFile && !writeCheckpointFileSync(checkpointFile, uploadCheckpoint)){
+					return;
+				}
+				startToUploadFile(uploadId);
+			});
+		}else{
+			startToUploadFile(uploadId);
+		}
+	});
+	
+	let uploadCheckpoint;
+	let partSize = parseInt(param.PartSize, 10);
+	let partCount;
+	if(fileSize === 0){
+		partSize = 0;
+		partCount = 1;
+	}else{
+		if (isNaN(partSize) || partSize < MIN_UPLOAD_PART_SIZE || partSize > MAX_UPLOAD_PART_SIZE) {
+			partSize = DEFAULT_UPLOAD_PART_SIZE;
+		}
+		partCount = Math.floor(fileSize / partSize);
+		if (partCount > MAX_UPLOAD_PART_COUNT) {
+			partCount = MAX_UPLOAD_PART_COUNT;
+			partSize = Math.ceil(fileSize / partCount);
+		} else {
+			if(fileSize % partSize !== 0){
+				partCount++;
+			}
+		}
+	}
+	if(_log.isLevelEnabled('debug')){
+		_log.runLog('debug', funcName, 'Total parts count ' + partCount);
+	}
+	uploadCheckpoint = {bucketName: bucket, objectKey: key, uploadFile : uploadFile, partSize : partSize, partCount : partCount};
+	uploadCheckpoint.contentType = param.ContentType;
+	uploadCheckpoint.acl = param.ACL;
+	uploadCheckpoint.websiteRedirectLocation = param.WebsiteRedirectLocation;
+	uploadCheckpoint.sseKms = param.SseKms;
+	uploadCheckpoint.sseKmsKey = param.SseKmsKey;
+	uploadCheckpoint.sseC = param.sseC;
+	uploadCheckpoint.sseCKey = param.SseCKey;
+	uploadCheckpoint.metadata = param.Metadata;
+	uploadCheckpoint.expires = param.Expires;
+	uploadCheckpoint.md5 = calculateUploadCheckpointMD5(uploadCheckpoint);
+	uploadCheckpoint.uploadFileStat = {fileSize : fileSize, lastModified : fstat.mtime.toUTCString()};
+	
+	if(checkpointFile){
+		if(!fs.existsSync(checkpointFile)){// call uploadFile first time
+			eventEmitter.on('start to writeFile', function(){
+				fs.writeFile(checkpointFile, JSON.stringify(uploadCheckpoint), function(err){
+					if(err){
+						_callback('WriteCheckpointFileError',err);
+						return;
+					}
+					eventEmitter.emit('start to uploadFile', uploadCheckpoint);
+				});
+			});
+			if(enableCheckSum){
+				obsClient.util.fileMD5(uploadFile, function(err, checkSum){
+					if(err){
+						checkSum = '';
+					}
+					uploadCheckpoint.uploadFileStat.checkSum = checkSum;
+					eventEmitter.emit('start to writeFile');
+				});
+			}else{
+				eventEmitter.emit('start to writeFile');
+			}
+		}else{
+			fs.readFile(checkpointFile, function(err, data){
+				if(err){
+					fs.unlink(checkpointFile, function(){});
+					_callback('ReadCheckpointFileError',err);
+					return;
+				}
+				try{
+					uploadCheckpoint = JSON.parse(data);
+				}catch(e){
+					fs.unlink(checkpointFile, function(){});
+					_callback('ParseCheckpointFileError', e);
+					return;
+				}
+				if(!uploadCheckpoint || uploadCheckpoint.bucketName !== bucket || uploadCheckpoint.objectKey !== key || uploadCheckpoint.uploadFile !== uploadFile ||
+						!uploadCheckpoint.uploadFileStat || uploadCheckpoint.uploadFileStat.fileSize !== fstat.size || uploadCheckpoint.uploadFileStat.lastModified !== fstat.mtime.toUTCString() ||
+						uploadCheckpoint.md5 !== calculateUploadCheckpointMD5(uploadCheckpoint)){
+					abortRequest(uploadCheckpoint, checkpointFile, 'CheckpointFileInvalid', 'CheckpointFile is invalid!');
+					return;
+				}
+				
+				if(uploadCheckpoint.uploadFileStat.checkSum){
+					obsClient.util.fileMD5(uploadFile, function(err, checkSum){
+						if(err || checkSum !== uploadCheckpoint.uploadFileStat.checkSum){
+							abortRequest(uploadCheckpoint, checkpointFile, 'CheckpointFileInvalid','CheckpointFile is invalid!');
+							return;
+						}
+						eventEmitter.emit('start to uploadFile', uploadCheckpoint);
+					});
+				}else{
+					eventEmitter.emit('start to uploadFile', uploadCheckpoint);
+				}
+			});
+		}
+	}else{
+		eventEmitter.emit('start to uploadFile', uploadCheckpoint);
+	}
+};
+
+// 当指定了参数DownloadFile，将使用此值作为保存文件名，否则使用对象名作为保存文件名， 保存时将覆盖同名文件。 
+// 另外，还将使用 保存文件名+".obsnodejssdk.tmp"后缀的形式 作为下载过程中的临时中间文件名，且也会覆盖同名文件。
+// 另外，当开启了断点延续下载（EnableCheckpoint=true），还将使用 参数CheckpointFile（如果没有指定CheckpointFile将使用对象名）+".obsnodejssdk.chkpt"后缀的形式 作为保存历史下载情况和校验信息的文件名，且也会覆盖同名文件。
+ObsClient.prototype.downloadFile = function(param, callback){
+	param = param || {};
+	let _log = this.log;
+	let obsClient = this;
+	let funcName = 'downloadFile';
+	let start = new Date().getTime();
+	let progressCallback = param.ProgressCallback || function(){};
+	let resumeCallback = param.ResumeCallback || function(){};
+	callback = callback || function(){};
+	let _callback = function(code, message, result){
+		_log.runLog('info', funcName, 'ObsClient cost ' +  (new Date().getTime() - start) + ' ms');
+		if(typeof code === 'string'){
+			if(message){
+				code += ':' + String(message);
+			}
+			callback(code, result);
+		}else{
+			callback(code ? (code.CommonMsg.Code + ':' + code.CommonMsg.Message) : null, result);
+		}
+	};
+	
+	_log.runLog('debug', funcName, 'enter ' + funcName + '...' );
+
+	let bucket = param.Bucket;
+	if(!bucket){
+		_log.runLog('error', funcName, 'Bucket is a required element!');
+		_callback('InvalidArgument','Bucket is a required element!');
+		return;
+	}
+	bucket = String(bucket);
+	
+	let key = param.Key;
+	if(!key){
+		_log.runLog('error', funcName, 'Key is a required element!');
+		_callback('InvalidArgument', 'Key is a required element!');
+		return;
+	}
+	key = String(key);
+	
+	let pathLib = __nccwpck_require__(6928);
+	
+	let downloadFile;
+	if(!param.DownloadFile){
+		downloadFile = (__nccwpck_require__(932).cwd)() + pathLib.sep + key;
+		_log.runLog('info', funcName, 'DownloadFile is not set, will put file to path:' + downloadFile + ", by default");
+	}else{
+		downloadFile = String(param.DownloadFile);
+	}
+	let tmpSuffix = ".obsnodejssdk.tmp";
+	let chkSuffix = ".obsnodejssdk.chkpt";
+	let downloadTempFile = downloadFile + tmpSuffix;
+	let fs = __nccwpck_require__(9896);
+
+	let taskNum = parseInt(param.TaskNum, 10) || 10;
+	
+	let initWriteAndClose4DownloadTmpFile = function(tmpFileFd, tmpFile, tmpFileSize, callback) {
+		let buffer = Buffer.from('1', 'utf8');
+		let start = new Date().getTime();
+		fs.write(tmpFileFd, buffer, 0, 1, tmpFileSize - 1, (werr)=>{
+			_log.runLog('debug', 'prepareDownloadTempFile', ` prepare ${tmpFile} cost ` + (new Date().getTime() - start) + ' ms');
+			if(werr){
+				_log.runLog('error', 'prepareDownloadTempFile', `ftruncate temp file:${tmpFile} failed , and cost: ${(new Date().getTime() - start) / 1000}`);
+				_log.runLog('error', 'prepareDownloadTempFile', `ftruncate temp file:${tmpFile} failed , err:${werr.stack}`);
+				fs.unlinkSync(tmpFile);
+				return callback(false, tmpFile);
+			}
+			fs.close(tmpFileFd, (err)=>{
+				if(err){
+					_log.runLog('error', 'prepareDownloadTempFile', `close fd failed, err:${err.stack}`);
+					fs.unlinkSync(tmpFile);
+					return callback(false, tmpFile);
+				}
+				return callback(true, tmpFile);
+			});
+		});
+	}
+
+	let initDownloadTmpFile = function(tmpFile, tmpFileSize, callback) {
+		fs.open(tmpFile, 'w', (oerr, fd)=>{
+			if(oerr){
+				_log.runLog('error', 'prepareDownloadTempFile', `create temp download file ${tmpFile}  failed, error:${oerr.stack}`);
+				_callback('InnerError',  `create temp download file ${tmpFile}  failed, error:${oerr.stack}`);
+				return callback(false, tmpFile);
+			}
+
+			let start = new Date().getTime();
+			fs.ftruncate(fd, tmpFileSize, (terr)=>{
+				if(terr){
+					// 例如fat、exfat文件系统，将导致fs.ftruncate()报错
+					initWriteAndClose4DownloadTmpFile(fd, tmpFile, tmpFileSize, callback);
+				}
+				else {
+					_log.runLog('debug', 'prepareDownloadTempFile', ` prepare ${tmpFile} cost ` + (new Date().getTime() - start) + ' ms');
+					fs.close(fd, (err)=>{
+						if(err){
+							_log.runLog('error', 'prepareDownloadTempFile', `close fd failed, err:${err.stack}`);
+							fs.unlinkSync(tmpFile);
+							return callback(false, tmpFile);
+						}
+						return callback(true, tmpFile);
+					});
+				}	
+			});
+		});	
+	}
+
+	const prepareDownloadTempFile = util.promisify((tmpFile, tmpFileSize, callback) => {
+		if(fs.existsSync(tmpFile)){
+			try{
+				fs.unlinkSync(tmpFile);
+			}catch(e){
+				_log.runLog('error', 'prepareDownloadTempFile',  `delete ${tmpFile} file failed , exception: ${e}`);
+				_callback('DeleteTempFileError', `delete ${tmpFile} file failed , exception: ${e}`);
+				return;
+			}
+		}
+
+		initDownloadTmpFile(tmpFile, tmpFileSize, callback);
+	});
+
+	let mkdirsSync = function(dirname){
+		if(fs.existsSync(dirname)){
+			return true;
+		}else{
+			if(mkdirsSync(pathLib.dirname(dirname))){
+				fs.mkdirSync(dirname);
+				return true;
+			}
+		}
+	};
+
+	obsClient.getObjectMetadata({
+		Bucket : bucket,
+		Key : key,
+		VersionId : param.VersionId,
+		SseC: param.SseC,
+		SseCKey: param.SseCKey,
+	}, function(err, result){
+		_log.runLog('debug', funcName, ` getObjectMetadata of ${key} cost ` + (new Date().getTime() - start) + ' ms');
+
+		let enableCheckpoint = param.EnableCheckpoint;
+		let checkpointFile = null;
+		
+		if(enableCheckpoint){
+			checkpointFile = param.CheckpointFile;
+			checkpointFile = (checkpointFile && checkpointFile !== '') ? String(checkpointFile) : downloadFile + chkSuffix;
+			let checkPointFileDir = pathLib.dirname(checkpointFile);
+			if(!fs.existsSync(checkPointFileDir)){
+				mkdirsSync(checkPointFileDir);
+			}
+		}
+		
+		let tempFileDir = pathLib.dirname(downloadTempFile);
+		if(!fs.existsSync(tempFileDir)){
+			mkdirsSync(tempFileDir);
+		}
+		
+		if(err || result.CommonMsg.Status >= 500){
+			_log.runLog('warn', funcName,  'the peer server occur exception!');
+			_callback('GetObjectSizeError', err);
+			return;
+		}
+		
+		if(result.CommonMsg.Status >= 300 && result.CommonMsg.Status < 500){
+			_log.runLog('warn', funcName,  result.CommonMsg.Message);
+			_callback(result);
+			return;
+		}
+		
+		let objectSize = parseInt(result.InterfaceResult.ContentLength, 10);
+		
+		if(objectSize === 0){
+			fs.writeFileSync(downloadFile, Buffer.from(''));
+			callback(null, result);
+			return;
+		}
+		
+		let objestStat = result;
+		
+		let events = __nccwpck_require__(4434);
+		let eventEmitter = new events.EventEmitter();
+		
+		let calculateDownloadCheckpointMD5 = function(downloadCheckpoint){
+			let data = [];
+			data.push(downloadCheckpoint.bucketName);
+			data.push(downloadCheckpoint.objectKey);
+			data.push(downloadCheckpoint.downloadFile);
+			data.push(String(downloadCheckpoint.partSize));
+			data.push(String(downloadCheckpoint.partCount));
+			if(downloadCheckpoint.versionId){
+				data.push(downloadCheckpoint.versionId);
+			}
+			if(downloadCheckpoint.ifMatch){
+				data.push(downloadCheckpoint.ifMatch);
+			}
+			if(downloadCheckpoint.ifModifiedSince){
+				data.push(downloadCheckpoint.ifModifiedSince);
+			}
+			if(downloadCheckpoint.ifNoneMatch){
+				data.push(downloadCheckpoint.ifNoneMatch);
+			}
+			if(downloadCheckpoint.ifUnmodifiedSince){
+				data.push(downloadCheckpoint.ifUnmodifiedSince);
+			}
+			if(downloadCheckpoint.sseC){
+				data.push(downloadCheckpoint.sseC);
+			}
+			if(downloadCheckpoint.sseCKey){
+				data.push(downloadCheckpoint.sseCKey);
+			}
+			if(downloadCheckpoint.partsMeta && (downloadCheckpoint.partsMeta instanceof Object)){
+				// key是分段段号，且在partsMeta上最小编号是1。  
+				for(let key in downloadCheckpoint.partsMeta){
+					if ({}.hasOwnProperty.call(downloadCheckpoint.partsMeta, key)) {
+						data.push(String(key));
+						let partMeta = downloadCheckpoint.partsMeta[key];
+						if(partMeta){
+							data.push(String(partMeta.startPos));
+							data.push(String(partMeta.endPos));
+							data.push(String(partMeta.isCompleted));
+						}
+					}
+				}
+			}
+			return obsClient.util.bufMD5(Buffer.from(data.join(''), 'utf8'));
+		};
+		
+		let writeCheckpointFileSync = function(checkpointFile, downloadCheckpoint){
+			try{
+				if(fs.existsSync(downloadTempFile)){
+					let tempFileStat = fs.statSync(downloadTempFile);
+					if(!downloadCheckpoint.tempFileStatus){
+						downloadCheckpoint.tempFileStatus = {};
+					}
+					downloadCheckpoint.tempFileStatus.fileName = downloadTempFile;
+					downloadCheckpoint.tempFileStatus.fileSize = tempFileStat.size;
+					downloadCheckpoint.tempFileStatus.lastModified = tempFileStat.mtime.toUTCString();
+				}
+				fs.writeFileSync(checkpointFile, JSON.stringify(downloadCheckpoint));
+				return true;
+			}catch(e){
+				fs.unlinkSync(checkpointFile, function(){});
+				fs.unlinkSync(downloadTempFile, function(){});
+				_callback('WriteCheckpointFileError', e);
+				_log.runLog('error', funcName, 'Write checkpoint file failed, err: ' + e);
+				return false;
+			}
+		};
+		
+		eventEmitter.on('start to downloadFile', function(downloadCheckpoint){
+			if(!downloadCheckpoint){
+				downloadCheckpoint = {};
+			}
+			
+			if(!downloadCheckpoint.partsMeta){
+				downloadCheckpoint.partsMeta = {};
+			}
+			
+			_log.runLog('debug', funcName, 'Begin to downloadFile from OBS to:' + downloadFile);
+			
+			let finishedCount = 0;
+			let hasError = false;
+			let isAbort = false;
+			let finishedBytes = 0;
+			if(downloadCheckpoint.partsMeta){
+				for(let i of Object.keys(downloadCheckpoint.partsMeta)){
+					if(downloadCheckpoint.partsMeta[i].isCompleted){
+						finishedBytes += downloadCheckpoint.partSize
+					}
+				}
+			}
+			let partsLoaded = {};
+			let startTime = new Date().getTime();
+
+			resumeCallback({
+				cancel : function(){
+					isAbort = true;
+					_callback('Download suspened', 'The process of downloadFile is suspened, you can try again')
+				}
+			});
+
+			let progressCallbacks = function(partNumber, loaded){
+				if(isAbort){
+					return;
+				}
+				finishedBytes += loaded;
+				if(partsLoaded[partNumber]){
+					finishedBytes -= partsLoaded[partNumber];
+				}
+				partsLoaded[partNumber] = loaded;
+				progressCallback(finishedBytes, downloadCheckpoint.objectStatus.objectSize, (new Date().getTime() - startTime) / 1000);
+			}; 
+
+			// 段进度
+			let createProgressCallbackByStartPart = function(partNumber){
+				return function(loaded, total, cost){
+					progressCallbacks(partNumber, loaded);
+				};
+			};
+			let tryCompletedDownload = function(){
+				if(finishedCount !== downloadCheckpoint.partCount){
+					return;
+				}
+
+				_log.runLog('debug', funcName, ` getObject of ${key} cost ` + (new Date().getTime() - start) + ' ms');
+
+				if(!hasError){
+					fs.rename(downloadTempFile, downloadFile, function(err){
+						if(err){
+							_log.runLog('error', 'completedDownload',  `DownloadFile finished but rename temp file error: ${err.stack}`);
+							if(checkpointFile){
+								if(!writeCheckpointFileSync(checkpointFile, downloadCheckpoint)){
+									return;
+								}
+								_callback('IncompletedDownload',`you can retry with the same parameters, DownloadFile finished but rename temp file error: ${err.stack}`);
+							}else{
+								fs.unlinkSync(downloadTempFile, function(){});
+								_callback('DownloadFileFailed', `DownloadFile finished but rename temp file error: ${err.stack}`);
+							}
+							return;
+						}
+
+						// rename成功后，删除checkpointFile
+						if(checkpointFile){
+							fs.unlinkSync(checkpointFile, function(){});
+						}
+						if(result && result.InterfaceResult){
+							delete result.InterfaceResult.ContentLength;
+						}
+						_callback(null, null, result);
+					});
+				}else{	
+					if(checkpointFile){
+						if(!writeCheckpointFileSync(checkpointFile, downloadCheckpoint)){
+							return;
+						}
+						_callback('IncompletedDownload','DownloadFile finished with error, you can retry with the same parameters');
+					}else{
+						fs.unlinkSync(downloadTempFile, function(){});
+						_callback('DownloadFileFailed','DownloadFile finished with error');
+					}
+				}
+			};
+			
+			eventEmitter.on('doDownload', function(currentGroupIndex, groupCount, taskNum){
+				let start = (currentGroupIndex - 1) * taskNum;
+				let end = (currentGroupIndex === groupCount) ? downloadCheckpoint.partCount : currentGroupIndex * taskNum;
+				let finishedCountInGroup = 0;
+
+				let currStepEnd = function(i, partMeta, doNextRoundDownload) {
+					downloadCheckpoint.partsMeta[i] = partMeta;
+					downloadCheckpoint.md5 = calculateDownloadCheckpointMD5(downloadCheckpoint);
+					if(checkpointFile && !writeCheckpointFileSync(checkpointFile, downloadCheckpoint)){
+						return;
+					}
+					finishedCount++;
+					finishedCountInGroup++;
+
+					if(!doNextRoundDownload) {
+						return;
+					}
+
+					let _taskNum = (currentGroupIndex === groupCount) ? (downloadCheckpoint.partCount - (currentGroupIndex - 1) * taskNum) : taskNum;
+					if(finishedCountInGroup === _taskNum && finishedCount < downloadCheckpoint.partCount){
+						eventEmitter.emit('doDownload', currentGroupIndex + 1, groupCount, taskNum);
+					}
+					else if(finishedCountInGroup === _taskNum && finishedCount === downloadCheckpoint.partCount){
+						tryCompletedDownload();
+					}
+				}
+
+				let checkSkipPartI = function(i) {
+					if(downloadCheckpoint.partsMeta[i] && downloadCheckpoint.partsMeta[i].isCompleted){
+						finishedCount++;
+						finishedCountInGroup++;
+						let _taskNum = (currentGroupIndex === groupCount) ? (downloadCheckpoint.partCount - (currentGroupIndex - 1) * taskNum) : taskNum;
+						if(finishedCountInGroup === _taskNum && finishedCount < downloadCheckpoint.partCount){
+							// 开启下一组下载
+							eventEmitter.emit('doDownload', currentGroupIndex + 1, groupCount, taskNum);
+						}
+						else if(finishedCountInGroup === _taskNum && finishedCount === downloadCheckpoint.partCount){
+							tryCompletedDownload();
+						}
+						return true;
+					}else {
+						return false;
+					}
+				}
+
+				let savePartIdata = function(i, startPos, partMeta, result) {
+					let stream;
+
+					try{
+						let res = result.InterfaceResult.Content;
+
+						stream = fs.createWriteStream(downloadTempFile, {
+							flags : 'r+',
+							start : startPos,
+							autoClose: true // 如果 autoClose 被设置为 true（默认的行为），则当 'error' 或 'finish' 事件时，文件描述符会被自动地关闭
+						});
+						stream.on('error', (err) => {
+							hasError = true;
+							partMeta.isCompleted = false;
+							currStepEnd(i, partMeta, false);
+							_log.runLog('warn', funcName, `write to downloadTempFile occur exception : ${err.stack}`);
+							_callback('DownloadFileFailed',`write to downloadTempFile occur exception : ${err.stack}`);
+							delete result.InterfaceResult.Content;
+						});
+						
+						res.on('error', (err) => {
+							// 如果可读流在处理期间发送错误，则可写流目标不会自动关闭。 如果发生错误，则需要手动关闭每个流以防止内存泄漏。
+							hasError = true;
+							try {
+								stream.close();
+							} catch (error) {
+								_log.runLog('warn', funcName, 'close downloadTempFile stream failed!');
+							}
+
+							// error事件之后，不会有除了close事件之外的其他事件
+
+							partMeta.isCompleted = false;
+							currStepEnd(i, partMeta, false);
+							_log.runLog('warn', funcName, `getObject occur exception during the processing data time : ${err.stack}!`);
+							_callback('DownloadFileFailed',`getObject occur exception during the processing data time : ${err.stack}!`);
+							delete result.InterfaceResult.Content;
+						}).on('end', () => {
+							if (!res.complete) {
+								hasError = true;
+								partMeta.isCompleted = false;
+								_log.runLog('warn', funcName, 'getObject occur exception that does not complete the data transmission!');
+								_callback('DownloadFileFailed','getObject occur exception that does not complete the data transmission!');
+								delete result.InterfaceResult.Content;
+							}
+							else {
+								partMeta.isCompleted = true;
+							}
+
+							currStepEnd(i, partMeta, true);
+						});
+
+						res.pipe(stream, {end: true});
+					}catch(e){
+						hasError = true;
+						_log.runLog('warn', funcName, 'write to downloadTempFile occering execption:' + e);
+					}
+				}
+
+				let downLoadPartI = function(i) {
+					if(checkSkipPartI(i)) {
+						return;
+					}
+
+					let startPos = (i-1) * downloadCheckpoint.partSize;
+					let endPos = (i === downloadCheckpoint.partCount) ? (downloadCheckpoint.objectStatus.objectSize-1) : (i * downloadCheckpoint.partSize - 1);
+					let partStartTime = new Date().getTime();
+
+					obsClient.getObject({
+						Bucket: downloadCheckpoint.bucketName,
+						Key: downloadCheckpoint.objectKey,
+						VersionId : downloadCheckpoint.versionId,
+						Range: 'bytes=' + startPos + '-' + endPos,
+						SaveAsStream : true,
+						IfMatch : downloadCheckpoint.ifMatch,
+						IfModifiedSince : downloadCheckpoint.ifModifiedSince,
+						IfNoneMatch : downloadCheckpoint.ifNoneMatch,
+						IfUnmodifiedSince : downloadCheckpoint.ifUnmodifiedSince,
+						SseC : downloadCheckpoint.sseC,
+						SseCKey : downloadCheckpoint.sseCKey,
+						ProgressCallback : createProgressCallbackByStartPart(i),
+					}, function(err, result) {
+						_log.runLog('debug', funcName, ` get part data, first to get the response, cost ` + (new Date().getTime() - partStartTime) + ' ms');
+
+						let partMeta = {startPos : startPos, endPos : endPos};
+
+						if(err || result.CommonMsg.Status >= 500){
+							partMeta.isCompleted = false;
+							// hasError 控制completedDownload()是否rename tempDownloadFile to DownloadFile.
+							hasError = true;
+							currStepEnd(i, partMeta, true);
+							_callback('DownloadFileFailed','the peer server occur exception!');
+							_log.runLog('warn', funcName, 'the peer server occur exception!');
+						}else if(result.CommonMsg.Status >= 300 && result.CommonMsg.Status < 500){
+							isAbort = true;
+							_callback(result);
+							_log.runLog('warn', funcName,  result.CommonMsg.Message);
+							return;
+						}else{
+							savePartIdata(i, startPos, partMeta, result);
+						}
+					});
+				}
+
+				while(start < end) {
+					if(isAbort){
+						return;
+					}
+
+					let i = start + 1;
+					downLoadPartI(i);
+					start++;
+				}
+			});
+
+			let groupCount = (downloadCheckpoint.partCount % taskNum === 0) ? (downloadCheckpoint.partCount / taskNum) : (Math.floor(downloadCheckpoint.partCount / taskNum) + 1);
+			let defaultMaxListeners = eventEmitter.getMaxListeners();
+			if(groupCount > defaultMaxListeners) {
+				eventEmitter.setMaxListeners(groupCount + 1);
+				_log.runLog('debug', funcName, 'eventEmitter setMaxListeners from  ' + defaultMaxListeners + ' to ' + eventEmitter.getMaxListeners());
+			}
+
+			eventEmitter.emit('doDownload', 1, groupCount, taskNum);
+		});
+		
+		let downloadCheckpoint;
+		let _tmpDownloadCheckpoint;
+		let partSize = parseInt(param.PartSize, 10);
+		if (isNaN(partSize) || partSize < MIN_DOWNLOAD_PART_SIZE || partSize > MAX_DOWNLOAD_PART_SIZE) {
+			partSize = DEFAULT_DOWNLOAD_PART_SIZE;
+		}
+		let partCount = objectSize % partSize === 0 ? Math.floor(objectSize / partSize) : Math.floor(objectSize / partSize) + 1;
+		_log.runLog('debug', funcName, 'Total parts count ' + partCount);
+		downloadCheckpoint = {bucketName: bucket, objectKey: key, downloadFile : downloadFile, partSize : partSize, partCount : partCount};
+		downloadCheckpoint.versionId = param.VersionId;
+		downloadCheckpoint.ifMatch = param.IfMatch;
+		downloadCheckpoint.ifModifiedSince = param.IfModifiedSince;
+		downloadCheckpoint.ifNoneMatch = param.IfNoneMatch;
+		downloadCheckpoint.ifUnmodifiedSince = param.IfUnmodifiedSince;
+		downloadCheckpoint.sseC = param.SseC;
+		downloadCheckpoint.sseCKey = param.SseCKey;
+		downloadCheckpoint.md5 = calculateDownloadCheckpointMD5(downloadCheckpoint);
+		downloadCheckpoint.objectStatus = {objectSize : objectSize, lastModified : objestStat.InterfaceResult.LastModified, etag: objestStat.InterfaceResult.ETag};
+		
+		let tryContinueDownload_noChkFile = function() {
+			fs.writeFile(checkpointFile, JSON.stringify(downloadCheckpoint), function(err){
+				if(err){
+					_log.runLog('error', funcName, `failed to write to checkpointFile: ${err.stack}`);
+					_callback('WriteCheckpointFileError', `failed to write to checkpointFile: ${err.stack}`);
+					return;
+				}
+				prepareDownloadTempFile(downloadTempFile, objectSize, (isPrepareSucceed, tmpFile) => {
+					if(isPrepareSucceed){
+						eventEmitter.emit('start to downloadFile', downloadCheckpoint);
+					}
+				}).catch((reason) => {
+					_log.runLog('error', funcName, 'failed to download file: ' + key + ', reason: ' + reason);
+				});
+			});
+		}
+
+		let verifyDownloadTempFileStatus = function(tempFileStatusInChk){
+			if(!tempFileStatusInChk || !tempFileStatusInChk.fileName || !tempFileStatusInChk.lastModified || !tempFileStatusInChk.fileSize){
+				_log.runLog('warn',  'verifyTempFileStatus' , ' tempFileStatus infomation is not integrity.');
+				return false;
+			}
+
+			if(!fs.existsSync(downloadTempFile)){
+				_log.runLog('warn', 'verifyTempFileStatus',  downloadTempFile + ' does not exist.');
+				return false;
+			}
+
+			let tempFileStat = fs.statSync(downloadTempFile);
+			if( tempFileStatusInChk.fileName !== downloadTempFile 
+				|| tempFileStatusInChk.lastModified !== tempFileStat.mtime.toUTCString() 
+				|| tempFileStatusInChk.fileSize !==  tempFileStat.size){
+				_log.runLog('warn',  'verifyTempFileStatus' , ' the tempFileStatus information in checkpointfile is not consistent.');
+				return false;
+			}
+
+			return true;
+		};
+
+		let tryContinueDownload_hasChkFile = function() {
+			fs.readFile(checkpointFile, function(err, data){
+				_tmpDownloadCheckpoint = downloadCheckpoint;
+
+				if(err){
+					_log.runLog('error', funcName, `read checkpointFile occur error: ${err.stack}`);
+					fs.unlinkSync(checkpointFile, function(){});
+					_callback('ReadCheckpointFileError', `read checkpointFile occur error: ${err.stack}`);
+				}
+				else {
+					try{
+						downloadCheckpoint = JSON.parse(data);
+					}catch(e){
+						_log.runLog('error', funcName, 'pasre checkpointFile data occur exception : ' + e);
+						fs.unlinkSync(checkpointFile, function(){});
+						_callback('ParseCheckpointFileError', 'pasre checkpointFile data occur exception : ' + e);
+					}
+				}
+				
+				// verify : downloadTempFile  vs  checkpointfile
+				if(!downloadCheckpoint || downloadCheckpoint.bucketName !== bucket || downloadCheckpoint.objectKey !== key || downloadCheckpoint.downloadFile !== downloadFile || 
+						!downloadCheckpoint.objectStatus || downloadCheckpoint.objectStatus.objectSize !== objectSize || downloadCheckpoint.objectStatus.lastModified !== objestStat.InterfaceResult.LastModified || downloadCheckpoint.objectStatus.etag !== objestStat.InterfaceResult.ETag 
+						|| !verifyDownloadTempFileStatus(downloadCheckpoint.tempFileStatus) || downloadCheckpoint.md5 !== calculateDownloadCheckpointMD5(downloadCheckpoint)){
+					// 校验不通过，不使用延续下载，需执行prepareDownloadTempFile()
+					fs.unlinkSync(checkpointFile, function(){});
+					_log.runLog('warn',  funcName , 'CheckpointFile is invalid!');
+
+					downloadCheckpoint = _tmpDownloadCheckpoint;
+					prepareDownloadTempFile(downloadTempFile, objectSize, (isPrepareSucceed, tmpFile) => {
+						if(isPrepareSucceed){
+							eventEmitter.emit('start to downloadFile', downloadCheckpoint);
+						}
+					}).catch((reason) => {
+						_log.runLog('error', funcName, 'failed to download file: ' + key + ', reason: ' + reason);
+					});
+				}
+				else {
+					// 校验通过，使用断点延续下载，即不执行prepareDownloadTempFile()
+					_log.runLog('debug',  funcName , 'CheckpointFile is valid!');
+					eventEmitter.emit('start to downloadFile', downloadCheckpoint);
+				}
+				
+			});
+		}
+
+		let tryContinueDownload = function() {
+			if(!fs.existsSync(checkpointFile)){
+				tryContinueDownload_noChkFile();
+			}else{
+				tryContinueDownload_hasChkFile();
+			}
+		}
+
+		if(checkpointFile){
+			// 启用l了断点续接下载
+			tryContinueDownload();
+		}else{
+			// 没有启用断点续接下载
+			prepareDownloadTempFile(downloadTempFile, objectSize, (isPrepareSucceed, tmpFile) => {
+				if(isPrepareSucceed){
+					eventEmitter.emit('start to downloadFile', downloadCheckpoint);
+				}
+			}).catch((reason) => {
+				_log.runLog('error', funcName, 'failed to download file: ' + key + ', reason: ' + reason);
+			});
+		}
+	});
+};
+
+function isFunction(obj){
+	return Object.prototype.toString.call(obj) === '[object Function]';
+}
+
+function createPromise(current){
+	return function(param, callback){
+		if(isFunction(param)){
+			current.call(this, null, param);
+			return;
+		}
+		if(isFunction(callback)){
+			current.call(this, param, callback);
+			return;
+		}
+		
+		let that = this;
+		return new Promise(function(resolve, reject) {
+			current.call(that, param, function(err, result){
+				if(err){
+					return reject(err);
+				}
+				resolve(result);
+			});
+		});
+	};
+}
+
+if(isFunction(Promise)){
+	for(let key in ObsClient.prototype){
+		if ({}.hasOwnProperty.call(ObsClient.prototype, key)) {
+			let current = ObsClient.prototype[key];
+			ObsClient.prototype[key] = createPromise(current);
+		}
+	}
+}
+
+ObsClient.prototype.close = function(){
+	if(this.util){
+		this.util.close();
+		delete this.util;
+	}
+};
+
+ObsClient.prototype.refreshShadowClient = function () {
+  if (this.util) {
+    this.util.refreshShadowClient();
+	}
+};
+
+ObsClient.prototype.exec = function(funcName, param, callback){
+	let _log = this.log;
+	if(_log.isLevelEnabled('info')){
+		_log.runLog('info', funcName, 'enter ' + funcName + '...' );
+	}
+	let start = new Date().getTime();
+	param = param || {};
+	let _callback = function(err, msg){
+		if(_callback.$called){
+			return;
+		}
+		_callback.$called = true;
+		if(_log.isLevelEnabled('info')){
+			_log.runLog('info', funcName, 'ObsClient cost ' +  (new Date().getTime() - start) + ' ms');
+		}
+		
+		if(err && !(err instanceof Error)){
+			err = new Error(err);
+		}
+		callback(err, msg);
+	};
+	this.util.exec(funcName, param , _callback);
+};
+
+ObsClient.prototype.initLog = function(param){
+	param = param || {};
+	this.log.initLog(param.file_full_path, param.max_log_size, param.backups, param.level, param.log_to_console, param.name, param.logger);
+	if(this.log.isLevelEnabled('warn')){
+		let msg = ['[OBS SDK Version=' + this.util.obsSdkVersion];
+		if(this.util.server){
+			let port = this.util.port ? ':' + this.util.port : '';
+			msg.push('Endpoint=' + (this.util.is_secure? 'https' : 'http') + '://' + this.util.server + port);
+		}
+		msg.push('Access Mode=' + (this.util.path_style ? 'Path' : 'Virtual Hosting') + ']');
+		this.log.runLog('warn', 'init', msg.join('];['));
+	}
+};
+
+ObsClient.prototype.factory = function(param){
+	this.log = new LogUtil();
+	this.util = new Utils(this.log);
+	param = param || {};
+	this.util.initFactory(param.access_key_id, param.secret_access_key, param.is_secure,
+			param.server, param.path_style, param.signature, param.region, param.port, param.max_retry_count,
+			param.timeout, param.ssl_verify, param.long_conn_param, param.security_token, param.is_signature_negotiation, param.is_cname,
+			param.max_connections, param.http_agent, param.https_agent, param.user_agent, param.third_http_lib, param.no_proxy_list,param.is_shadow_client, param.iam_domain, param.shadow_expires);
+};
+
+ObsClient.prototype.refresh = function(access_key_id, secret_access_key, security_token,is_shadow_client){
+	this.util.refresh(access_key_id, secret_access_key, security_token,is_shadow_client);
+};
+
+ObsClient.prototype.enums = enums;
+
+ObsClient.prototype.createV2SignedUrlSync = function(param){
+	return this.util.createV2SignedUrlSync(param);
+};
+
+ObsClient.prototype.createV4SignedUrlSync = function(param){
+	return this.util.createV4SignedUrlSync(param);
+};
+
+
+ObsClient.prototype.createSignedUrlSync = function(param){
+	return this.util.createSignedUrlSync(param);
+};
+
+ObsClient.prototype.createV4PostSignatureSync = function(param){
+	return this.util.createV4PostSignatureSync(param);
+};
+
+ObsClient.prototype.createPostSignatureSync = function(param){
+	return this.util.createPostSignatureSync(param);
+};
+
+for(let key in ObsClient.prototype){
+	if ({}.hasOwnProperty.call(ObsClient.prototype, key)) {
+		ObsClient.prototype[capitalize(key)] = ObsClient.prototype[key];
+	}
+}
+
+for(let key in ObsClient.prototype){
+	if ({}.hasOwnProperty.call(ObsClient.prototype, key)) {
+		let index = key.indexOf('Configuration');
+		if (index > 0 && index + 'Configuration'.length === key.length) {
+			ObsClient.prototype[key.slice(0, index)] = ObsClient.prototype[key];
+		}
+	}
+}
+
+module.exports = ObsClient;
+
+
+
+/***/ }),
+
+/***/ 8567:
+/***/ ((module) => {
+
+/**
+ * Copyright 2019 Huawei Technologies Co.,Ltd.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed
+ * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ */
+
+const owner = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'Owner',
+	'parameters' : {
+		'ID' : {
+			'sentAs' : 'ID',
+		}
+	}
+};
+
+const initiator = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'Initiator',
+	'parameters' : {
+		'ID' : {
+			'sentAs' : 'ID',
+		},
+	},
+};
+const commonPrefixes = {
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'CommonPrefixes',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'Prefix' : {
+				'decode' : true,
+				'sentAs' : 'Prefix',
+			},
+			'MTime': {
+				'sentAs': 'MTime',
+			},
+			'InodeNo': {
+				'sentAs': 'InodeNo',
+			}
+		}
+	}
+};
+
+const grants = {
+	'type' : 'array',
+	'location' : 'xml',
+	'wrapper' : 'AccessControlList',
+	'sentAs' : 'Grant',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'Grantee' : {
+				'type' : 'object',
+				'sentAs' : 'Grantee',
+				'parameters' : {
+					'Type' : {
+						'type' : 'ignore',
+					},
+					'ID' : {
+						'sentAs' : 'ID',
+						'notAllowEmpty' : true,
+					},
+					'URI' : {
+						'sentAs' :  'Canned',
+						'type' : 'adapter',
+						'notAllowEmpty' : true,
+					}
+				},
+			},
+			'Permission' : {
+				'sentAs' : 'Permission',
+			},
+			'Delivered' :{
+				'sentAs' : 'Delivered',
+			}
+		},
+	},
+};
+
+const grantsV2 = {
+	'type' : 'array',
+	'location' : 'xml',
+	'wrapper' : 'AccessControlList',
+	'sentAs' : 'Grant',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'Grantee' : {
+				'data' : {
+					'xsiNamespace' : 'http://www.w3.org/2001/XMLSchema-instance',
+					'xsiType' : 'Type',
+				},
+				'type' : 'object',
+				'sentAs' : 'Grantee',
+				'parameters' : {
+					'Type' : {
+						'type' : 'ignore',
+					},
+					'ID' : {
+						'sentAs' : 'ID',
+						'notAllowEmpty' : true,
+					},
+					'Name' : {
+						'sentAs' : 'DisplayName',
+						'notAllowEmpty' : true,
+					},
+					'URI' : {
+						'sentAs' :  'URI',
+						'type' : 'adapter',
+						'notAllowEmpty' : true,
+					}
+				},
+			},
+			'Permission' : {
+				'sentAs' : 'Permission',
+			},
+		},
+	},
+};
+
+const loggingEnabled = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'LoggingEnabled',
+	'parameters' : {
+		'TargetBucket' : {
+			'sentAs' : 'TargetBucket',
+		},
+		'TargetPrefix' : {
+			'sentAs' : 'TargetPrefix',
+		},
+		'TargetGrants' : {
+			'type' : 'array',
+			'wrapper' : 'TargetGrants',
+			'sentAs' : 'Grant',
+			'items' : {
+				'type' : 'object',
+				'parameters' : {
+					'Grantee' : {
+						'type' : 'object',
+						'sentAs' : 'Grantee',
+						'parameters' : {
+							'Type' : {
+								'type' : 'ignore',
+							},
+							'ID' : {
+								'sentAs' : 'ID',
+							},
+							'URI' : {
+								'sentAs' :  'Canned',
+								'type' : 'adapter'
+							}
+						},
+					},
+					'Permission' : {
+						'sentAs' : 'Permission',
+					},
+				},
+			},
+		},
+	},
+};
+
+const rules = {
+	'required' : true,
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'Rule',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'ID' : {
+				'sentAs' : 'ID',
+			},
+			'Prefix' : {
+				'sentAs' : 'Prefix',
+			},
+			'Status' : {
+				'sentAs' : 'Status',
+			},
+			'Transitions' : {
+				'type' : 'array',
+				'sentAs' : 'Transition',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'StorageClass' :{
+							'sentAs' : 'StorageClass',
+							'type' : 'adapter'
+						},
+						'Date' : {
+							'sentAs' : 'Date',
+						},
+						'Days' : {
+							'type' : 'number',
+							'sentAs' : 'Days'
+						}
+					}
+				}
+			},
+			'Expiration' : {
+				'type' : 'object',
+				'sentAs' : 'Expiration',
+				'parameters' : {
+					'Date' : {
+						'sentAs' : 'Date',
+					},
+					'Days' : {
+						'type' : 'number',
+						'sentAs' : 'Days'
+					},
+				},
+			},
+			'NoncurrentVersionTransitions' :{
+				'type' : 'array',
+				'sentAs' : 'NoncurrentVersionTransition',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'StorageClass' :{
+							'sentAs' : 'StorageClass',
+							'type' : 'adapter'
+						},
+						'NoncurrentDays' : {
+							'type' : 'number',
+							'sentAs' : 'NoncurrentDays'
+						}
+					}
+				}
+			},
+			'NoncurrentVersionExpiration' : {
+				'type' : 'object',
+				'sentAs' : 'NoncurrentVersionExpiration',
+				'parameters' : {
+					'NoncurrentDays' : {
+						'type' : 'number',
+						'sentAs' : 'NoncurrentDays',
+					},
+				},
+			}
+		},
+	},
+};
+
+const redirectAllRequestsTo = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'RedirectAllRequestsTo',
+	'parameters' : {
+		'HostName' : {
+			'sentAs' : 'HostName',
+		},
+		'Protocol' : {
+			'sentAs' : 'Protocol',
+		},
+	}
+};
+
+const routingRules = {
+	'type' : 'array',
+	'wrapper' : 'RoutingRules',
+	'location' : 'xml',
+	'sentAs' : 'RoutingRule',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'Condition' : {
+				'type' : 'object',
+				'sentAs' : 'Condition',
+				'parameters' : {
+					'HttpErrorCodeReturnedEquals' : {
+						'sentAs' : 'HttpErrorCodeReturnedEquals',
+					},
+					'KeyPrefixEquals' : {
+						'sentAs' : 'KeyPrefixEquals',
+					},
+				},
+			},
+			'Redirect' : {
+				'type' : 'object',
+				'sentAs' : 'Redirect',
+				'parameters' : {
+					'HostName' : {
+						'sentAs' : 'HostName',
+					},
+					'HttpRedirectCode' : {
+						'sentAs' : 'HttpRedirectCode',
+					},
+					'Protocol' : {
+						'sentAs' : 'Protocol',
+					},
+					'ReplaceKeyPrefixWith' : {
+						'sentAs' : 'ReplaceKeyPrefixWith',
+					},
+					'ReplaceKeyWith' : {
+						'sentAs' : 'ReplaceKeyWith',
+					}
+				}
+			},
+		},
+	},
+};
+
+const indexDocument = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'IndexDocument',
+	'parameters' : {
+		'Suffix' : {
+			'sentAs' : 'Suffix',
+		},
+	}
+};
+
+const errorDocument = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'ErrorDocument',
+	'parameters' : {
+		'Key' : {
+			'sentAs' : 'Key',
+		},
+	}
+};
+
+const corsRule = {
+	'required' : true,
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'CORSRule',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'ID' : {
+				'sentAs' : 'ID',
+			},
+			'AllowedMethod' : {
+				'type' : 'array',
+				'sentAs' : 'AllowedMethod',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'AllowedOrigin' : {
+				'type' : 'array',
+				'sentAs' : 'AllowedOrigin',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'AllowedHeader' : {
+				'type' : 'array',
+				'sentAs' : 'AllowedHeader',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'MaxAgeSeconds' : {
+				'type' : 'number',
+				'sentAs' : 'MaxAgeSeconds',
+			},
+			'ExposeHeader' : {
+				'type' : 'array',
+				'sentAs' : 'ExposeHeader',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+		},
+	},
+};
+
+const functionGraphConfiguration = {
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'FunctionGraphConfiguration',
+	'items' : {
+		'type' : 'object',
+		'location' : 'xml',
+		'parameters' : {
+			'ID' : {
+				'sentAs' : 'Id'
+			},
+			'Filter' : {
+				'type' : 'object',
+				'parameters' : {
+					'FilterRules' : {
+						'wrapper' : 'Object',
+						'type' : 'array',
+						'sentAs' : 'FilterRule',
+						'items' : {
+							'type' : 'object',
+							'parameters' : {
+								'Name' : {},
+								'Value' : {}
+							}
+						}
+					}
+				}
+			},
+			'FunctionGraph' : {},
+	
+			'Event' : {
+				'type' : 'array',
+				'items' : {
+					'type' : 'adapter',
+				}
+			}
+		}
+	}	
+};
+
+const topicConfiguration = {
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'TopicConfiguration',
+	'items' : {
+		'type' : 'object',
+		'location' : 'xml',
+		'parameters' : {
+			'ID' : {
+				'sentAs' : 'Id'
+			},
+			'Filter' : {
+				'type' : 'object',
+				'parameters' : {
+					'FilterRules' : {
+						'wrapper' : 'Object',
+						'type' : 'array',
+						'sentAs' : 'FilterRule',
+						'items' : {
+							'type' : 'object',
+							'parameters' : {
+								'Name' : {},
+								'Value' : {}
+							}
+						}
+					}
+				}
+			},
+			'Topic' : {},
+	
+			'Event' : {
+				'type' : 'array',
+				'items' : {
+					'type' : 'adapter',
+				}
+			}
+		}
+	}
+};
+
+const tagSet = {
+	'required' : true,
+	'type' : 'array',
+	'location' : 'xml',
+	'wrapper' : 'TagSet',
+	'sentAs' : 'Tag',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'Key' : {
+				'sentAs' : 'Key',
+			},
+			'Value' : {
+				'sentAs' : 'Value',
+			}
+		}
+	}
+};
+
+const replicationRules = {
+	'required' : true,
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'Rule',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'ID' : {
+				'sentAs' : 'ID',
+			},
+			'Prefix' : {
+				'sentAs' : 'Prefix',
+			},
+			'Status' : {
+				'sentAs' : 'Status',
+			},
+			'Destination' :{
+				'type' : 'object',
+				'sentAs' : 'Destination',
+				'parameters' :{
+					'Bucket' : {
+						'sentAs' : 'Bucket',
+						'type' : 'adapter'
+					},
+					'StorageClass' :{
+						'sentAs' : 'StorageClass',
+						'type' : 'adapter'
+					}
+				}
+			}
+		},
+	}
+};
+
+const bucketEncryptionRule = {
+	'type': 'object',
+	'location': 'xml',
+	'sentAs': 'Rule',
+	'parameters': {
+		'ApplyServerSideEncryptionByDefault': {
+			'type': 'object',
+			'sentAs': 'ApplyServerSideEncryptionByDefault',
+			'parameters': {
+				'SSEAlgorithm': {
+					'sentAs': 'SSEAlgorithm'
+				},
+				'KMSMasterKeyID': {
+					'sentAs': 'KMSMasterKeyID'
+				}
+			}
+		}
+	}
+};
+
+const PublicAccessBlockBody = {
+    'BlockPublicAcls' : {
+        'location' : 'xml',
+        'sentAs' : 'BlockPublicAcls',
+    },
+    'IgnorePublicAcls' : {
+        'location' : 'xml',
+        'sentAs' : 'IgnorePublicAcls',
+    },
+    'BlockPublicPolicy' : {
+        'location' : 'xml',
+        'sentAs' : 'BlockPublicPolicy',
+    },
+    'RestrictPublicBuckets' : {
+        'location' : 'xml',
+        'sentAs' : 'RestrictPublicBuckets',
+    }
+};
+
+const CustomDomainCertificateConfig = {
+	'type': 'object',
+	'location': 'xml',
+	'required': false,
+	'sentAs': 'CustomDomainConfiguration',
+	'parameters': {
+		'Name': {
+			'type': 'string',
+			'required': true
+		},
+		'CertificateId': {
+			'type':'string',
+		},
+		'Certificate': {
+			'type': 'string',
+			'required': true,
+		},
+		'CertificateChain': {
+			'type': 'string',
+		},
+		'PrivateKey': {
+			'type': 'string',
+			'required': true,
+		}
+			
+	}
+}
+
+const operations = {
+	'CreateBucket' : {
+		'httpMethod' : 'PUT',
+		'data' : {
+			'xmlRoot' : 'CreateBucketConfiguration',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'Location' : {
+				'location' : 'xml',
+				'sentAs' : 'Location' 
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			
+			'GrantWrite' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write',
+				'withPrefix' : true,
+			},
+			
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			
+			'GrantReadDelivered' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-delivered',
+				'withPrefix' : true,
+			},
+			
+			'GrantFullControlDelivered' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control-delivered',
+				'withPrefix' : true,
+			},
+
+			'AzRedundancy': {
+				'location': 'header',
+				'sentAs': 'x-obs-az-redundancy'
+			},
+			'MultiEnterprise': {
+				'location': 'header',
+				'sentAs': 'epid',
+				'withPrefix': true
+			},
+			'FileInterface':{
+				'location' : 'header',
+				'sentAs' : 'fs-file-interface',
+				'withPrefix': true
+			},
+		}
+	},
+	
+    'ListBuckets' : {
+		'httpMethod' : 'GET',
+		'parameters' : {
+			'BucketType': {
+				'location': 'header',
+				'sentAs': 'bucket-type',
+				'withPrefix': true
+			},
+			'Marker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'marker',
+			},
+			'MaxKeys' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'max-keys',
+			},
+		}
+	},
+
+	'ListBucketsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ListAllMyBucketsResult',
+		},
+		'parameters' : {
+			'Owner' : {
+				'type' : 'object',
+				'location' : 'xml',
+				'sentAs' : 'Owner',
+				'parameters' : {
+					'ID' : {
+						'sentAs' : 'ID',
+					},
+					'Name' : {
+						'sentAs' : 'DisplayName',
+					},
+				},
+			},
+			'Marker' : {
+				'location' : 'xml',
+				'sentAs' : 'Marker',
+			},
+			'IsTruncated' : {
+				'location' : 'xml',
+				'sentAs' : 'IsTruncated',
+			},
+			'NextMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'NextMarker',
+			},
+			'MaxKeys' : {
+				'location' : 'xml',
+				'sentAs' : 'MaxKeys',
+			},
+			'Buckets' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'wrapper' : 'Buckets',
+				'sentAs' : 'Bucket',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'BucketName' : {
+							'sentAs' : 'Name',
+						},
+						'CreationDate' : {
+							'sentAs' : 'CreationDate'
+						},
+						'Location' : {
+							'sentAs' : 'Location'
+						},
+						'BucketType' : {
+							'sentAs' : 'BucketType'
+						}
+					},
+				},
+			},
+		},
+	},
+	
+	'HeadBucket' : {
+		'httpMethod' : 'HEAD',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	
+	'HeadApiVersion' : {
+		'httpMethod' : 'HEAD',
+		'urlPath' : 'apiversion',
+		'parameters' : {
+			'Bucket' : {
+				'location' : 'uri',
+			},
+		},
+	},
+	
+	'HeadApiVersionOutput' : {
+		'parameters' : {
+			'ApiVersion' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-api'
+			},
+		}
+	},
+
+
+	'GetBucketMetadata' : {
+		'httpMethod' : 'HEAD',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+
+			'Origin' : {
+				'location' : 'header',
+				'sentAs' : 'Origin'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'RequestHeader' : {
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Headers'
+			}
+		},
+	},
+
+	'GetBucketMetadataOutput' : {
+		'parameters' : {
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true
+			},
+			'StorageClassObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-storage-class',
+			},
+			'StorageClassV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-default-storage-class',
+			},
+			'ObsVersion' : {
+				'location' : 'header',
+				'sentAs' : 'version',
+				'withPrefix' : true
+			},
+			'ObsVersionObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version',
+			},
+			'ObsVersionV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-version',
+			},
+			'FsInterface': {
+				'location': 'header',
+				'sentAs': 'fs-file-interface',
+				'withPrefix': true
+			},
+			'FsInterfaceObs': {
+				'location': 'header',
+				'sentAs': 'x-obs-fs-file-interface',
+			},
+			'FsInterfaceV2': {
+				'location': 'header',
+				'sentAs': 'x-amz-fs-file-interface',
+			},
+			'Location' : {
+				'location' : 'header',
+				'sentAs' : 'bucket-location',
+				'withPrefix' : true
+			},
+			'LocationObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-bucket-location',
+			},
+			'LocationV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-bucket-region',
+			},
+			'AzRedundancy': {
+				'location': 'header',
+				'sentAs': 'x-obs-az-redundancy'
+			},
+			'AllowOrigin' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-origin'
+			},
+			'MaxAgeSeconds' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-max-age'
+			},
+			'ExposeHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-expose-headers'
+			},
+			'AllowMethod' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-methods'
+			},
+			'AllowHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-headers'
+			},
+			'MultiEnterprise': {
+				'location': 'header',
+				'sentAs': 'epid',
+				'withPrefix' : true
+			},
+			'MultiEnterpriseObs': {
+				'location': 'header',
+				'sentAs': 'x-obs-epid',
+			},
+			'MultiEnterpriseV2': {
+				'location': 'header',
+				'sentAs': 'x-amz-epid',
+			},
+			'ErrorCode': {
+				'location': 'header',
+				'sentAs': 'x-obs-error-code'
+			},
+			'ErrorMessage': {
+				'location': 'header',
+				'sentAs': 'x-obs-error-message'
+			}
+		}
+	},
+
+	'DeleteBucket' : {
+		'httpMethod' : 'DELETE',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+
+	'ListObjects' : {
+		'httpMethod' : 'GET',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Prefix' : {
+				'location' : 'urlPath',
+				'sentAs' : 'prefix',
+			},
+			'Marker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'marker',
+			},
+			'MaxKeys' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'max-keys',
+			},
+			'Delimiter' : {
+				'location' : 'urlPath',
+				'sentAs' : 'delimiter',
+			},
+			'AccessKeyId': {
+				'location': 'urlPath',
+				'sentAs': 'AccessKeyId'
+			},
+			'Signature': {
+				'location': 'urlPath',
+				'sentAs': 'Signature'
+			},
+			'Policy': {
+				'location': 'urlPath',
+				'sentAs': 'Policy'
+			},
+			'SecurityToken': {
+				'location': 'urlPath',
+				'sentAs': 'x-obs-security-token'
+			},
+			'FsClient': {
+				'location': 'header',
+				'sentAs': 'x-hws-fs-client'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type'
+			}
+		},
+	},
+
+	'ListObjectsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ListBucketResult',
+		},
+		'parameters' : {
+			'Location' : {
+				'location' : 'header',
+				'sentAs' : 'bucket-location',
+				'withPrefix' : true
+			},
+			'LocationObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-bucket-location',
+			},
+			'LocationV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-bucket-region',
+			},
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Name',
+			},
+			'Delimiter' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Delimiter',
+			},
+			'IsTruncated' : {
+				'location' : 'xml',
+				'sentAs' : 'IsTruncated',
+			},
+			'Prefix' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Prefix',
+			},
+			'Marker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Marker',
+			},
+			'NextMarker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'NextMarker',
+			},
+			'MaxKeys' : {
+				'location' : 'xml',
+				'sentAs' : 'MaxKeys',
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+			'Contents' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Contents',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'LastModified' : {
+							'sentAs' : 'LastModified',
+						},
+						'ETag' : {
+							'sentAs' : 'ETag',
+						},
+						'Size' : {
+							'sentAs' : 'Size',
+						},
+						'Type' :{
+							'sentAs' : 'Type'
+						},
+						'StorageClass' : {
+							'sentAs' : 'StorageClass',
+						},
+						'Owner' : owner
+					},
+				},
+
+			},
+			'CommonPrefixes' : commonPrefixes
+		},
+	},
+
+	'ListVersions' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'versions',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Prefix' : {
+				'location' : 'urlPath',
+				'sentAs' : 'prefix',
+			},
+			'KeyMarker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'key-marker',
+			},
+			'MaxKeys' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'max-keys',
+			},
+			'Delimiter' : {
+				'location' : 'urlPath',
+				'sentAs' : 'delimiter',
+			},
+			'VersionIdMarker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'version-id-marker',
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type',
+			},
+		},
+	},
+	'ListVersionsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ListVersionsResult',
+		},
+		'parameters' : {
+			'Location' : {
+				'location' : 'header',
+				'sentAs' : 'bucket-location',
+				'withPrefix' : true
+			},
+			'LocationObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-bucket-location',
+			},
+			'LocationV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-bucket-region',
+			},
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Name',
+			},
+			'Prefix' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Prefix',
+			},
+			'Delimiter' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Delimiter',
+			},
+			'KeyMarker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'KeyMarker',
+			},
+			'VersionIdMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'VersionIdMarker',
+			},
+			'NextKeyMarker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'NextKeyMarker',
+			},
+			'NextVersionIdMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'NextVersionIdMarker',
+			},
+			'MaxKeys' : {
+				'location' : 'xml',
+				'sentAs' : 'MaxKeys',
+			},
+			'IsTruncated' : {
+				'location' : 'xml',
+				'sentAs' : 'IsTruncated',
+			},
+			'Versions' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Version',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'VersionId' : {
+							'sentAs' : 'VersionId',
+						},
+						'IsLatest' : {
+							'sentAs' : 'IsLatest',
+						},
+						'LastModified' : {
+							'sentAs' : 'LastModified',
+						},
+						'ETag' : {
+							'sentAs' : 'ETag',
+						},
+						'Size' : {
+							'sentAs' : 'Size',
+						},
+						'Type' :{
+							'sentAs' : 'Type'
+						},
+						'Owner' : owner,
+						'StorageClass' : {
+							'sentAs' : 'StorageClass',
+						}
+					}
+				},
+			},
+			'DeleteMarkers' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'DeleteMarker',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'VersionId' : {
+							'sentAs' : 'VersionId',
+						},
+						'IsLatest' : {
+							'sentAs' : 'IsLatest',
+						},
+						'LastModified' : {
+							'sentAs' : 'LastModified',
+						},
+						'Owner' : owner
+					}
+				},
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+			'CommonPrefixes' : commonPrefixes
+		},
+	},
+
+	'GetBucketLocation' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'location',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	
+	'GetBucketLocationOutput' : {
+		'data' : {
+			'type' : 'xml'
+		},
+		'parameters' : {
+			'Location' : {
+				'location' : 'xml',
+				'sentAs' : 'Location'
+			},
+		},
+	},
+
+	'GetBucketStorageInfo' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'storageinfo',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	'GetBucketStorageInfoOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'GetBucketStorageInfoResult',
+		},
+		'parameters' : {
+			'Size' : {
+				'location' : 'xml',
+				'sentAs' : 'Size',
+			},
+			'ObjectNumber' : {
+				'location' : 'xml',
+				'sentAs' : 'ObjectNumber',
+			},
+		},
+	},
+
+	'SetBucketQuota' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'quota',
+		'data' : {
+			'xmlRoot' : 'Quota',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'StorageQuota' : {
+				'required' : true,
+				'location' : 'xml',
+				'sentAs' : 'StorageQuota',
+			},
+		},
+	},
+
+	'GetBucketQuota' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'quota',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+
+		},
+	},
+	'GetBucketQuotaOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'Quota',
+		},
+		'parameters' : {
+			'StorageQuota' : {
+				'location' : 'xml',
+				'sentAs' : 'StorageQuota',
+			},
+		},
+	},
+	
+	'SetBucketAcl' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'acl',
+		'data' : {
+			'xmlRoot' : 'AccessControlPolicy',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'Owner' : owner,
+			'Grants' : grants
+		},
+	},
+	
+	'GetBucketAcl' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'acl',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	'GetBucketAclOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'AccessControlPolicy',
+		},
+		'parameters' : {
+			'Owner' : owner,
+			'Grants' : grants,
+			'GrantsV2': grantsV2,
+		}
+	},
+	
+	'SetBucketLoggingConfiguration' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'logging',
+		'data' : {
+			'xmlRoot' : 'BucketLoggingStatus',
+			'xmlAllowEmpty' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Agency' :{
+				'location' : 'xml',
+				'sentAs' : 'Agency',
+			},
+			'LoggingEnabled' : loggingEnabled,
+		},
+	},
+
+	'GetBucketLoggingConfiguration' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'logging',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	'GetBucketLoggingConfigurationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'BucketLoggingStatus',
+		},
+		'parameters' : {
+			'Agency' :{
+				'location' : 'xml',
+				'sentAs' : 'Agency'
+			},
+			'LoggingEnabled' : loggingEnabled,
+		},
+	},
+
+	'SetBucketPolicy' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'policy',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Policy' : {
+				'required' : true,
+				'location' : 'body',
+			},
+		},
+	},
+	
+	'GetBucketPolicy' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'policy',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	'GetBucketPolicyOutput' : {
+		'data' : {
+			'type' : 'body',
+		},
+		'parameters' : {
+			'Policy' : {
+				'location' : 'body',
+			},
+		},
+	},
+	'DeleteBucketPolicy' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'policy',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+
+	'SetBucketLifecycleConfiguration' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'lifecycle',
+		'data' : {
+			'xmlRoot' : 'LifecycleConfiguration',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Rules' : rules
+		},
+	},
+
+	'GetBucketLifecycleConfiguration' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'lifecycle',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	'GetBucketLifecycleConfigurationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'LifecycleConfiguration',
+		},
+		'parameters' : {
+			'Rules' : rules
+		},
+	},
+	
+	'DeleteBucketLifecycleConfiguration' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'lifecycle',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+
+	'SetBucketWebsiteConfiguration' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'website',
+		'data' : {
+			'xmlRoot' : 'WebsiteConfiguration',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RedirectAllRequestsTo' : redirectAllRequestsTo,
+			'IndexDocument' : indexDocument,
+			'ErrorDocument' : errorDocument,
+			'RoutingRules' : routingRules
+		},
+	},
+	
+	'GetBucketWebsiteConfiguration' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'website',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	'GetBucketWebsiteConfigurationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'WebsiteConfiguration',
+		},
+		'parameters' : {
+			'RedirectAllRequestsTo' : redirectAllRequestsTo,
+			'IndexDocument' : indexDocument,
+			'ErrorDocument' : errorDocument,
+			'RoutingRules' : routingRules,
+		},
+	},
+	'DeleteBucketWebsiteConfiguration' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'website',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+
+	'SetBucketVersioningConfiguration' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'versioning',
+		'data' : {
+			'xmlRoot' : 'VersioningConfiguration',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionStatus' : {
+				'required' : true,
+				'location' : 'xml',
+				'sentAs' : 'Status',
+			},
+		},
+	},
+	
+	'GetBucketVersioningConfiguration' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'versioning',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	'GetBucketVersioningConfigurationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'VersioningConfiguration',
+		},
+		'parameters' : {
+			'VersionStatus' : {
+				'location' : 'xml',
+				'sentAs' : 'Status',
+			},
+		},
+	},
+
+	'SetBucketCors' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'cors',
+		'data' : {
+			'xmlRoot' : 'CORSConfiguration',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'CorsRules' : corsRule
+		},
+	},
+	'GetBucketCors' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'cors',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	'GetBucketCorsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'CORSConfiguration',
+		},
+		'parameters' : {
+			'CorsRules' : corsRule
+		},
+	},
+	'DeleteBucketCors' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'cors',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+
+	'SetBucketNotification' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'notification',
+		'data' : {
+			'xmlRoot' : 'NotificationConfiguration',
+			'xmlAllowEmpty' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'TopicConfigurations' : topicConfiguration,
+			'FunctionGraphConfigurations' : functionGraphConfiguration,
+		}
+	},
+
+
+	'GetBucketNotification' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'notification',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		}
+	},
+
+	'GetBucketNotificationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'NotificationConfiguration',
+		},
+		'parameters' : {
+			'TopicConfigurations' : topicConfiguration,
+			'FunctionGraphConfigurations' : functionGraphConfiguration,
+		},
+	},
+
+	'OptionsBucket' : {
+		'httpMethod' : 'OPTIONS',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Origin' : {
+				'required' : true,
+				'location' : 'header',
+				'sentAs' : 'Origin',
+			},
+			'AccessControlRequestMethods' : {
+				'required' : true,
+				'type' : 'array',
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Method',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'AccessControlRequestHeaders' : {
+				'type' : 'array',
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Headers',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+		},
+	},
+	'OptionsBucketOutput' : {
+		'parameters' : {
+			'AllowOrigin' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-origin',
+			},
+			'AllowHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-headers',
+			},
+			'AllowMethod' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-methods',
+			},
+			'ExposeHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-expose-headers',
+			},
+			'MaxAgeSeconds' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-max-age',
+			},
+		},
+	},
+
+	'SetBucketTagging' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'tagging',
+		'data' : {
+			'xmlRoot' : 'Tagging',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Tags' : tagSet
+		}
+	},
+
+	'GetBucketTagging' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'tagging',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		}
+	},
+
+	'GetBucketTaggingOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'Tagging',
+		},
+		'parameters' : {
+			'Tags' : tagSet
+		}
+	},
+
+	'DeleteBucketTagging' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'tagging',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		}
+	},
+
+	'SetBucketStoragePolicy' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'storageClass',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'StorageClass' :{
+				'required' : true,
+				'location' : 'xml',
+				'type' : 'adapter',
+				'sentAs' : 'StorageClass'
+			}
+		}
+	},
+	
+	'GetBucketStoragePolicy' :{
+		'httpMethod' : 'GET',
+		'urlPath' : 'storageClass',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		}
+	},
+	
+	'GetBucketStoragePolicyOutput' :{
+		'data' : {
+			'type' : 'xml',
+		},
+		'parameters' : {
+			'StorageClass' : {
+				'location' : 'xml',
+				'type' : 'string',
+				'sentAs' : 'StorageClass'
+			}
+		}
+	},
+
+	'SetBucketReplication' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'replication',
+		'data' : {
+			'xmlRoot' : 'ReplicationConfiguration',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Agency' :{
+				'location' : 'xml',
+				'sentAs' : 'Agency'
+			},
+			'Rules' : replicationRules
+		}
+	},
+
+	'GetBucketReplication' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'replication',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		}
+	},
+
+	'GetBucketReplicationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ReplicationConfiguration',
+		},
+		'parameters' : {
+			'Agency' :{
+				'location' : 'xml',
+				'sentAs' : 'Agency'
+			},
+			'Rules' : replicationRules
+		}
+	},
+
+	'DeleteBucketReplication' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'replication',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		}
+	},
+
+	'GetBucketRequesterPayment': {
+		'httpMethod': 'GET',
+		'urlPath': 'requestPayment',
+		'parameters': {
+			'Bucket': {
+				'required': true,
+				'location': 'uri'
+			}
+		}
+	},
+	'GetBucketRequesterPaymentOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'RequestPaymentConfiguration'
+		},
+		'parameters' : {
+			'Payer' : {
+				'location': 'xml',
+				'sentAs': 'Payer',
+			}
+		}
+	},
+	'SetBucketRequesterPayment': {
+		'httpMethod' : 'PUT',
+		'urlPath': 'requestPayment',
+		'data' : {
+			'xmlRoot' : 'RequestPaymentConfiguration'
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Payer' : {
+				'location': 'xml',
+				'sentAs': 'Payer'
+			}
+		}
+	},
+	'SetBucketRequesterPaymentOutput': {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'RequestPaymentConfiguration'
+		},
+		'parameters' : {
+			'Payer' : {
+				'location': 'xml',
+				'sentAs': 'Payer',
+			}
+		}
+	},
+	
+	'PutObject' : {
+		'httpMethod' : 'PUT',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'ContentMD5' : {
+				'location' : 'header',
+				'sentAs' : 'Content-MD5',
+			},
+			'ContentSHA256' : {
+				'location' : 'header',
+				'sentAs' : 'content-sha256',
+				'withPrefix' : true,
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'Offset' : {
+				'type' : 'plain'
+			},
+			
+			'ProgressCallback' :{
+				'type' : 'plain'
+			},
+			
+			'ContentLength' :{
+				'location' : 'header',
+				'sentAs' : 'Content-Length',
+				'type' : 'plain'
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'Metadata' : {
+				'type' : 'object',
+				'location' : 'header',
+				'sentAs' : 'meta-',
+				'withPrefix' : true,
+			},
+			'CacheControl': {
+				'location': 'header',
+				'sentAs': 'Cache-Control'
+			},
+			'ContentDisposition': {
+				'location': 'header',
+				'sentAs': 'Content-Disposition',
+				'encodingSafe': ' ;/?:@&=+$,"'
+			},
+			'ContentLanguage': {
+				'location': 'header',
+				'sentAs': 'Content-Language'
+			},
+			'ContentEncoding': {
+				'location': 'header',
+				'sentAs': 'Content-Encoding'
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true,
+			},
+			'Tags' : {
+				'location' : 'header',
+				'sentAs' : 'tagging',
+				'withPrefix' : true,
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'expires',
+				'type' : 'number',
+				'withPrefix' : true,
+			},
+			'SuccessActionRedirect':{
+				'location' : 'header',
+				'sentAs' : 'success-action-redirect'
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true,
+			},
+			'Body' : {
+				'location' : 'body',
+			},
+			'SourceFile' : {
+				'type' : 'srcFile',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'PutObjectOutput' : {
+		'parameters' : {
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true,
+			},
+			'VersionIdObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version-id',
+			},
+			'VersionIdV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-version-id',
+			},
+			'StorageClass' :{
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+			},
+			'StorageClassObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-storage-class',
+			},
+			'StorageClassV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-storage-class',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption',
+			},
+			'SseKmsV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption',
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseKmsKeyObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-kms-key-id',
+			},
+			'SseKmsKeyV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-kms-key-id',
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-algorithm',
+			},
+			'SseCV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-algorithm',
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true,
+			},
+			'SseCKeyMd5Obs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-key-MD5',
+			},
+			'SseCKeyMd5V2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-key-MD5',
+			}
+		},
+	},
+
+	'RenameObject': {
+		'httpMethod': 'POST',
+		'urlPath': 'rename',
+		'parameters': {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Name': {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'name',
+			}
+		}
+	},
+
+	'ModifyObject': {
+		'httpMethod': 'PUT',
+		'urlPath': 'modify',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Position' : {
+				'location' : 'urlPath',
+				'sentAs' : 'position',
+				'type' : 'number'
+			},
+			'ContentMD5' : {
+				'location' : 'header',
+				'sentAs' : 'Content-MD5',
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'Offset' : {
+				'type' : 'plain'
+			},
+
+			'ProgressCallback' :{
+				'type' : 'plain'
+			},
+
+			'ContentLength' :{
+				'location' : 'header',
+				'sentAs' : 'Content-Length',
+				'type' : 'plain'
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'Metadata' : {
+				'type' : 'object',
+				'location' : 'header',
+				'sentAs' : 'meta-',
+				'withPrefix' : true,
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true,
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'expires',
+				'type' : 'number',
+				'withPrefix' : true,
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true,
+			},
+			'Body' : {
+				'location' : 'body',
+			},
+			'SourceFile' : {
+				'type' : 'srcFile',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'ModifyObjectOutput': {
+		'parameters' : {
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true,
+			},
+			'VersionIdObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version-id',
+			},
+			'VersionIdV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-version-id',
+			},
+			'StorageClass' :{
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+			},
+			'StorageClassObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-storage-class',
+			},
+			'StorageClassV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-storage-class',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption',
+			},
+			'SseKmsV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption',
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseKmsKeyObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-kms-key-id',
+			},
+			'SseKmsKeyV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-kms-key-id',
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-algorithm',
+			},
+			'SseCV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-algorithm',
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true,
+			},
+			'SseCKeyMd5Obs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-key-MD5',
+			},
+			'SseCKeyMd5V2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-key-MD5',
+			}
+		},
+	},
+
+	'AppendObject' : {
+		'httpMethod' : 'POST',
+		'urlPath' : 'append',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Position' : {
+				'location' : 'urlPath',
+				'sentAs' : 'position',
+				'type' : 'number'
+			},
+			'ContentMD5' : {
+				'location' : 'header',
+				'sentAs' : 'Content-MD5',
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'Offset' : {
+				'type' : 'plain'
+			},
+			
+			'ProgressCallback' :{
+				'type' : 'plain'
+			},
+			
+			'ContentLength' :{
+				'location' : 'header',
+				'sentAs' : 'Content-Length',
+				'type' : 'plain'
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'Metadata' : {
+				'type' : 'object',
+				'location' : 'header',
+				'sentAs' : 'meta-',
+				'withPrefix' : true,
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true,
+			},
+			'Tags' : {
+				'location' : 'header',
+				'sentAs' : 'tagging',
+				'withPrefix' : true,
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'expires',
+				'type' : 'number',
+				'withPrefix' : true,
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true,
+			},
+			'Body' : {
+				'location' : 'body',
+			},
+			'SourceFile' : {
+				'type' : 'srcFile',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'AppendObjectOutput' : {
+		'parameters' : {
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'NextPosition' : {
+				'location' : 'header',
+				'sentAs' : 'next-append-position',
+				'withPrefix' : true,
+			},
+			'NextPositionObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-next-append-position',
+			},
+			'NextPositionV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-next-append-position',
+			},
+			'StorageClass' :{
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+			},
+			'StorageClassObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-storage-class',
+				'type' : 'adapter',
+			},
+			'StorageClassV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-storage-class',
+				'type' : 'adapter',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption',
+				'type' : 'adapter'
+			},
+			'SseKmsV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption',
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseKmsKeyObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-kms-key-id',
+			},
+			'SseKmsKeyV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-kms-key-id',
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-algorithm',
+			},
+			'SseCV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-algorithm',
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true,
+			},
+			'SseCKeyMd5Obs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-key-MD5',
+			},
+			'SseCKeyMd5V2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-key-MD5',
+			}
+		},
+	},
+	
+	'GetObject' : {
+		'httpMethod' : 'GET',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'AccessKeyId': {
+				'location': 'urlPath',
+			},
+			'Signature': {
+				'location': 'urlPath'
+			},
+			'Policy': {
+				'location': 'urlPath'
+			},
+			'SecurityToken': {
+				'location': 'urlPath',
+				'sentAs': 'x-obs-security-token'
+			},
+			'ResponseCacheControl' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-cache-control',
+			},
+			'ResponseContentDisposition' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-content-disposition',
+			},
+			'ResponseContentEncoding' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-content-encoding',
+			},
+			'ResponseContentLanguage' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-content-language',
+			},
+			'ResponseContentType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-content-type',
+			},
+			'ResponseExpires' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-expires',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'ImageProcess' : {
+				'location' : 'urlPath',
+				'sentAs' : 'x-image-process',
+			},
+			'IfMatch' : {
+				'location' : 'header',
+				'sentAs' : 'If-Match',
+			},
+			'IfModifiedSince' : {
+				'location' : 'header',
+				'sentAs' : 'If-Modified-Since',
+			},
+			'IfNoneMatch' : {
+				'location' : 'header',
+				'sentAs' : 'If-None-Match',
+			},
+			'IfUnmodifiedSince' : {
+				'location' : 'header',
+				'sentAs' : 'If-Unmodified-Since',
+			},
+			'Range' : {
+				'location' : 'header',
+				'sentAs' : 'Range',
+			},
+			'Origin' :{
+				'location' : 'header',
+				'sentAs' : 'Origin'
+			},
+			'RequestHeader' : {
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Headers'
+			},
+			'SaveAsFile' : {
+				'type' : 'dstFile',
+			},
+			'SaveAsStream' : {
+				'type' : 'plain'
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'ProgressCallback' :{
+				'type' : 'plain'
+			}
+		}
+	},
+	'GetObjectOutput' : {
+		'data' : {
+			'type' : 'body'
+		},
+		'parameters' : {
+			'Content' : {
+				'location' : 'body',
+			},
+			'Expiration' : {
+				'location' : 'header',
+				'sentAs' : 'expiration',
+				'withPrefix' : true
+			},
+			'ExpirationObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-expiration',
+			},
+			'ExpirationV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-expiration',
+			},
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'CacheControl' : {
+				'location' : 'header',
+				'sentAs' : 'Cache-Control',
+			},
+			'ContentDisposition' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Disposition',
+			},
+			'ContentEncoding' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Encoding',
+			},
+			'ContentLanguage' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Language',
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type',
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'Expires',
+			},
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'VersionIdObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version-id',
+			},
+			'VersionIdV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-version-id',
+			},
+			'ContentLength' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Length',
+			},
+			'DeleteMarker' : {
+				'location' : 'header',
+				'sentAs' : 'delete-marker',
+				'withPrefix' : true
+			},
+			'DeleteMarkerObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-delete-marker',
+			},
+			'DeleteMarkerV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-delete-marker',
+			},
+			'LastModified' : {
+				'location' : 'header',
+				'sentAs' : 'Last-Modified',
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true
+			},
+			'WebsiteRedirectLocationObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-website-redirect-location',
+			},
+			'WebsiteRedirectLocationV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-website-redirect-location',
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true	
+			},
+			'StorageClassObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-storage-class',
+			},
+			'StorageClassV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-storage-class',
+			},
+			'Restore' : {
+				'location' : 'header',
+				'sentAs' : 'restore',
+				'withPrefix' : true
+			},
+			'RestoreObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-restore',
+			},
+			'RestoreV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-restore',
+			},
+			'AllowOrigin' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-origin'
+			},
+			'MaxAgeSeconds' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-max-age'
+			},
+			'ExposeHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-expose-headers'
+			},
+			'AllowMethod' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-methods'
+			},
+			'AllowHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-headers'
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption',
+				'type' : 'adapter'
+			},
+			'SseKmsV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption',
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseKmsKeyObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-kms-key-id',
+			},
+			'SseKmsKeyV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-kms-key-id',
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-algorithm',
+			},
+			'SseCV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-algorithm',
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5Obs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-key-MD5',
+			},
+			'SseCKeyMd5V2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-key-MD5',
+			},
+			'Metadata' : {
+				'location' : 'header',
+				'type' : 'object',
+				'sentAs' : 'meta-',
+				'withPrefix' : true
+			},
+			'MetadataObs' : {
+				'location' : 'header',
+				'type' : 'object',
+				'sentAs' : 'x-obs-meta-',
+			},
+			'MetadataV2' : {
+				'location' : 'header',
+				'type' : 'object',
+				'sentAs' : 'x-amz-meta-',
+			}
+		},
+	},
+	'CopyObject' : {
+		'httpMethod' : 'PUT',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'CopySource' : {
+				'required' : true,
+				'location' : 'header',
+				'sentAs' : 'copy-source',
+				'withPrefix' : true,
+				'skipEncoding' : true
+			},
+			'CopySourceIfMatch' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-if-match',
+				'withPrefix' : true
+			},
+			'CopySourceIfModifiedSince' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-if-modified-since',
+				'withPrefix' : true
+			},
+			'CopySourceIfNoneMatch' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-if-none-match',
+				'withPrefix' : true
+			},
+			'CopySourceIfUnmodifiedSince' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-if-unmodified-since',
+				'withPrefix' : true
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'ContentEncoding' : {
+				'location' : 'header',
+				'sentAs' : 'content-encoding'
+			},
+			'ContentLanguage' : {
+				'location' : 'header',
+				'sentAs' : 'content-language'
+			},
+			'ContentDisposition' : {
+				'location' : 'header',
+				'sentAs' : 'content-disposition'
+			},
+			'CacheControl' : {
+				'location' : 'header',
+				'sentAs' : 'cache-control'
+			},
+			'TagDirective' : {
+				'location' : 'header',
+				'sentAs' : 'tagging-directive',
+				'withPrefix' : true,
+			},
+			'Tags' : {
+				'location' : 'header',
+				'sentAs' : 'tagging',
+				'withPrefix' : true,
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'expires'
+			},
+			'Metadata' : {
+				'type' : 'object',
+				'location' : 'header',
+				'sentAs' : 'meta-',
+				'withPrefix' : true
+			},
+			'MetadataDirective' : {
+				'location' : 'header',
+				'sentAs' : 'metadata-directive',
+				'withPrefix' : true
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true
+			},
+			'SuccessActionRedirect':{
+				'location' : 'header',
+				'sentAs' : 'success-action-redirect'
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'CopySourceSseC' :{
+				'location' : 'header',
+				'sentAs' : 'copy-source-server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'CopySourceSseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'copy-source-server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'CopyObjectOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'CopyObjectResult',
+		},
+		'parameters' : {
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'VersionIdObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version-id',
+			},
+			'VersionIdV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-version-id',
+			},
+			'CopySourceVersionId' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-version-id',
+				'withPrefix' : true
+			},
+			'CopySourceVersionIdObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-copy-source-version-id',
+			},
+			'CopySourceVersionIdV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-copy-source-version-id',
+			},
+			'ETag' : {
+				'location' : 'xml',
+				'sentAs' : 'ETag',
+			},
+			'LastModified' : {
+				'location' : 'xml',
+				'sentAs' : 'LastModified',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption',
+				'type' : 'adapter'
+			},
+			'SseKmsV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption',
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseKmsKeyObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-kms-key-id',
+			},
+			'SseKmsKeyV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-kms-key-id',
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-algorithm',
+			},
+			'SseCV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-algorithm',
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5Obs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-key-MD5',
+			},
+			'SseCKeyMd5V2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-key-MD5',
+			}
+		},
+	},
+
+	'RestoreObject' : {
+		'httpMethod' : 'POST',
+		'urlPath' : 'restore',
+		'data' : {
+			'xmlRoot' : 'RestoreRequest',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'Days' : {
+				'location' : 'xml',
+				'sentAs' : 'Days'
+			},
+			'Tier' : {
+				'wrapper' : 'RestoreJob',
+				'location' : 'xml',
+				'sentAs' : 'Tier',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'GetObjectMetadata' : {
+		'httpMethod' : 'HEAD',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'Origin' : {
+				'location' : 'header',
+				'sentAs' : 'Origin'
+			},
+			'RequestHeader' : {
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Headers'
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	
+	'GetObjectMetadataOutput' : {
+		'parameters' : {
+			'Expiration' : {
+				'location' : 'header',
+				'sentAs' : 'expiration',
+				'withPrefix' : true
+			},
+			'ExpirationObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-expiration',
+			},
+			'ExpirationV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-expiration',
+			},
+			'LastModified' : {
+				'location' : 'header',
+				'sentAs' : 'Last-Modified',
+			},
+			'ContentLength' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Length',
+			},
+			'ContentType' :{
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'CacheControl': {
+				'location': 'header',
+				'sentAs': 'Cache-Control'
+			},
+			'ContentDisposition': {
+				'location': 'header',
+				'sentAs': 'Content-Disposition'
+			},
+			'ContentLanguage': {
+				'location': 'header',
+				'sentAs': 'Content-Language'
+			},
+			'ContentEncoding': {
+				'location': 'header',
+				'sentAs': 'Content-Encoding'
+			},
+			'TaggingCount' : {
+				'location' : 'header',
+				'sentAs' : 'tagging-count',
+				'withPrefix': true
+			},
+			'Expires': {
+				'location': 'header',
+				'sentAs': 'Expires'
+			},
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'VersionIdObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version-id',
+			},
+			'VersionIdV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-version-id',
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true
+			},
+			'WebsiteRedirectLocationObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-website-redirect-location',
+			},
+			'WebsiteRedirectLocationV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-website-redirect-location',
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true
+			},
+			'StorageClassObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-storage-class',
+			},
+			'StorageClassV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-storage-class',
+			},
+			'Restore' : {
+				'location' : 'header',
+				'sentAs' : 'restore',
+				'withPrefix' : true
+			},
+			'RestoreObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-restore',
+			},
+			'RestoreV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-restore',
+			},
+			'ObjectType' :{
+				'location' : 'header',
+				'sentAs' : 'object-type',
+				'withPrefix' : true
+			},
+			'ObjectTypeObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-object-type',
+			},
+			'ObjectTypeV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-object-type',
+			},
+			'NextPosition' :{
+				'location' : 'header',
+				'sentAs' : 'next-append-position',
+				'withPrefix' : true
+			},
+			'NextPositionObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-next-append-position',
+			},
+			'NextPositionV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-next-append-position',
+			},
+			'AllowOrigin' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-origin'
+			},
+			'MaxAgeSeconds' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-max-age'
+			},
+			'ExposeHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-expose-headers'
+			},
+			'AllowMethod' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-methods'
+			},
+			'AllowHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-headers'
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption',
+				'type' : 'adapter'
+			},
+			'SseKmsV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption',
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-algorithm',
+			},
+			'SseCV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-algorithm',
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5Obs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-key-MD5',
+			},
+			'SseCKeyMd5V2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-key-MD5',
+			},
+			'Metadata' : {
+				'location' : 'header',
+				'type' : 'object',
+				'sentAs' : 'meta-',
+				'withPrefix' : true
+			},
+			'MetadataObs' : {
+				'location' : 'header',
+				'type' : 'object',
+				'sentAs' : 'x-obs-meta-',
+			},
+			'MetadataV2' : {
+				'location' : 'header',
+				'type' : 'object',
+				'sentAs' : 'x-amz-meta-',
+			}
+		},
+	},
+	
+    'SetObjectMetadata': {
+        'httpMethod': 'PUT',
+        'urlPath': 'metadata',
+        'parameters': {
+            'Bucket': {
+                'required': true,
+                'location': 'uri'
+            },
+            'Key': {
+                'required': true,
+                'location': 'uri'
+            },
+            'VersionId': {
+                'location': 'urlPath',
+                'sentAs': 'versionId'
+            },
+            'Origin': {
+                'location': 'header',
+                'sentAs': 'Origin'
+            },
+            'RequestHeader': {
+                'location': 'header',
+                'sentAs': 'Access-Control-Request-Headers'
+            },
+            'CacheControl': {
+                'location': 'header',
+                'sentAs': 'Cache-Control'
+            },
+            'ContentDisposition': {
+                'location': 'header',
+                'sentAs': 'Content-Disposition',
+				'encodingSafe': ' ;/?:@&=+$,"'
+            },
+            'ContentLanguage': {
+                'location': 'header',
+                'sentAs': 'Content-Language'
+            },
+            'ContentEncoding': {
+            	'location': 'header', 
+            	'sentAs': 'Content-Encoding'
+            },
+            'ContentType': {
+                'location': 'header',
+                'sentAs': 'Content-Type'
+            },
+			'Tags' : {
+				'location' : 'header',
+				'sentAs' : 'tagging',
+				'withPrefix': true
+			},
+            'Expires': {
+                'location': 'header',
+                'sentAs': 'Expires'
+            },
+            'Metadata': {
+            	'type' : 'object',
+            	'location': 'header', 
+            	'sentAs': 'meta-',
+                'withPrefix': true
+            },
+            'MetadataDirective' : {
+				'location' : 'header',
+				'sentAs' : 'metadata-directive',
+				'withPrefix' : true
+			},
+            'StorageClass': {
+                'location': 'header',
+                'sentAs': 'storage-class',
+                'withPrefix': true,
+                'type' : 'adapter',
+            },
+            'WebsiteRedirectLocation': {
+                'location': 'header',
+                'sentAs': 'website-redirect-location',
+                'withPrefix': true
+            },
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+        }
+    },
+    'SetObjectMetadataOutput': {
+        'parameters': {
+            'Expires': {
+                'location': 'header',
+                'sentAs': 'Expires'
+            },
+			'ContentEncoding': {
+				'location': 'header',
+				'sentAs': 'Content-Encoding'
+			},
+            'ContentType': {
+                'location': 'header',
+                'sentAs': 'Content-Type'
+            },
+            'ContentLanguage': {
+                'location': 'header',
+                'sentAs': 'Content-Language'
+            },
+            'CacheControl': {
+                'location': 'header',
+                'sentAs': 'Cache-Control'
+            },
+            'ContentDisposition': {
+                'location': 'header',
+                'sentAs': 'Content-Disposition'
+            },
+            'WebsiteRedirectLocation': {
+                'location': 'header',
+                'sentAs': 'website-redirect-location',
+                'withPrefix': true
+            },
+			'WebsiteRedirectLocationObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-website-redirect-location',
+			},
+			'WebsiteRedirectLocationV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-website-redirect-location',
+			},
+            'StorageClass': {
+                'location': 'header',
+                'sentAs': 'storage-class',
+                'withPrefix': true
+            },
+			'StorageClassObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-storage-class',
+			},
+			'StorageClassV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-storage-class',
+			},
+            'Metadata': {
+                'location': 'header',
+                'type': 'object',
+                'sentAs': 'meta-',
+                'withPrefix': true
+            },
+			'MetadataObs' : {
+				'location' : 'header',
+				'type' : 'object',
+				'sentAs' : 'x-obs-meta-',
+			},
+			'MetadataV2' : {
+				'location' : 'header',
+				'type' : 'object',
+				'sentAs' : 'x-amz-meta-',
+			},
+			'MetadataDirective': {
+				'location' : 'header',
+				'sentAs' : 'metadata-directive',
+				'withPrefix' : true
+			}
+        }
+    },
+
+	'SetObjectAcl' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'acl',
+		'data' : {
+			'xmlRoot' : 'AccessControlPolicy',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'Delivered' :{
+				'location' : 'xml',
+				'sentAs' : 'Delivered'
+			},
+			'Owner' : owner,
+			'Grants' : grants,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'SetObjectAclOutput' : {
+		'parameters' : {
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'VersionIdObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version-id',
+			},
+			'VersionIdV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-version-id',
+			},
+		},
+	},
+	'GetObjectAcl' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'acl',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetObjectAclOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'AccessControlPolicy',
+		},
+		'parameters' : {
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'VersionIdObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version-id',
+			},
+			'VersionIdV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-version-id',
+			},
+			'Delivered' :{
+				'location' : 'xml',
+				'sentAs' : 'Delivered'
+			},
+			'Owner' : owner,
+			'Grants' : grants
+		},
+	},
+
+	'SetObjectTagging' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'tagging',
+		'data' : {
+			'xmlRoot' : 'Tagging',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'Tags' : tagSet
+		}
+	},
+
+	'GetObjectTagging' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'tagging',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+		}
+	},
+
+	'GetObjectTaggingOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'Tagging',
+		},
+		'parameters' : {
+			'Tags' : tagSet
+		}
+	},
+
+	'DeleteObjectTagging' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'tagging',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+		}
+	},
+
+	'DeleteObject' : {
+		'httpMethod' : 'DELETE',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'DeleteObjectOutput' : {
+		'parameters' : {
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'VersionIdObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version-id',
+			},
+			'VersionIdV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-version-id',
+			},
+			'DeleteMarker' : {
+				'location' : 'header',
+				'sentAs' : 'delete-marker',
+				'withPrefix' : true
+			},
+			'DeleteMarkerObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-delete-marker',
+			},
+			'DeleteMarkerV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-delete-marker',
+			},
+		},
+	},
+	'DeleteObjects' : {
+		'httpMethod' : 'POST',
+		'urlPath' : 'delete',
+		'data' : {
+			'xmlRoot' : 'Delete',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Quiet' : {
+				'location' : 'xml',
+				'sentAs' : 'Quiet',
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+			'Objects' : {
+				'required' : true,
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Object',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'sentAs' : 'Key',
+						},
+						'VersionId' : {
+							'sentAs' : 'VersionId',
+						},
+					},
+				},
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'DeleteObjectsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'DeleteResult',
+		},
+		'parameters' : {
+			'Deleteds' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Deleted',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'VersionId' : {
+							'sentAs' : 'VersionId',
+						},
+						'DeleteMarker' : {
+							'sentAs' : 'DeleteMarker',
+						},
+						'DeleteMarkerVersionId' : {
+							'sentAs' : 'DeleteMarkerVersionId',
+						},
+					}
+				},
+			},
+			'Errors' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Error',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'sentAs' : 'Key',
+						},
+						'VersionId' : {
+							'sentAs' : 'VersionId',
+						},
+						'Code' : {
+							'sentAs' : 'Code',
+						},
+						'Message' : {
+							'sentAs' : 'Message',
+						},
+					}
+				},
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+		},
+	},
+	
+	'InitiateMultipartUpload' : {
+		'httpMethod' : 'POST',
+		'urlPath' : 'uploads',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'Metadata' : {
+				'type' : 'object',
+				'location' : 'header',
+				'sentAs' : 'meta-',
+				'withPrefix' : true
+			},
+			'CacheControl': {
+				'location': 'header',
+				'sentAs': 'Cache-Control'
+			},
+			'ContentDisposition': {
+				'location': 'header',
+				'sentAs': 'Content-Disposition',
+				'encodingSafe': ' ;/?:@&=+$,"'
+			},
+			'ContentLanguage': {
+				'location': 'header',
+				'sentAs': 'Content-Language'
+			},
+			'ContentEncoding': {
+				'location': 'header',
+				'sentAs': 'Content-Encoding'
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true
+			},
+			'Tags' : {
+				'location' : 'header',
+				'sentAs' : 'tagging',
+				'withPrefix': true
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'expires',
+				'type' : 'number',
+				'withPrefix' : true
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type',
+			},
+		},
+	},
+	'InitiateMultipartUploadOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'InitiateMultipartUploadResult',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Bucket',
+			},
+			'Key' : {
+				'location' : 'xml',
+				'sentAs' : 'Key',
+			},
+			'UploadId' : {
+				'location' : 'xml',
+				'sentAs' : 'UploadId',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+		},
+	},
+	'ListMultipartUploads' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'uploads',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Delimiter' : {
+				'location' : 'urlPath',
+				'sentAs' : 'delimiter',
+			},
+			'KeyMarker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'key-marker',
+			},
+			'MaxUploads' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'max-uploads',
+			},
+			'Prefix' : {
+				'location' : 'urlPath',
+				'sentAs' : 'prefix',
+			},
+			'UploadIdMarker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'upload-id-marker',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type',
+			},
+		},
+	},
+	'ListMultipartUploadsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ListMultipartUploadsResult',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Bucket',
+			},
+			'KeyMarker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'KeyMarker',
+			},
+			'UploadIdMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'UploadIdMarker',
+			},
+			'NextKeyMarker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'NextKeyMarker',
+			},
+			'Prefix' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Prefix',
+			},
+			'Delimiter' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Delimiter',
+			},
+			'NextUploadIdMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'NextUploadIdMarker',
+			},
+			'MaxUploads' : {
+				'location' : 'xml',
+				'sentAs' : 'MaxUploads',
+			},
+			'IsTruncated' : {
+				'location' : 'xml',
+				'sentAs' : 'IsTruncated',
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType'
+			},
+			'Uploads' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Upload',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'UploadId' : {
+							'sentAs' : 'UploadId',
+						},
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'Initiated' : {
+							'sentAs' : 'Initiated',
+						},
+						'StorageClass' : {
+							'sentAs' : 'StorageClass',
+						},
+						'Owner' : owner,
+						'Initiator' : initiator
+					},
+				},
+			},
+			'CommonPrefixes' : commonPrefixes
+		},
+	},
+	'UploadPart' : {
+		'httpMethod' : 'PUT',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'PartNumber' : {
+				'required' : true,
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'partNumber',
+			},
+			'UploadId' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'uploadId',
+			},
+			'ContentMD5' : {
+				'location' : 'header',
+				'sentAs' : 'Content-MD5',
+			},
+			'ContentSHA256' : {
+				'location' : 'header',
+				'sentAs' : 'content-sha256',
+				'withPrefix' : true,
+			},
+			'Body' : {
+				'location' : 'body',
+			},
+			'SourceFile' : {
+				'type' : 'srcFile',
+			},
+			'Offset' : {
+				'type' : 'plain'
+			},
+			'PartSize' : {
+				'type' : 'plain'
+			},
+			'ProgressCallback' :{
+				'type' : 'plain'
+			},
+			
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'UploadPartOutput' : {
+		'parameters' : {
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			}
+		},
+	},
+	'ListParts' : {
+		'httpMethod' : 'GET',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'UploadId' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'uploadId',
+			},
+			'MaxParts' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'max-parts',
+			},
+			'PartNumberMarker' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'part-number-marker',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type',
+			},
+		},
+	},
+	'ListPartsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ListPartsResult',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Bucket',
+			},
+			'Key' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Key',
+			},
+			'UploadId' : {
+				'location' : 'xml',
+				'sentAs' : 'UploadId',
+			},
+			'PartNumberMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'PartNumberMarker',
+			},
+			'NextPartNumberMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'NextPartNumberMarker',
+			},
+			'MaxParts' : {
+				'location' : 'xml',
+				'sentAs' : 'MaxParts',
+			},
+			'IsTruncated' : {
+				'location' : 'xml',
+				'sentAs' : 'IsTruncated',
+			},
+			'StorageClass' : {
+				'location' : 'xml',
+				'sentAs' : 'StorageClass',
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'EncodingType',
+			},
+			'Initiator':initiator,
+			'Owner' : owner,
+			'Parts' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Part',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'PartNumber' : {
+							'sentAs' : 'PartNumber',
+						},
+						'LastModified' : {
+							'sentAs' : 'LastModified',
+						},
+						'ETag' : {
+							'sentAs' : 'ETag',
+						},
+						'Size' : {
+							'sentAs' : 'Size',
+						},
+					},
+				},
+			}
+		},
+	},
+	'CopyPart' : {
+		'httpMethod' : 'PUT',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'PartNumber' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'partNumber',
+				'type' : 'number',
+			},
+			'UploadId' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'uploadId',
+			},
+			'CopySource' : {
+				'required' : true,
+				'location' : 'header',
+				'sentAs' : 'copy-source',
+				'skipEncoding' : true,
+				'withPrefix' : true
+			},
+			'CopySourceRange' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-range',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'CopySourceSseC' :{
+				'location' : 'header',
+				'sentAs' : 'copy-source-server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'CopySourceSseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'copy-source-server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'CopyPartOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'CopyPartResult',
+		},
+		'parameters' : {
+			'LastModified' : {
+				'location' : 'xml',
+				'sentAs' : 'LastModified',
+			},
+			'ETag' : {
+				'location' : 'xml',
+				'sentAs' : 'ETag',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			}
+		},
+	},
+	'AbortMultipartUpload' : {
+		'httpMethod' : 'DELETE',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'UploadId' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'uploadId',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	
+	'CompleteMultipartUpload' : {
+		'httpMethod' : 'POST',
+		'data' : {
+			'xmlRoot' : 'CompleteMultipartUpload',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'UploadId' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'uploadId',
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type',
+			},
+			'Parts' : {
+				'required' : true,
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Part',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'PartNumber' : {
+							'sentAs' : 'PartNumber',
+						},
+						'ETag' : {
+							'sentAs' : 'ETag',
+						},
+					},
+				},
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'CompleteMultipartUploadOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'CompleteMultipartUploadResult',
+		},
+		'parameters' : {
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'Location' : {
+				'location' : 'xml',
+				'sentAs' : 'Location',
+			},
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Bucket',
+			},
+			'Key' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Key',
+			},
+			'ETag' : {
+				'location' : 'xml',
+				'sentAs' : 'ETag',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+		},
+	},
+
+	'OptionsObject' : {
+		'httpMethod' : 'OPTIONS',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Origin' : {
+				'required' : true,
+				'location' : 'header',
+				'sentAs' : 'Origin',
+			},
+			'AccessControlRequestMethods' : {
+				'required' : true,
+				'type' : 'array',
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Method',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'AccessControlRequestHeaders' : {
+				'type' : 'array',
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Headers',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+		},
+	},
+	'OptionsObjectOutput' : {
+		'parameters' : {
+			'AllowOrigin' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-origin',
+			},
+			'AllowHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-headers',
+			},
+			'AllowMethod' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-methods',
+			},
+			'ExposeHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-expose-headers',
+			},
+			'MaxAgeSeconds' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-max-age',
+			},
+		},
+	},
+
+	'GetBucketDirectColdAccess': {
+		'httpMethod': 'GET',
+		'urlPath': 'directcoldaccess',
+		'parameters': {
+			'Bucket': {
+				'required': true,
+				'location': 'uri'
+			}
+		}
+	},
+
+	'GetBucketDirectColdAccessOutput': {
+		'data': {
+			'type': 'xml',
+			'xmlRoot': 'DirectColdAccessConfiguration'
+		},
+		'parameters': {
+			'Status': {
+				'location': 'xml',
+				'sentAs': 'Status'
+			}
+		}
+	},
+
+	'SetBucketDirectColdAccess': {
+		'httpMethod': 'PUT',
+		'urlPath': 'directcoldaccess',
+		'data': {
+			'xmlRoot': 'DirectColdAccessConfiguration',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Status': {
+				'required': true,
+				'location': 'xml',
+				'sentAs': 'Status'
+			}
+		}
+	},
+
+	'SetBucketDirectColdAccessOutput': {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'DirectColdAccessConfiguration'
+		},
+		'parameters' : {
+			'Status': {
+				'location': 'xml',
+				'sentAs': 'Status'
+			}
+		}
+	},
+
+	'DeleteBucketDirectColdAccess': {
+		'httpMethod': 'DELETE',
+		'urlPath': 'directcoldaccess',
+		'parameters': {
+			'Bucket': {
+				'required': true,
+				'location': 'uri'
+			}
+		}
+	},
+
+	'DeleteBucketDirectColdAccessOutput': {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'DirectColdAccessConfiguration'
+		},
+		'parameters' : {
+			'Status': {
+				'location': 'xml',
+				'sentAs': 'Status'
+			}
+		}
+	},
+
+	'GetBucketEncryption' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'encryption',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			}
+		}
+	},
+	'GetBucketEncryptionOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ServerSideEncryptionConfiguration'
+		},
+		'parameters' : {
+			'Rule' : {
+				'type': 'object',
+				'location': 'xml',
+				'sentAs': 'Rule',
+
+				'parameters': {
+					'ApplyServerSideEncryptionByDefault': {
+						'type': 'object',
+						'sentAs': 'ApplyServerSideEncryptionByDefault',
+						'parameters': {
+							'SSEAlgorithm': {
+								'sentAs': 'SSEAlgorithm'
+							},
+							'KMSMasterKeyID': {
+								'sentAs': 'KMSMasterKeyID'
+							}
+						}
+					}
+				}
+			}
+		}
+	},
+	'SetBucketEncryption': {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'encryption',
+		'data' : {
+			'xmlRoot' : 'ServerSideEncryptionConfiguration'
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Rule' : bucketEncryptionRule
+		}
+	},
+	'SetBucketEncryptionOutput': {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ServerSideEncryptionConfiguration'
+		},
+		'parameters' : {
+			'Rule' : bucketEncryptionRule
+		}
+	},
+	'DeleteBucketEncryption': {
+		'httpMethod': 'DELETE',
+		'urlPath': 'encryption',
+		'parameters': {
+			'Bucket': {
+				'required': true,
+				'location': 'uri'
+			}
+		}
+	},
+	'DeleteBucketEncryptionOutput': {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ServerSideEncryptionConfiguration'
+		},
+		'parameters' : {
+			'Rule' : bucketEncryptionRule
+		}
+	},
+	'PutBucketPublicAccessBlock' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'publicAccessBlock',
+		'data' : {
+			'xmlRoot' : 'PublicAccessBlockConfiguration'
+		},
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+					'location' : 'uri'
+			},
+			...PublicAccessBlockBody
+		}
+	},
+	'GetBucketPublicAccessBlock' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'publicAccessBlock',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+					'location' : 'uri'
+			},
+		}
+	},
+	'GetBucketPublicAccessBlockOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'PublicAccessBlockConfiguration'
+		},
+		"parameters": {
+			...PublicAccessBlockBody
+		}
+	},
+	'DeleteBucketPublicAccessBlock' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'publicAccessBlock',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+					'location' : 'uri'
+			},
+		}
+	},
+	'GetBucketPolicyPublicStatus' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'policyStatus',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+					'location' : 'uri'
+			},
+		}
+	},
+	'GetBucketPolicyPublicStatusOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'PolicyStatus'
+		},
+		"parameters": {
+			'IsPublic' : {
+				'location' : 'xml',
+				'sentAs' : 'IsPublic',
+			}, 
+		}
+	},
+	'GetBucketPublicStatus' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'bucketStatus',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+		}
+	},
+	'GetBucketPublicStatusOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'BucketStatus'
+		},
+		"parameters": {
+			'IsPublic' : {
+				'location' : 'xml',
+				'sentAs' : 'IsPublic',
+			}, 
+		}
+	},
+	'SetBucketCustomDomain' : {
+		'httpMethod' : 'PUT',
+		// 'urlPath' : 'customdomain',
+		'data' : {
+			'md5' : true
+		},
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+				'location': 'uri',
+			},
+			'DomainName' : {
+				'required': true,
+				'location': 'urlPath',
+				'sentAs':'customdomain'
+			},
+			'DomainBody':CustomDomainCertificateConfig
+		}
+	},
+	'GetBucketCustomDomain' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'customdomain',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+				'location': 'uri',
+				'type': 'string'
+			},
+		}
+	},
+	'GetBucketCustomDomainOutput': {
+		'data': {
+			'type': 'xml',
+			'xmlRoot': 'ListBucketCustomDomainsResult'
+		},
+		'parameters': {
+			'Domains': {
+				'location': 'xml',
+				'sentAs': 'Domains',
+				'type': 'array',
+				'items': {
+					'type': 'object',
+					'parameters': {
+						'DomainName': {
+							'sentAs': 'DomainName',
+						},
+						'Value': {
+							'sentAs': 'CreateTime',
+						},
+						'CertificateId': {
+							'sentAs': 'CertificateId',
+						}
+					},
+				}
+			}
+		}
+	},
+	'DeleteBucketCustomDomain' : {
+		'httpMethod' : 'DELETE',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'DomainName': {
+				'required': true,
+				'location': 'urlPath',
+				'sentAs':'customdomain'
+			}
+		}
+	}
+};
+
+
+module.exports = operations;
+
+/***/ }),
+
+/***/ 395:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * Copyright 2019 Huawei Technologies Co.,Ltd.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed
+ * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ */
+
+const crypto = __nccwpck_require__(6982);
+const fs = __nccwpck_require__(9896);
+const events = __nccwpck_require__(4434);
+const httpLib = __nccwpck_require__(8611);
+const httpsLib = __nccwpck_require__(5692);
+const { XMLParser } = __nccwpck_require__(9741)
+const urlLib = __nccwpck_require__(7016);
+const pathLib = __nccwpck_require__(6928);
+const streamLib = __nccwpck_require__(2203);
+const obsModel = __nccwpck_require__(8567);
+const v2Model = __nccwpck_require__(5755);
+const enums = __nccwpck_require__(8208);
+const options = {
+	ignoreAttributes: true,
+	parseTagValue: false,
+	trimValues: false
+};
+const {
+	IAM_DOMAIN_PATH_EXTENSION
+} = enums;
+const parser = new XMLParser(options);
+const DEFAULT_SHADOW_EXPIRES = 15 * 60;
+const CONTENT_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const OBS_SDK_VERSION = '3.24.12';
+
+const mimeTypes = {
+    '7z' : 'application/x-7z-compressed',
+    'aac' : 'audio/x-aac',
+    'ai' : 'application/postscript',
+    'aif' : 'audio/x-aiff',
+    'asc' : 'text/plain',
+    'asf' : 'video/x-ms-asf',
+    'atom' : 'application/atom+xml',
+    'avi' : 'video/x-msvideo',
+    'bmp' : 'image/bmp',
+    'bz2' : 'application/x-bzip2',
+    'cer' : 'application/pkix-cert',
+    'crl' : 'application/pkix-crl',
+    'crt' : 'application/x-x509-ca-cert',
+    'css' : 'text/css',
+    'csv' : 'text/csv',
+    'cu' : 'application/cu-seeme',
+    'deb' : 'application/x-debian-package',
+    'doc' : 'application/msword',
+    'docx' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'dvi' : 'application/x-dvi',
+    'eot' : 'application/vnd.ms-fontobject',
+    'eps' : 'application/postscript',
+    'epub' : 'application/epub+zip',
+    'etx' : 'text/x-setext',
+    'flac' : 'audio/flac',
+    'flv' : 'video/x-flv',
+    'gif' : 'image/gif',
+    'gz' : 'application/gzip',
+    'htm' : 'text/html',
+    'html' : 'text/html',
+    'ico' : 'image/x-icon',
+    'ics' : 'text/calendar',
+    'ini' : 'text/plain',
+    'iso' : 'application/x-iso9660-image',
+    'jar' : 'application/java-archive',
+    'jpe' : 'image/jpeg',
+    'jpeg' : 'image/jpeg',
+    'jpg' : 'image/jpeg',
+    'js' : 'text/javascript',
+    'mjs' : 'text/javascript',
+    'json' : 'application/json',
+    'latex' : 'application/x-latex',
+    'log' : 'text/plain',
+    'm4a' : 'audio/mp4',
+    'm4v' : 'video/mp4',
+    'mid' : 'audio/midi',
+    'midi' : 'audio/midi',
+    'mov' : 'video/quicktime',
+    'mp3' : 'audio/mpeg',
+    'mp4' : 'video/mp4',
+    'mp4a' : 'audio/mp4',
+    'mp4v' : 'video/mp4',
+    'mpe' : 'video/mpeg',
+    'mpeg' : 'video/mpeg',
+    'mpg' : 'video/mpeg',
+    'mpg4' : 'video/mp4',
+    'oga' : 'audio/ogg',
+    'ogg' : 'audio/ogg',
+    'ogv' : 'video/ogg',
+    'ogx' : 'application/ogg',
+    'pbm' : 'image/x-portable-bitmap',
+    'pdf' : 'application/pdf',
+    'pgm' : 'image/x-portable-graymap',
+    'png' : 'image/png',
+    'pnm' : 'image/x-portable-anymap',
+    'ppm' : 'image/x-portable-pixmap',
+    'ppt' : 'application/vnd.ms-powerpoint',
+    'pptx' : 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'ps' : 'application/postscript',
+    'qt' : 'video/quicktime',
+    'rar' : 'application/x-rar-compressed',
+    'ras' : 'image/x-cmu-raster',
+    'rss' : 'application/rss+xml',
+    'rtf' : 'application/rtf',
+    'sgm' : 'text/sgml',
+    'sgml' : 'text/sgml',
+    'svg' : 'image/svg+xml',
+    'swf' : 'application/x-shockwave-flash',
+    'tar' : 'application/x-tar',
+    'tif' : 'image/tiff',
+    'tiff' : 'image/tiff',
+    'torrent' : 'application/x-bittorrent',
+    'ttf' : 'application/x-font-ttf',
+    'txt' : 'text/plain',
+    'wav' : 'audio/x-wav',
+    'webm' : 'video/webm',
+    'wma' : 'audio/x-ms-wma',
+    'wmv' : 'video/x-ms-wmv',
+    'woff' : 'application/x-font-woff',
+    'wsdl' : 'application/wsdl+xml',
+    'xbm' : 'image/x-xbitmap',
+    'xls' : 'application/vnd.ms-excel',
+    'xlsx' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'xml' : 'application/xml',
+    'xpm' : 'image/x-xpixmap',
+    'xwd' : 'image/x-xwindowdump',
+    'yaml' : 'text/yaml',
+    'yml' : 'text/yaml',
+    'zip' : 'application/zip',
+	'wasm' : 'application/wasm',
+};
+
+
+const allowedResourceParameterNames = [        
+	'acl',
+	'backtosource',
+    'policy',
+    'torrent',
+    'logging',
+    'location',
+    'storageinfo',
+    'quota',
+    'storageclass',
+    'storagepolicy',
+    'requestpayment',
+    'versions',
+    'versioning',
+    'versionid',
+    'uploads',
+    'uploadid',
+    'partnumber',
+    'website',
+    'notification',
+    'replication',
+    'lifecycle',
+    'deletebucket',
+    'delete',
+    'cors',
+    'restore',
+    'tagging',
+    'append',
+    'position',
+    'response-content-type',
+    'response-content-language',
+    'response-expires',
+    'response-cache-control',
+    'response-content-disposition',
+    'response-content-encoding',
+    'x-image-process',
+    'x-oss-process',
+    'x-image-save-object',
+    'x-image-save-bucket',
+	'encryption',
+	'directcoldaccess',
+	'rename',
+	'name',
+	'requestPayment',
+	'metadata',
+	'modify',
+	'attname',
+	'truncate',
+	'x-obs-security-token',
+
+	// workflow api
+	'x-workflow-prefix',
+	'x-workflow-start',
+	'x-workflow-limit',
+	'x-workflow-template-name',
+	'x-workflow-graph-name',
+	'x-workflow-execution-state',
+	'x-workflow-execution-type',
+	'x-workflow-next-marker',
+	'obsworkflowtriggerpolicy',
+
+	// virtual bucket api
+	'obsbucketalias',
+	'obsalias',
+	'publicaccessblock',
+	'bucketstatus',
+	'policystatus',
+
+	'customdomain'
+];
+
+
+const allowedResponseHttpHeaderMetadataNames = [
+    'content-type',
+    'content-md5',
+    'content-length',
+    'content-language',
+    'expires',
+    'origin',
+    'cache-control',
+    'content-disposition',
+    'content-encoding',
+    'x-default-storage-class',
+    'location',
+    'date',
+    'etag',
+    'host',
+    'last-modified',
+    'content-range',
+    'x-reserved',
+    'access-control-allow-origin',
+    'access-control-allow-headers',
+    'access-control-max-age',
+    'access-control-allow-methods',
+    'access-control-expose-headers',
+    'connection'
+];
+
+const commonHeaders = {
+	'content-length' : 'ContentLength',
+	'date' : 'Date',
+	'x-reserved' : 'Reserved'
+};
+
+const obsAllowedStorageClass = ['STANDARD', 'WARM', 'COLD', 'DEEP_ARCHIVE', 'INTELLIGENT_TIERING', 'HIGH_PERFORMANCE'];
+
+// 服务端暂不支持S3协议的INTELLIGENT_TIERING、INTELLIGENT_TIERING
+const v2AllowedStorageClass = ['STANDARD', 'STANDARD_IA', 'GLACIER', 'DEEP_ARCHIVE', 'INTELLIGENT_TIERING', 'HIGH_PERFORMANCE'];
+
+const obsAllowedAcl = ['private', 'public-read', 'public-read-write', 'public-read-delivered', 'public-read-write-delivered','bucket-owner-full-control'];
+
+const v2AllowedAcl = ['private', 'public-read', 'public-read-write', 'authenticated-read', 'bucket-owner-read', 'bucket-owner-full-control', 'log-delivery-write'];
+
+const obsAllowedUri = ['Everyone', 'Logdelivery'];
+
+const v2AllowedUri = ['http://acs.amazonaws.com/groups/global/AllUsers', 'http://acs.amazonaws.com/groups/global/AuthenticatedUsers', 'http://acs.amazonaws.com/groups/s3/LogDelivery'];
+
+const obsAllowedEvent = ['ObjectCreated:*', 'ObjectCreated:Put', 'ObjectCreated:Post', 'ObjectCreated:Copy', 
+    'ObjectCreated:CompleteMultipartUpload', 'ObjectRemoved:*', 'ObjectRemoved:Delete', 'ObjectRemoved:DeleteMarkerCreated'];
+const v2AllowedEvent = ['s3:ObjectCreated:*', 's3:ObjectCreated:Put', 's3:ObjectCreated:Post', 's3:ObjectCreated:Copy', 
+    's3:ObjectCreated:CompleteMultipartUpload', 's3:ObjectRemoved:*', 's3:ObjectRemoved:Delete', 's3:ObjectRemoved:DeleteMarkerCreated'];
+
+const negotiateMethod = 'HeadApiVersion';
+
+const customDomainCertificateMethod = 'SetBucketCustomDomain'
+
+const obsSignatureContext = {
+	signature :	'obs',
+	headerPrefix : 'x-obs-',
+	headerMetaPrefix : 'x-obs-meta-',
+	authPrefix : 'OBS',
+	stsToken: 'x-obs-security-token',
+};
+
+const v2SignatureContext = {
+	signature :	'v2',
+	headerPrefix : 'x-amz-',
+	headerMetaPrefix : 'x-amz-meta-',
+	authPrefix : 'AWS',
+	stsToken: 'x-amz-security-token',
+};
+
+class TimedOutError extends Error {
+    constructor(host) {
+        super('connect ETIMEDOUT ' + host);
+        this.errno = 'ETIMEDOUT';
+        this.code = 'ETIMEDOUT';
+        Error.captureStackTrace(this, TimedOutError);
+    }
+}
+
+function encodeURIWithSafe(str, safe, skipEncoding){
+	str = String(str);
+	if (str.length === 0) {
+		return '';
+	}
+	if (skipEncoding) {
+		return str;
+	}
+	let ret;
+	if (safe) {
+		ret = [];
+		for (const element of str) {
+			ret.push(safe.indexOf(element) >= 0 ? element : encodeURIComponent(element));
+		}
+		ret = ret.join('');
+	} else {
+		ret = encodeURIComponent(str);
+	}
+	return ret.replace(/!/g, '%21')
+		.replace(/\*/g, '%2A')
+		.replace(/'/g, '%27')
+		.replace(/\(/g, '%28')
+		.replace(/\)/g, '%29');
+}
+
+function headerTostring(obj){
+	return JSON ? JSON.stringify(obj) : '';
+}
+
+function parseObjectFromHeaders(sentAs, headers){
+	let metadata = {};
+	for(let key in headers){
+		if ({}.hasOwnProperty.call(headers, key)) {
+			let k = String(key).toLowerCase();
+			if (k.indexOf(sentAs) === 0) {
+				metadata[k.slice(sentAs.length)] = headers[key];
+			}
+		}
+	}
+	return metadata;
+}
+
+function mkdirsSync(dirname) {
+	if (fs.existsSync(dirname)) {
+		return true;
+	}
+	if (mkdirsSync(pathLib.dirname(dirname))) {
+		fs.mkdirSync(dirname);
+		return true;
+	}
+	return false;
+}
+
+function isArray(obj) {
+	return Object.prototype.toString.call(obj) === '[object Array]';
+}
+
+function isObject(obj) {
+	return Object.prototype.toString.call(obj) === '[object Object]';
+}
+
+
+function makeObjFromXml(xml, methodName, log, bc){
+	
+	try {
+		const result = parser.parse(xml, options);
+		if(result === null || result === undefined){
+			if(log.isLevelEnabled('error')){
+				log.runLog('error', methodName, 'xml [' + xml + '] is not well-format');
+			}
+			return bc(new Error('xml is not well format'), null);
+		}
+		
+		bc(null, result);
+	} catch (err) {
+		return bc(err, null);
+	}
+}
+
+function getExpireDate(utcDateStr){
+	let date = new Date(Date.parse(utcDateStr));
+	let hour = date.getUTCHours();
+	let min = date.getUTCMinutes();
+	let sec = date.getUTCSeconds();
+	let day = date.getUTCDate();
+	let moth = date.getUTCMonth() + 1;
+	let year = date.getUTCFullYear();
+	let expireDate = '';
+	expireDate += year + '-';
+	
+	if(moth < 10){
+		expireDate += '0';
+	}
+	expireDate += moth + '-';
+	
+	if(day < 10){
+		expireDate += '0';
+	}
+	expireDate += day + 'T';
+	
+	if(hour < 10){
+		expireDate += '0';
+	}
+	expireDate += hour + ':';
+	
+	if(min < 10){
+		expireDate += '0';
+	}
+	expireDate += min + ':';
+	
+	if(sec < 10){
+		expireDate += '0';
+	}
+	expireDate += sec + 'Z';
+	return expireDate;
+}
+
+function getDates(utcDateStr){
+	let date = new Date(Date.parse(utcDateStr));
+	let hour = date.getUTCHours();
+	let min = date.getUTCMinutes();
+	let sec = date.getUTCSeconds();
+	let day = date.getUTCDate();
+	let moth = date.getUTCMonth() + 1;
+	let year = date.getUTCFullYear();
+	let shortDate = '';
+	let longDate = '';
+	shortDate += year;
+	
+	if(moth < 10){
+		shortDate += '0';
+	}
+	shortDate += moth;
+	
+	if(day < 10){
+		shortDate += '0';
+	}
+	shortDate += day;
+	
+	longDate += shortDate + 'T';
+	if(hour < 10){
+		longDate += '0';
+	}
+	longDate +=  hour;
+	
+	if(min < 10){
+		longDate += '0';
+	}
+	longDate +=  min;
+	
+	if(sec < 10){
+		longDate += '0';
+	}
+	longDate +=  sec + 'Z';
+	return [shortDate, longDate];
+}
+
+function getSignedAndCanonicalHeaders(header){
+	let arrheadKey = [];
+	let arrhead = {};
+	for(let key in header){
+		if ({}.hasOwnProperty.call(header, key)){
+			arrheadKey.push(key.toLowerCase());
+			arrhead[key.toLowerCase()] = header[key];
+		}
+	}
+	arrheadKey = arrheadKey.sort();
+	let signedHeaders = '';
+	let canonicalHeaders = '';
+	for(let i = 0; i < arrheadKey.length; i++){
+		if(i !== 0){
+			signedHeaders += ';';
+		}
+		signedHeaders += arrheadKey[i];
+		canonicalHeaders +=  arrheadKey[i] + ':' + arrhead[arrheadKey[i]] + '\n';
+	}
+	return [signedHeaders, canonicalHeaders];
+}
+
+function createV4Signature(shortDate, sk, region, stringToSign){
+	let dateKey = crypto.createHmac('sha256', 'AWS4' + sk).update(shortDate).digest();
+	let dateRegionKey = crypto.createHmac('sha256', dateKey).update(region).digest();
+	let dateRegionServiceKey = crypto.createHmac('sha256', dateRegionKey).update('s3').digest();
+	let signingKey = crypto.createHmac('sha256',dateRegionServiceKey).update('aws4_request').digest();
+	return crypto.createHmac('sha256',signingKey).update(stringToSign).digest('hex');
+}
+
+function getV4Signature(shortDate, longDate, sk, region, canonicalRequest){
+	let scop = shortDate + '/' + region + '/s3/aws4_request';
+	let stringToSign = 'AWS4-HMAC-SHA256\n';
+	stringToSign += longDate + '\n';
+	stringToSign += scop + '\n';
+	stringToSign += crypto.createHash('sha256').update(canonicalRequest).digest('hex');
+	return createV4Signature(shortDate, sk, region, stringToSign);
+}
+
+
+
+function getXSdkDateIAMCloud() { // To get the x-sdk-date for Iamcloud
+  const now = new Date(); 
+  const year = now.getUTCFullYear(); 
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(now.getUTCDate()).padStart(2, '0'); 
+  const hours = String(now.getUTCHours()).padStart(2, '0'); 
+  const minutes = String(now.getUTCMinutes()).padStart(2, '0'); 
+  const seconds = String(now.getUTCSeconds()).padStart(2, '0'); 
+
+  return `${year}${month}${day}T${hours}${minutes}${seconds}Z`;
+}
+
+function Utils(logger) {
+	this.log = logger;
+	this.ak = null;
+	this.sk = null;
+	this.permanentAk = null;
+	this.permanentSk = null;
+	this.securityToken = null;
+	this.isSecure = true; 
+	this.server = null;
+	this.pathStyle = false;
+	this.signatureContext = null;
+	this.isSignatureNegotiation = true;
+	this.bucketSignatureCache = {};
+	this.region = 'region';
+	this.port = null;
+	this.maxRetryCount = 3;
+	this.timeout = 60;
+	this.sslVerify = false;
+	this.httpAgent = false;
+	this.httpsAgent = false;
+	this.noProxyList = [];
+	this.obsSdkVersion = OBS_SDK_VERSION;
+	this.isCname = false;
+	this.bucketEventEmitters = {};
+	this.maxConnections = 1000;
+	this.userAgent = 'obs-sdk-js/' + this.obsSdkVersion;
+	this.iam_domain = null;
+	this.shadow_expires = DEFAULT_SHADOW_EXPIRES;
+	this.is_shadow_client = false;
+	this.shadow_expires_at = null
+	this.shadow_expires_at_milliseconds = null
+	this.is_shadow_client_ready = false
+}
+
+Utils.prototype.encodeURIWithSafe = encodeURIWithSafe;
+
+Utils.prototype.mimeTypes = mimeTypes;
+
+Utils.prototype.close = function(){
+	if(this.httpAgent){
+		this.httpAgent = null;
+	}
+	if(this.httpsAgent){
+		this.httpsAgent = null;
+	}
+	if (this.thirdHttpLib) {
+		this.thirdHttpLib = null;
+	}
+};
+
+Utils.prototype.refresh = async function (ak, sk, securityToken, is_shadow_client) {
+	this.ak = ak ? String(ak).trim() : null;
+	this.sk = sk ? String(sk).trim(): null;
+	this.securityToken = securityToken ? String(securityToken).trim() : null;
+	
+	if (is_shadow_client) {
+		await this.getTemporaryKeysFromCloudAlliance(this.ak, this.sk,this.iam_domain, this.shadow_expires)
+	}
+};
+
+Utils.prototype.initFactory = function (ak, sk, isSecure,
+	server, pathStyle, signature, region, port, maxRetryCount, timeout, sslVerify, longConnection, securityToken,
+	isSignatureNegotiation, isCname, maxConnections, httpAgent, httpsAgent, userAgent, thirdHttpLib, noProxyList, is_shadow_client, iam_domain, shadow_expires) {
+
+	this.is_shadow_client = is_shadow_client
+	this.iam_domain = iam_domain
+		
+	shadow_expires = Number(shadow_expires)
+
+	if (shadow_expires && (shadow_expires < (15 * 60) || shadow_expires > (60 * 60 * 24))) {
+		throw new Error('Expire time is not valid!');
+	}
+
+	if (shadow_expires) {
+		this.shadow_expires = shadow_expires
+	}
+
+	if (httpAgent !== undefined) {
+		this.httpAgent = httpAgent;
+	}
+	
+	if (httpsAgent !== undefined) {
+		this.httpsAgent = httpsAgent;
+	}
+
+	this.refresh(ak, sk, securityToken, is_shadow_client);
+
+	if (!server) {
+		throw new Error('Server is not set');
+	}
+
+	if (is_shadow_client === true && !iam_domain) {
+		throw new Error('iam_domain is not set');
+	}
+
+	server = String(server).trim();
+	
+	if (server.indexOf('https://') === 0) {
+		server = server.slice('https://'.length);
+		isSecure = true;
+	} else if (server.indexOf('http://') === 0) {
+		server = server.slice('http://'.length);
+		isSecure = false;
+	}
+	
+	let index = server.lastIndexOf('/');
+	while (index >= 0) {
+		server = server.slice(0, index);
+		index = server.lastIndexOf('/');
+	}
+	
+	index = server.indexOf(':');
+	if (index >= 0) {
+		port = server.slice(index + 1);
+		server = server.slice(0, index);
+	}
+	this.server = server;
+	
+	if (/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/.test(this.server)) {
+		pathStyle = true;
+	}
+	
+	if (isSecure !== undefined) {
+		this.isSecure = isSecure;
+	}
+	if (pathStyle !== undefined) {
+		this.pathStyle = pathStyle;
+	}
+	
+	if (signature !== undefined) {
+		signature = String(signature).trim().toLowerCase();
+	} else {
+		signature = 'obs';
+	}
+	
+	if (isSignatureNegotiation !== undefined) {
+		this.isSignatureNegotiation = isSignatureNegotiation;
+	}
+
+	this.isCname = isCname;
+	
+	if (this.pathStyle || this.isCname) {
+		this.isSignatureNegotiation = false;
+		if (signature === 'obs') {
+			signature = 'v2';
+		}
+	}
+	
+	this.signatureContext = signature === 'obs' ? obsSignatureContext : v2SignatureContext;
+	
+	if (region !== undefined) {
+		this.region = String(region).trim();
+	}
+	
+	this.port = port ? parseInt(port, 10) : (this.isSecure ? 443 : 80);
+	
+	if (maxRetryCount !== undefined) {
+		this.maxRetryCount = parseInt(maxRetryCount, 10);
+	}
+	
+	if (timeout !== undefined) {
+		this.timeout = parseInt(timeout, 10);
+	}
+	
+	if (sslVerify !== undefined) {
+		this.sslVerify = sslVerify;
+	}
+	
+	if (maxConnections !== undefined) {
+		this.maxConnections = parseInt(maxConnections, 10);
+	}
+	
+	if (userAgent) {
+		this.userAgent = userAgent;
+	}
+
+	if (noProxyList) {
+		if (typeof noProxyList === 'string') {
+			this.noProxyList = noProxyList.split(',');
+		}
+		if (Array.isArray(noProxyList)) {
+			this.noProxyList = noProxyList;
+		}
+	}
+
+	if (thirdHttpLib) {
+		this.thirdHttpLib = thirdHttpLib;
+	}
+	
+	if (longConnection !== undefined && Number(longConnection) >= 0) {
+		if (!this.httpAgent) {
+			this.httpAgent = new httpLib.Agent({ keepAlive: true, keepAliveMsecs: Number(longConnection) * 1000, maxSockets: this.maxConnections, maxFreeSockets: this.maxConnections });
+		}
+		if (!this.httpsAgent) {
+			this.httpsAgent = new httpsLib.Agent({ keepAlive: true, keepAliveMsecs: Number(longConnection) * 1000, maxSockets: this.maxConnections, maxFreeSockets: this.maxConnections });
+		}
+	}
+
+	
+}
+
+function generateSignatureCloudAlliance(request, ak, sk) {
+	let access = ak;
+	let secret = sk;
+	let rawHost = request.host;
+	let rawUri = request.path;
+	let rawBody = request.body || "";
+	let rawQueryString = request.queryString || "";
+
+
+	const XSdkDate = getXSdkDateIAMCloud()
+	const HTTPRequestMethod = request.method;
+	const CanonicalURI = rawUri + "/";
+	const CanonicalQueryString = rawQueryString;
+	const CanonicalHeaders = `content-type:application/json\nhost:${rawHost}\nx-sdk-date:${XSdkDate}\n`;
+	const SignedHeaders = "content-type;host;x-sdk-date";
+
+	const HashedRequestPayload = crypto.createHash('sha256').update(rawBody).digest('hex');
+	const CanonicalRequest = `${HTTPRequestMethod}\n${CanonicalURI}\n${CanonicalQueryString}\n${CanonicalHeaders}\n${SignedHeaders}\n${HashedRequestPayload}`;
+	const HashedCanonicalRequest = crypto.createHash('sha256').update(CanonicalRequest).digest('hex');
+
+	const Algorithm = "SDK-HMAC-SHA256";
+	const StringToSign = `${Algorithm}\n${XSdkDate}\n${HashedCanonicalRequest}`;
+	const Signature = crypto.createHmac('sha256', secret).update(StringToSign).digest('hex');
+
+	return {
+			Host: rawHost,
+			XSdkDate,
+			Authorization: `${Algorithm} Access=${access}, SignedHeaders=${SignedHeaders}, Signature=${Signature}`
+	};
+}
+
+function parseExpirationTime(expiresAtStr) {
+    return new Date(expiresAtStr).getTime(); // Convert to milliseconds
+}
+
+Utils.prototype.waitForCloudAllianceGetsReady = async function() {
+	const startTime = Date.now();
+	const timeout = 60 * 1000; // 60 seconds
+	
+	while (!this.is_shadow_client_ready) {
+		if (Date.now() - startTime > timeout) {
+    	throw new Error("Timeout: Shadow client not ready");
+		}
+		await new Promise(resolve => setTimeout(resolve, 1000)); 
+	}		
+}
+
+Utils.prototype.refreshShadowClient = async function () {
+	await this.waitForCloudAllianceGetsReady();
+
+	if (!this.permanentAk || !this.permanentSk) {
+		throw new Error("Initialization: Shadow client not ready");
+	}
+	this.is_shadow_client_ready = false
+	await this.getTemporaryKeysFromCloudAlliance(this.permanentAk,this.permanentSk,this.iam_domain, this.shadow_expires)
+}
+
+Utils.prototype.checkKeysExpiredAndRefresh = async function() {
+	const now = Date.now();
+	const timeLeft = this.shadow_expires_at_milliseconds - now
+	let log = this.log
+
+	if (timeLeft <= 5 * 60 * 1000) { // checks if 5 min left to expire or not
+		this.is_shadow_client_ready = false
+		log.runLog('warn', 'CloudAllianceTempKeys', 'Temp keys will expire soon, refreshing');
+		await this.getTemporaryKeysFromCloudAlliance(this.permanentAk,this.permanentSk,this.iam_domain, this.shadow_expires)
+	}
+}
+
+
+Utils.prototype.getTemporaryKeysFromCloudAlliance = async function(ak,sk,iam_domain,shadow_expires) {
+	//If is_shadow_client true, call iam-domain and get temp ak-sk
+	const request = {
+		method: 'POST',
+		host: iam_domain, 
+		path: IAM_DOMAIN_PATH_EXTENSION,
+		body: JSON.stringify({
+			auth: {
+				identity: {
+					methods: ["token"],
+					token: {
+						duration_seconds: String(shadow_expires)
+					}
+				}
+			}
+		})
+	};
+
+	
+	const validAk = this.permanentAk ? this.permanentAk : ak
+	const validSk = this.permanentSk ? this.permanentSk : sk
+
+	const { Host, XSdkDate, Authorization } = generateSignatureCloudAlliance(request, validAk, validSk);
+
+	const options = {
+		hostname: Host,
+		path: request.path + (request.queryString ? `?${request.queryString}` : ''),
+		method: request.method,
+		headers: {
+			'Content-Type': 'application/json',
+			'Host': Host,
+			'X-Sdk-Date': XSdkDate,
+			'Authorization': Authorization
+		}
+	};
+
+	if (this.httpsAgent) {
+		options.agent = this.httpsAgent
+	}
+	let log = this.log
+
+	const req = await httpsLib.request(options, (res) => {
+		
+		let responseData = '';
+		res.on('data', (chunk) => {
+			responseData += chunk;
+		});
+
+		res.on('end', () => {
+			const response = JSON.parse(responseData)
+			if (res.statusCode >= 200 && res.statusCode < 300) {
+				const validResponse = response.credential
+				this.permanentAk = validAk
+				this.permanentSk = validSk
+				this.ak = validResponse.access
+				this.sk = validResponse.secret
+				this.securityToken = validResponse.securitytoken
+				this.shadow_expires_at = validResponse.expires_at
+				this.shadow_expires_at_milliseconds = parseExpirationTime(validResponse.expires_at);
+				this.refresh(validResponse.access, validResponse.secret, this.securityToken, false);
+				this.is_shadow_client_ready = true
+				log.runLog('info', 'CloudAllianceTempKeys', 'response statusCode:' + res.statusCode );
+			} else {
+				req.removeAllListeners('abort');
+				req.abort();
+				if(log.isLevelEnabled('error')){
+					log.runLog('error', '', 'read file to send error [' + headerTostring(response.error) + ']');
+				}
+
+				throw new Error(response.error.message);
+			}
+		})
+	});
+	
+	req.on('error', (err => {
+		req.removeAllListeners('abort');
+		req.abort();
+		if(log.isLevelEnabled('error')){
+			log.runLog('error', '', 'read file to send error [' + headerTostring(err) + ']');
+		}
+		log.runLog('error', '', 'read file to send error [' + headerTostring(err) + ']');
+		if(log.isLevelEnabled('warn')){
+				log.runLog('warn', '', err);
+		}
+
+		throw new Error(err);
+	}));
+
+	req.write(request.body);
+	req.end();
+		
+}
+Utils.prototype.SseKmsAdapter = function(value, signatureContext){
+	value = value || '';
+	value = String(value);
+	let index = value.indexOf('aws:');
+	if(signatureContext.signature === 'obs'){
+		return index === 0 ? value.slice(4) : value;
+	}
+	return index === 0 ? value : 'aws:' + value;
+};
+
+Utils.prototype.BucketAdapter = function(value, signatureContext){
+	value = value || '';
+	value = String(value);
+	let index = value.indexOf('arn:aws:s3:::');
+	if(signatureContext.signature === 'obs'){
+		return index === 0 ? value.slice('arn:aws:s3:::'.length) : value;
+	}
+	return index === 0 ? value : 'arn:aws:s3:::' + value;
+};
+
+
+Utils.prototype.EventAdapter = function(value, signatureContext){
+	value = value || '';
+	value = String(value);
+	if(signatureContext.signature === 'obs'){
+		if(obsAllowedEvent.indexOf(value) >= 0){
+			return value;
+		}
+		if(v2AllowedEvent.indexOf(value) >= 0){
+			return value.substring(3);
+		}
+		return '';
+	}
+	if(v2AllowedEvent.indexOf(value) >= 0){
+		return value;
+	}
+	if(obsAllowedEvent.indexOf(value) >= 0){
+		return 's3:' + value;
+	}
+	return '';
+};
+
+Utils.prototype.URIAdapter = function(value, signatureContext){
+	value = value || '';
+	value = String(value);
+	if(signatureContext.signature === 'obs'){
+		if(obsAllowedUri.indexOf(value) >= 0){
+			return value;
+		}
+		if(value === 'AllUsers' || value === 'http://acs.amazonaws.com/groups/global/AllUsers'){
+			return 'Everyone';
+		}
+		if (value === 'LogDelivery' || value === 'http://acs.amazonaws.com/groups/s3/LogDelivery') {
+			return 'LogDelivery'
+		}
+		return '';
+		
+	}
+	if(v2AllowedUri.indexOf(value) >= 0){
+		return value;
+	}
+	if(value === 'Everyone' || value === 'AllUsers'){
+		return 'http://acs.amazonaws.com/groups/global/AllUsers';
+	}
+	if(value === 'AuthenticatedUsers'){
+		return 'http://acs.amazonaws.com/groups/global/AuthenticatedUsers';
+	}
+	if(value === 'LogDelivery'){
+		return 'http://acs.amazonaws.com/groups/s3/LogDelivery';
+	}
+	return '';
+};
+
+
+Utils.prototype.StorageClassAdapter = function(value, signatureContext){
+	value = value || '';
+	value = String(value).toUpperCase();
+	if(signatureContext.signature === 'obs'){
+		if(obsAllowedStorageClass.indexOf(value) >= 0){
+			return value;
+		}
+		if(value === 'STANDARD_IA'){
+			return 'WARM';
+		}
+		if(value === 'GLACIER'){
+			return 'COLD';
+		}
+		return '';
+	}
+	
+	if(v2AllowedStorageClass.indexOf(value) >= 0){
+		if(value === 'INTELLIGENT_TIERING'){
+			this.log.runLog('warn', 'Intelligent tiering supports only OBS signature');
+		}
+		return value;
+	}
+	if(value === 'WARM'){
+		return 'STANDARD_IA';
+	}
+	if(value === 'COLD'){
+		return 'GLACIER';
+	}
+	return '';
+};
+
+Utils.prototype.ACLAdapter = function(value, signatureContext){
+	value = value || '';
+	value = String(value).toLowerCase();
+	if(signatureContext.signature === 'obs'){
+		if(obsAllowedAcl.indexOf(value) >= 0){
+			return value;
+		}
+		
+		return '';
+	}
+	
+	if(value === 'public-read-delivered'){
+		value = 'public-read';
+	}else if(value === 'public-read-write-delivered'){
+		value = 'public-read-write';
+	}
+	
+	if(v2AllowedAcl.indexOf(value) >= 0){
+		return value;
+	}
+	return '';
+};
+
+Utils.prototype.doExec = function(funcName, param, callback){
+	let opt = this.makeParam(funcName, param);
+	if('err' in opt){
+		return callback(opt.err, null);
+	}
+	this.sendRequest(funcName, opt, callback);
+};
+
+Utils.prototype.doNegotiation = function(funcName, param, callback, checkBucket, checkCache, setCache){
+	let o = null;
+	let that = this;
+	if(checkCache && param.Bucket){
+		let item = that.bucketSignatureCache[param.Bucket];
+		if(item && item.signatureContext && item.expireTime > new Date().getTime()){
+			param.signatureContext = item.signatureContext;
+			let opt = that.makeParam(funcName, param);
+			if('err' in opt){
+				return callback(opt.err, null);
+			}
+			opt.signatureContext = item.signatureContext;
+			return that.sendRequest(funcName, opt, callback);
+		}
+		
+		o = this.bucketEventEmitters[param.Bucket];
+		if(!o){
+			o = {
+				s : 0,
+			};
+			this.bucketEventEmitters[param.Bucket] = o;
+		}
+		
+		if(o.s){
+			o.e.once('done', () => {
+				that.doNegotiation(funcName, param, callback, checkBucket, checkCache, setCache);
+			});
+			return;
+		}
+		o.e = new events.EventEmitter();
+		o.s = 1;
+	}
+	this.doExec(negotiateMethod, checkBucket ? {Bucket:param.Bucket} : {},  function(err, result){
+		if(err){
+			callback(err, null);
+			if(o){
+				o.s = 0;
+				o.e.emit('done');
+			}
+			return;
+		}
+		if((checkBucket && result.CommonMsg.Status === 404) || result.CommonMsg.Status >= 500){
+			callback(err, result);
+			if(o){
+				o.s = 0;
+				o.e.emit('done');
+			}
+			return;
+		}
+		let signatureContext = v2SignatureContext;
+		if(result.CommonMsg.Status < 300 && result.InterfaceResult && result.InterfaceResult.ApiVersion >= '3.0'){
+			signatureContext = obsSignatureContext;
+		}
+		
+		if(setCache){
+			that.bucketSignatureCache[param.Bucket] = {
+				signatureContext : signatureContext,
+				expireTime : new Date().getTime() + 15 + (Math.ceil(Math.random()*5)) * 60 * 1000
+			};
+		}
+		if(o){
+			o.s = 0;
+			o.e.emit('done');
+		}
+		param.signatureContext = signatureContext;
+		let opt = that.makeParam(funcName, param);
+		if('err' in opt){
+			return callback(opt.err, null);
+		}
+		opt.signatureContext = signatureContext;
+		that.sendRequest(funcName, opt, callback);
+	});
+};
+
+Utils.prototype.exec = function(funcName, param, callback){
+	let that = this;
+	if(that.isSignatureNegotiation && funcName !== negotiateMethod){
+		if(funcName === 'ListBuckets'){
+			that.doNegotiation(funcName, param, callback, false, false, false);
+		}else if(funcName === 'CreateBucket'){
+			let _callback = function(err, result){
+				if(!err && result.CommonMsg.Status === 400 &&
+						result.CommonMsg.Message === 'Unsupported Authorization Type' &&
+						param.signatureContext && 
+						param.signatureContext.signature === 'v2'){
+					param.signatureContext = v2SignatureContext;
+					let opt = that.makeParam(funcName, param);
+					if('err' in opt){
+						return callback(opt.err, null);
+					}
+					opt.signatureContext = param.signatureContext;
+					that.sendRequest(funcName, opt, callback);
+					return;
+				}
+				callback(err, result);
+			};
+			
+			that.doNegotiation(funcName, param, _callback, false, true, false);
+		}else if(funcName === 'DeleteObjects' && param.EncodingType === 'url'){
+			param.Objects.map( e =>{
+				e.Key = encodeURIComponent(e.Key)
+				return e
+			})
+			that.doNegotiation(funcName, param, callback, true, true, true);
+		 }else{
+			that.doNegotiation(funcName, param, callback, true, true, true);
+		}
+		return;
+	}
+	that.doExec(funcName, param, callback);
+};
+
+
+Utils.prototype.toXml = function(mXml, xmlMeta, root, sentAs, signatureContext){
+	let xml = '';
+	if(root !== null){
+		xml += this.buildXml(mXml, xmlMeta, root, sentAs, signatureContext);
+		return xml;
+	}
+	for (let key in xmlMeta){
+		if(key in mXml){
+			let meta = xmlMeta[key];
+			xml += this.buildXml(mXml, meta, key, meta.sentAs || key, signatureContext);
+		}
+	}
+	return xml;
+};
+
+Utils.prototype.buildXml = function(mXml, xmlMeta, key, sentAs, signatureContext){
+	let xml = '';
+	let type = xmlMeta.type;
+	if(type === 'array'){
+		for(let i = 0; i < mXml[key].length; i++){
+			if(xmlMeta.items.type === 'object'){
+				if (!mXml[key][i]) {
+					return xml;
+				}
+				let result = this.toXml(mXml[key][i], xmlMeta.items.parameters, null, null, signatureContext);
+				if(result !== ''){
+					xml += '<' + sentAs + '>'+ result + '</' + sentAs + '>';
+				}
+			}else if(xmlMeta.items.type === 'adapter'){
+				xml += '<' + sentAs + '>' + String(this[key + 'Adapter'](mXml[key][i], signatureContext)).replace(/&/g, '&amp;').replace(/'/g, '&apos;').replace(/"/g, '&quot;') + '</' + sentAs + '>';
+			}else if(xmlMeta.items.type !== 'array'){
+				xml += '<' + sentAs + '>'+ String(mXml[key][i]).replace(/&/g, '&amp;').replace(/'/g, '&apos;').replace(/"/g, '&quot;') + '</' + sentAs +'>';
+			}
+		}
+	}else if(type === 'object'){
+		if (!mXml[key]) {
+			return xml;
+		}
+		let result = this.toXml(mXml[key], xmlMeta.parameters, null, null, signatureContext);
+		if(result !== ''){
+			xml += '<' + sentAs;
+			if('data' in xmlMeta){
+				if('xsiNamespace' in xmlMeta.data){
+					xml += ' xmlns:xsi="' +  xmlMeta.data.xsiNamespace + '"';
+				}
+				if('xsiType' in xmlMeta.data){
+					xml += ' xsi:type="' + mXml[key][xmlMeta.data.xsiType] + '"';
+				}
+			}
+			xml += '>';
+			xml += result + '</' + sentAs + '>';
+		}
+		
+	}else if(!xmlMeta.notAllowEmpty || String(mXml[key]) !== ''){
+		if(type === 'adapter'){
+			xml += '<' + sentAs + '>' + String(this[key + 'Adapter'](mXml[key], signatureContext)).replace(/&/g, '&amp;').replace(/'/g, '&apos;').replace(/"/g, '&quot;') + '</' + sentAs + '>';
+		}else if(type !== 'ignore'){
+			xml += '<' + sentAs + '>' + String(mXml[key]).replace(/&/g, '&amp;').replace(/'/g, '&apos;').replace(/"/g, '&quot;') + '</' + sentAs + '>';
+		}
+	}
+	if(xml && xmlMeta.wrapper){
+		let _wrapper = xmlMeta.wrapper;
+		xml = '<' + _wrapper + '>' + xml + '</' + _wrapper + '>';
+	}
+	return xml;
+};
+
+
+
+Utils.prototype.jsonToObject = function(model, obj, root, ifRootXMlDecode){
+	let opt = {};
+	if(root !== null){
+		this.buildObject(model, obj, root, opt, ifRootXMlDecode);
+	}else{
+		for(let key in model){
+			if ({}.hasOwnProperty.call(model, key)) {
+				this.buildObject(model, obj, key, opt, ifRootXMlDecode);
+			}
+		}
+	}
+	return opt;
+};
+
+Utils.prototype.buildObject = function(model, obj, key, opt, ifRootXMlDecode){
+
+	let setValue = function (value) {
+		return value && model[key].decode && ifRootXMlDecode
+		? decodeURIComponent(value.replace(/\+/g, '%20'))
+		: value;
+	}
+
+	if(isObject(obj)){
+		let flag = true;
+		let wrapper = model[key].wrapper;
+		if(wrapper && wrapper in obj){
+			obj = obj[wrapper];
+			flag = isObject(obj);
+		}
+		if(flag){
+			let sentAs = model[key].sentAs || key;
+			if(sentAs in obj){
+				if(model[key].type === 'object'){
+					opt[key] = this.jsonToObject(model[key].parameters, obj[sentAs], null, ifRootXMlDecode);
+				}else if(model[key].type === 'array'){
+					let arr = [];
+					if(!isArray(obj[sentAs])){
+						arr[0] = model[key].items.type === 'object' ? this.jsonToObject(model[key].items.parameters, obj[sentAs], null, ifRootXMlDecode) : setValue(obj[sentAs] || '');
+					}else{
+						for (let i = 0; i < obj[sentAs].length; i++ ){
+							arr[i] = model[key].items.type === 'object' ? this.jsonToObject(model[key].items.parameters, obj[sentAs][i], null, ifRootXMlDecode) : setValue(obj[sentAs][i]);
+						}
+					}
+					opt[key] = arr;
+				}else{
+					opt[key] = setValue(obj[sentAs]);
+				}
+			}
+		}
+	}
+	
+	if(opt[key] === undefined){
+		if(model[key].type === 'object'){
+			opt[key] = model[key].parameters ? this.jsonToObject(model[key].parameters, null, null, ifRootXMlDecode) : {};
+		}else if(model[key].type === 'array'){
+			opt[key] = [];
+		}else{
+			opt[key] = '';
+		}
+	}
+};
+
+Utils.prototype.makeParam = function (methodName, param) {
+	
+
+	let signatureContext = param.signatureContext || this.signatureContext;
+	let model = signatureContext.signature === 'obs' ? obsModel[methodName] : v2Model[methodName];
+	let method = model.httpMethod;
+	let uri = '/';
+	let urlPath = '';
+	let xml = '';
+	let exheaders = {};
+	let opt = {};
+	opt.$requestHook = param.RequestHook;
+	opt.$pipeHook = param.PipeHook;
+	opt.$responseHook = param.ResponseHook;
+	opt.$highWaterMark = param.HighWaterMark;
+	
+	//If the method is setBucketCustomDomain, check the certificate params
+	if (methodName === customDomainCertificateMethod&&param.DomainBody) {
+		checkCustomDomainCertificateParams(param.DomainBody,this.log,methodName,opt)
+	}
+
+	if ('urlPath' in model){
+		urlPath += '?';
+		urlPath += model.urlPath;
+	}
+	for (let key in model.parameters){
+		if ({}.hasOwnProperty.call(model.parameters, key)) {
+			let meta = model.parameters[key];
+			if(key === 'Bucket' && this.isCname){
+				continue;
+			}
+
+			let _value = param[key];
+			if (meta.required && (_value === null || _value === undefined || (Object.prototype.toString.call(_value) === '[object String]' && _value === ''))){
+				opt.err = key + ' is a required element!';
+				if(this.log.isLevelEnabled('warn')){
+					this.log.runLog('warn', methodName, opt.err);
+				}
+				return opt;
+			}
+
+			if(_value !== null && _value !== undefined){
+				if(meta.type === 'srcFile' || meta.type === 'dstFile'){
+					opt[meta.type] = _value;
+					continue;
+				}
+
+				if(meta.type === 'plain'){
+					opt[key] = _value;
+				}
+
+				let sentAs = meta.sentAs || key;
+
+				if(meta.withPrefix){
+					sentAs = signatureContext.headerPrefix + sentAs;
+				}
+
+				if(meta.location === 'uri'){
+					if(uri !== '/'){
+						uri += '/';
+					}
+					uri += _value;
+				}else if(meta.location === 'header'){
+					let safe = meta.encodingSafe || ' ;/?:@&=+$,';
+					if(meta.type === 'object'){
+						if(signatureContext.headerMetaPrefix === sentAs){
+							for(let item in _value){
+								if ({}.hasOwnProperty.call(_value, item)) {
+									let value = _value[item];
+									item = String(item).trim().toLowerCase();
+									exheaders[item.indexOf(sentAs) === 0 ? item: sentAs + item] = encodeURIWithSafe(value, safe);
+								}
+							}
+						}
+					}else if(meta.type === 'array'){
+						let arr = [];
+						for(let i=0;i<_value.length;i++){
+							arr.push(encodeURIWithSafe(_value[i], safe));
+						}
+						exheaders[sentAs] = arr;
+					}else if(meta.type === 'password'){
+						exheaders[sentAs] = Buffer.from(_value,'utf8').toString('base64');
+						let pwdSentAs = sentAs + '-MD5';
+						exheaders[pwdSentAs] = this.bufMD5(_value);
+					}else if(meta.type === 'number' && Number(_value)){
+						exheaders[sentAs] = encodeURIWithSafe(String(_value), safe);
+					}else if(meta.type === 'boolean'){
+						exheaders[sentAs] = encodeURIWithSafe(_value ? 'true' : 'false', safe);
+					}else if(meta.type === 'adapter'){
+						let val = this[key + 'Adapter'](_value, signatureContext);
+						if(val){
+							exheaders[sentAs] = encodeURIWithSafe(String(val), safe);
+						}
+					}else {
+						exheaders[sentAs] = encodeURIWithSafe(String(_value), safe, meta.skipEncoding);
+					}
+				}else if(meta.location === 'urlPath'){
+					let sep = urlPath === '' ? '?' : '&';
+					let value = _value;
+					if(meta.type !== 'number' || (meta.type === 'number' && Number(value) >= 0)){
+						urlPath += sep + encodeURIWithSafe(sentAs, '/') + '=' + encodeURIWithSafe(String(value), '/');
+					}
+				}else if(meta.location === 'xml'){
+					let mxml = this.toXml(param, meta, key, sentAs, signatureContext);
+					if(mxml){
+						xml += mxml;
+					}
+				}else if(meta.location === 'body'){
+					xml = _value;
+				}
+			}
+		}
+	}
+	
+	if('data' in model && 'xmlRoot' in model.data){
+		if(xml || model.data.xmlAllowEmpty){
+			let xmlRoot = model.data.xmlRoot;
+			xml = '<' + xmlRoot + '>' + xml + '</' + xmlRoot + '>';
+		}
+	}
+	
+	exheaders.Host = this.server;
+	if(!this.pathStyle && !this.isCname){
+		let uriList = uri.split('/');
+		if(uriList.length >= 2 && uriList[1]){
+			exheaders.Host = uriList[1] + '.' + exheaders.Host;
+			let requestUri = uri.replace(uriList[1], '');
+			if(requestUri.indexOf('//') === 0){
+				requestUri = requestUri.slice(1);
+			}
+			
+			if(signatureContext.signature === 'v4'){
+				uri = requestUri;
+			}else if(requestUri === '/'){
+				uri += '/';
+			}
+			opt.requestUri = encodeURIWithSafe(requestUri, '/');
+		}
+	}
+	
+	opt.method = method;
+	opt.uri = encodeURIWithSafe(uri, '/');
+	opt.urlPath = urlPath;
+	if(xml){
+		if(!(xml instanceof streamLib.Readable)){
+			let body = Buffer.from(String(xml), 'utf8');
+			if(model.data && model.data.md5){
+				exheaders['Content-MD5'] = this.bufMD5(body);
+			}
+			exheaders['Content-Length'] = body.length === 0 ? '0' : String(body.length);
+		}
+		opt.xml = xml;
+		if(this.log.isLevelEnabled('debug')){
+			this.log.runLog('debug', methodName, 'request content:' + xml);
+		}
+	}
+	opt.headers = exheaders;
+	
+	if('srcFile' in opt){
+		if (!fs.existsSync(opt.srcFile)) {
+			opt.err = 'the file [' + opt.srcFile + '] is not exist!';
+			if(this.log.isLevelEnabled('error')){
+				this.log.runLog('error', methodName, opt.err);
+			}
+			return opt;
+		}
+		
+		let fileSize = fs.statSync(opt.srcFile).size;
+		if ('Content-Length' in opt.headers || 'PartSize' in opt || 'Offset' in opt) {
+			let offset = opt.Offset;
+			offset = (offset && offset >= 0 && offset < fileSize) ? offset : 0;
+			let partSize;
+			if('PartSize' in opt){
+				partSize = opt.PartSize;
+			}else if('Content-Length' in opt.headers){
+				partSize = parseInt(opt.headers['Content-Length'], 10);
+			}else{
+				partSize = fileSize;
+			}
+			partSize = (partSize && partSize > 0 && partSize <= fileSize - offset) ? partSize : fileSize - offset;
+			opt.PartSize = partSize;
+			opt.Offset = offset;
+			opt.headers['Content-Length'] = String(opt.PartSize);
+		}
+	}else if('PartSize' in opt){
+		opt.headers['Content-Length'] = String(opt.PartSize);
+	}
+
+	return opt;
+};
+
+Utils.prototype.sendRequest = function(funcName, opt, bc, retryCount){
+	if(retryCount === undefined){
+		retryCount = 1;
+	}
+	let that = this;
+	let readable = opt.xml instanceof streamLib.Readable || opt.ProgressCallback;
+	that.makeRequest(funcName, opt, retryCount, function(err, msg){
+		if(err){
+			if(err.message === 'redirect'){
+				let uri = urlLib.parse(err.location);
+				opt.headers.Host = uri.hostname;
+				opt.protocol = uri.protocol;
+				opt.port = uri.port || ((opt.protocol && opt.protocol.toLowerCase().indexOf('https') === 0) ? 443 : 80);
+				that.sendRequest(funcName, opt, bc, retryCount + 1);
+				return;
+			}
+			
+			if(err.message !== 'pause' && !readable && msg !== 'PREMATURE_END' && msg !== 'SELF_SIGNED_CERT_IN_CHAIN' && msg !== 'DEPTH_ZERO_SELF_SIGNED_CERT' && retryCount <= that.maxRetryCount){
+				that.sendRequest(funcName, opt, bc, retryCount + 1);
+				return;
+			}
+		}
+		bc(err, msg);
+	});
+};
+
+Utils.prototype.doAuth = function(opt, methodName, signatureContext) {
+	let interestHeader = ['Content-MD5', 'Content-Type', 'Date'];
+	let log = this.log;
+	
+	let hasSecurityToken = false;
+	let securityToken = '';
+
+	let stringToSign = opt.method + '\n';
+	for(let i=0;i<interestHeader.length;i++){
+		if(interestHeader[i] in opt.headers){
+			stringToSign += opt.headers[interestHeader[i]];
+		}
+		stringToSign += '\n';
+	}
+
+	let temp = [];
+	for(let originKey of Object.keys(opt.headers)){
+		let lowerKey = originKey.toLowerCase();
+		if (lowerKey.indexOf(signatureContext.headerPrefix) === 0){
+			temp.push({
+				key: lowerKey,
+				value: opt.headers[originKey]
+			});
+		}
+		// 单独处理SecurityToken
+		if (!hasSecurityToken && lowerKey === signatureContext.stsToken) {
+			hasSecurityToken = true;
+			securityToken = opt.headers[originKey];
+		}
+	}
+	temp = temp.sort(function (obj1, obj2) {
+		if (obj1.key < obj2.key) {
+			return -1;
+		}
+		if (obj1.key > obj2.key) {
+			return 1;
+		}
+		return 0;
+	});
+	for(let i=0;i<temp.length;i++){
+		let key = temp[i].key;
+		let val = key.indexOf(signatureContext.headerMetaPrefix) === 0  ? temp[i].value.trim() : temp[i].value;
+		stringToSign += key + ':' + val + '\n';
+	}
+
+	let path = opt.uri;
+	if(this.isCname){
+		if(path === '/'){
+			path += opt.headers.Host + '/';
+		}else if(path.indexOf('/') === 0){
+			path = '/' + opt.headers.Host + path;
+		}
+	}
+	if(opt.urlPath){
+		let _path = opt.urlPath.slice(1);
+		let arrPath = _path.split('&').sort();
+		let urlPath = '';
+		for(let i=0;i<arrPath.length;i++){
+			let listvar = arrPath[i].split('=');
+			let key = decodeURIComponent(listvar[0]);
+			if(allowedResourceParameterNames.indexOf(key.toLowerCase()) >= 0){
+				urlPath += urlPath === '' ?  '?' : '&';
+				urlPath += key;
+				if(listvar.length === 2 && listvar[1]){
+					urlPath += '=' + decodeURIComponent(listvar[1]);
+				}
+			}
+		}
+		path += urlPath;
+	}
+	stringToSign += path;
+
+	let logStringToSign = stringToSign;
+	if (hasSecurityToken) {
+		logStringToSign = logStringToSign.replace(securityToken, '*****');
+	}
+
+	if(log.isLevelEnabled('debug')){
+		log.runLog('debug',methodName, 'stringToSign:' + logStringToSign);
+	}
+	opt.headers.Authorization = signatureContext.authPrefix + ' ' + this.ak + ':' + crypto.createHmac('sha1', this.sk).update(stringToSign).digest('base64');
+};
+
+Utils.prototype.v4Auth = function(opt, methodName, signatureContext){
+	opt.headers[signatureContext.headerPrefix + 'content-sha256'] = CONTENT_SHA256;
+	let header = opt.headers;
+	let log = this.log;
+	let shortDate = null;
+	let longDate = null;
+	
+	if(signatureContext.headerPrefix + 'date' in header){
+		longDate = header[signatureContext.headerPrefix + 'date'];
+		shortDate = longDate.slice(0, longDate.indexOf('T'));
+	}else{
+		let dates = getDates(header.Date);
+		shortDate = dates[0];
+		longDate = dates[1];
+	}
+	
+	let credential = this.ak + '/' + shortDate + '/' + this.region + '/s3/aws4_request';
+	
+	let signedAndCanonicalHeaders = getSignedAndCanonicalHeaders(header);
+	
+	let signedHeaders = signedAndCanonicalHeaders[0];
+	let canonicalHeaders = signedAndCanonicalHeaders[1];
+	
+	let canonicalQueryString = '';
+	if(opt.urlPath){
+		let path = opt.urlPath.slice(1);
+		let arrPath = path.split('&').sort();
+		for(let i=0;i<arrPath.length;i++){
+			canonicalQueryString += arrPath[i];
+			if(arrPath[i].indexOf('=') === -1){
+				canonicalQueryString += '=';
+			}
+			if(i !== arrPath.length -1){
+				canonicalQueryString += '&';
+			}
+		}
+	}
+	let canonicalRequest = opt.method + '\n';
+	canonicalRequest += opt.uri +  '\n';
+	canonicalRequest += canonicalQueryString + '\n';
+	canonicalRequest +=  canonicalHeaders + '\n';
+	canonicalRequest += signedHeaders + '\n';
+	canonicalRequest += CONTENT_SHA256;
+	
+	if(log.isLevelEnabled('debug')){
+		log.runLog('debug',methodName, 'canonicalRequest:' + canonicalRequest);
+	}
+	let signature = getV4Signature(shortDate, longDate, this.sk, this.region, canonicalRequest);
+	
+	opt.headers.Authorization = 'AWS4-HMAC-SHA256 Credential=' + credential + ',SignedHeaders=' + signedHeaders + ',Signature=' + signature;
+};
+
+Utils.prototype.parseCommonHeaders = function(opt, headers, signatureContext){
+	for(let key in commonHeaders){
+		if ({}.hasOwnProperty.call(commonHeaders, key)) {
+			opt.InterfaceResult[commonHeaders[key]] = headers[key];
+		}
+	}
+	opt.InterfaceResult.RequestId = headers[signatureContext.headerPrefix + 'request-id'];
+	opt.InterfaceResult.Id2 = headers[signatureContext.headerPrefix + 'id-2'];
+	opt.CommonMsg.RequestId = opt.InterfaceResult.RequestId;
+	opt.CommonMsg.Id2 = opt.InterfaceResult.Id2;
+};
+
+Utils.prototype.contrustCommonMsg = function(opt, obj, headers, methodName, signatureContext){
+	opt.InterfaceResult = {};
+	let log = this.log;
+	this.parseCommonHeaders(opt, headers, signatureContext);
+	
+	if(log.isLevelEnabled('info')){
+		log.runLog('info', methodName, 'request finished with request id:' + opt.InterfaceResult.RequestId);
+	}
+	for (let key in obj){
+		if(obj[key].location !== 'header'){
+			continue;
+		}
+		let sentAs = obj[key].sentAs || key;
+		
+		if(obj[key].withPrefix){
+			sentAs = signatureContext.headerPrefix + sentAs;
+		}
+		
+		if(obj[key].type === 'object'){
+			opt.InterfaceResult[key] = parseObjectFromHeaders(sentAs, headers);
+			continue;
+		}
+		let val = headers[sentAs];
+		
+		
+		if(val === undefined){
+			val = headers[sentAs.toLowerCase()];
+		}
+		if(val !== undefined){
+			opt.InterfaceResult[key] = val;
+		}
+	}
+};
+
+Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStream, readable, signatureContext, retryCount, doAbort, bc, progressCallback){
+	let opt = {};
+	let log = this.log;
+	let model = signatureContext.signature === 'obs' ? obsModel[methodName + 'Output'] : v2Model[methodName + 'Output'];
+	model = model || {};
+	let obj = model.parameters || {};
+    let headers = serverback.headers;
+	opt.CommonMsg = {
+		Status : serverback.statusCode,
+		Code : headers[signatureContext.headerPrefix + 'error-code'] || '',
+		Message : headers[signatureContext.headerPrefix + 'error-message'] || '',
+		HostId : '',
+		RequestId : '',
+		InterfaceResult : null
+	};
+	if (this.thirdHttpLib) {
+		for (let key in headers){
+		    if ({}.hasOwnProperty.call(headers, key)){
+		    	if (isArray(headers[key]) && headers[key].length === 1) {
+		    		headers[key] = headers[key][0];
+		    	}
+		    }
+		}
+	}
+	if(log.isLevelEnabled('info')){
+		log.runLog('info', methodName, 'get response start, statusCode:' + serverback.statusCode);
+	}
+	if(log.isLevelEnabled('debug')){
+		log.runLog('debug', methodName, 'response msg :statusCode:' + serverback.statusCode + ', headers:' + headerTostring(headers));
+	}
+	
+	let doLog = function(){
+		if(log.isLevelEnabled('debug')){
+			let logMsg = 'Status:' + opt.CommonMsg.Status + ', Code:' + opt.CommonMsg.Code + ', Message:' + opt.CommonMsg.Message;
+			log.runLog('debug', methodName, 'exec interface ' + methodName + ' finish, ' + logMsg);
+		}
+		bc(null,opt);
+	};
+	let that = this;
+	
+	if(serverback.statusCode >= 300 && serverback.statusCode < 400 && serverback.statusCode !== 304 && !readable && retryCount <= that.maxRetryCount){
+		let location = headers.location || headers.Location;
+		if(location){
+			serverback.req.removeAllListeners('abort');
+			serverback.req.abort();
+			doAbort();
+			if(log.isLevelEnabled('warn')){
+				let err = 'http code is 3xx, need to redirect to ' + location;
+				log.runLog('warn', methodName, err);
+			}
+			let redirectErr = new Error('redirect');
+			redirectErr.location = location;
+			return bc(redirectErr);
+		}
+		if(log.isLevelEnabled('error')){
+			log.runLog('error', methodName, 'get redirect code 3xx, but no location in headers');
+		}
+	} 
+	
+	if(serverback.statusCode < 300){
+		let getCount = 0
+		let objectTotalSize = headers['content-length']
+		let writeStart = new Date().getTime();
+		let progressListener = null
+		if(dstFile){
+			let fileDir = pathLib.dirname(dstFile);
+			if(!mkdirsSync(fileDir)){
+				return bc(new Error('failed to create file:' + dstFile), null);
+			}
+			// 下载进度回调
+			if(progressCallback){
+				progressListener = function(data){
+					getCount += data.length;
+					progressCallback(getCount, objectTotalSize, (new Date().getTime()-writeStart)/1000, data);
+				};
+				serverback.on('data', progressListener)
+			}
+			
+			let stream = fs.createWriteStream(dstFile);
+			stream.once('close', function(){
+				if(opt.InterfaceResult && opt.InterfaceResult.ContentLength !== undefined && fs.existsSync(dstFile)){
+					let fstat = fs.statSync(dstFile);
+					if(fstat.size !== parseInt(opt.InterfaceResult.ContentLength, 10)){
+						return bc(new Error('premature end of Content-Length delimiter message body (expected:' + opt.InterfaceResult.ContentLength + '; received:' + fstat.size + ')'), 'PREMATURE_END');
+					}
+				}
+				doLog();
+			}).once('error', function(err){
+				if(log.isLevelEnabled('error')){
+					log.runLog('error', methodName, 'get response stream error [' + headerTostring(err) + ']');
+				}
+				bc(err, null);
+			});
+			
+			serverback.once('error', function(err){
+				stream.end();
+				if(log.isLevelEnabled('error')){
+					log.runLog('error', methodName, 'get response stream error [' + headerTostring(err) + ']');
+				}
+				bc(err, null);
+			}).once('end', function(){
+				stream.end();
+				that.contrustCommonMsg(opt, obj, headers, methodName, signatureContext);
+				if(log.isLevelEnabled('debug')){
+					log.runLog('debug', methodName, 'exec interface ' + methodName + ' finish, Status:' + opt['CommonMsg']['Status'] + ', Code: ,Message: ');
+				}
+			}).pipe(stream);
+			return;
+		}
+		if(('data' in model) && saveAsStream){
+			// 下载进度回调
+			if(progressCallback){
+				progressListener = function(data){
+					getCount += data.length;
+					progressCallback(getCount, objectTotalSize, (new Date().getTime()-writeStart)/1000, data);
+				};
+				serverback.on('data', progressListener)
+			}
+			that.contrustCommonMsg(opt, obj, headers, methodName, signatureContext);
+			if(log.isLevelEnabled('debug')){
+				let respMsg = 'Status: ' + opt.CommonMsg.Status + ', headers: ' +  headerTostring(headers);
+				log.runLog('debug', methodName, respMsg);
+			}
+			
+			for (let key in obj){
+				if(obj[key].location !== 'body'){
+					continue;
+				}
+				opt.InterfaceResult[key] = serverback;
+				break;
+			}
+			return doLog();
+		}
+	}
+	
+	let body = [];
+	serverback.on('data', function(data) {
+		body.push(data);
+	}).once('error', function(err){
+		if(log.isLevelEnabled('error')){
+			log.runLog('error', methodName, 'get response stream error [' + headerTostring(err) + ']');
+		}
+		bc(err, null);
+	}).once('end', function() {
+		body = Buffer.concat(body);
+		
+		if(serverback.statusCode < 300){
+			if(log.isLevelEnabled('debug')){
+				let respMsg = 'Status: ' + opt.CommonMsg.Status + ', headers: ' +  headerTostring(headers);
+				if(body.length > 0){
+					respMsg += 'body length: ' + body.length;
+					log.runLog('debug', methodName, 'response body length:' + body.length);
+				}
+				log.runLog('debug', methodName, respMsg);
+			}
+			that.contrustCommonMsg(opt, obj, headers, methodName, signatureContext);
+			
+			if(body.length > 0 && ('data' in model)){
+				if(model.data.type === 'xml'){
+					return makeObjFromXml(body, methodName, log, function(err, result){
+						if(err){
+							if(log.isLevelEnabled('error')){
+								log.runLog('error', methodName, 'change xml to json err [' + headerTostring(err) + ']' );
+							}
+							return bc(err, null);
+						}
+						let tempResult = result;
+						if(model.data.xmlRoot && (model.data.xmlRoot in tempResult)){
+							tempResult = result[model.data.xmlRoot];
+						}
+						let ifRootXMlDecode = tempResult.EncodingType ? true : false;
+						if(isObject(tempResult)){
+							for (let key in obj){
+								if(obj[key].location === 'xml'){
+									opt.InterfaceResult[key] = that.jsonToObject(obj, tempResult, key, ifRootXMlDecode)[key];
+								}
+							}
+						}
+						doLog();
+					});
+				}
+				
+				if(model.data.type === 'body'){
+					for (let key in obj){
+						if(obj[key].location === 'body'){
+							opt.InterfaceResult[key] = body.toString('utf8');
+							break;
+						}
+					}
+				}
+			}
+			return doLog();
+		}
+		
+		if(log.isLevelEnabled('debug')){
+			let respMsg = 'Status: ' + opt.CommonMsg.Status + ', headers: ' +  headerTostring(headers);
+			if(body.length > 0){
+				respMsg += 'body: ' + body;
+				log.runLog('debug', methodName, 'response body:' + body);
+			}
+			log.runLog('debug', methodName, respMsg);
+		}
+		
+		opt.CommonMsg.RequestId = headers[signatureContext.headerPrefix + 'request-id'];
+		opt.CommonMsg.Id2 = headers[signatureContext.headerPrefix + 'id2'];
+		opt.CommonMsg.Indicator = headers['x-reserved-indicator'];
+		if(log.isLevelEnabled('error')){
+			log.runLog('error', methodName, 'request error with http status code:' + serverback.statusCode);
+		}
+		
+		if(log.isLevelEnabled('info')){
+			log.runLog('info', methodName, 'request finished with request id:' + opt.CommonMsg.RequestId);
+		}
+		
+		if(body.length === 0){
+			return doLog();
+		}
+		
+		return makeObjFromXml(body, methodName, log, function(err, re){
+			if(err){
+				if(log.isLevelEnabled('error')){
+					log.runLog('error', methodName, 'change xml to json err [' + headerTostring(err) + ']' );
+				}
+				opt.CommonMsg.Message = err.message;
+			}else if(re && 'Error' in re){
+				let errMsg = re.Error;
+				opt.CommonMsg.Code = errMsg.Code;
+				opt.CommonMsg.Message = errMsg.Message;
+				opt.CommonMsg.HostId = errMsg.HostId;
+				if(errMsg.RequestId){
+					opt.CommonMsg.RequestId = errMsg.RequestId;
+				}
+				if(log.isLevelEnabled('error')){
+					log.runLog('error', methodName, 'request error with error code:' + opt.CommonMsg.Code + ', error message:' + opt.CommonMsg.Message + ', request id:' + opt.CommonMsg.RequestId);
+				}
+			}
+			doLog();
+		});
+	});
+	
+};
+
+function isMatchingPattern(host, pattern) {
+	const regex = new RegExp(pattern.replace(/\*/g, '.*'), 'i');
+	return regex.test(host);
+}
+
+function isValidStringInKb(str) {
+	const byte = new TextEncoder().encode(str).length;
+	// we convert bytes to KB
+	const kb = byte / 1024;
+	return kb
+}
+
+function checkCustomDomainCertificateParams(params,log,methodName,opt) {
+	//Validate Name
+	if (!params.Name || typeof params.Name !== 'string') {
+		opt.err =  !params.Name ? 'Name should be defined!' : 'Name should be string!';
+		if(log.isLevelEnabled('warn')){
+			log.runLog('warn', methodName, opt.err);
+		}
+		return opt;
+	}
+	if (params.Name.length < 3 || params.Name.length > 63) {
+		opt.err =  'The length of the Name should be between 3 and 63!';
+		if(log.isLevelEnabled('warn')){
+			log.runLog('warn', methodName, opt.err);
+		}
+		return opt;
+
+	}
+
+	//Validate CertificateId
+	if (params.CertificateId !== undefined) {
+		if (typeof params.CertificateId !== 'string') {
+			opt.err =  'CertificateId should be string!';
+			if(log.isLevelEnabled('warn')){
+				log.runLog('warn', methodName, opt.err);
+			}
+			return opt;
+		}
+		if (params.CertificateId.length !== 16) {
+			opt.err =  'The length of the CertificateId should be exacly 16!';
+			if(log.isLevelEnabled('warn')){
+				log.runLog('warn', methodName, opt.err);
+			}
+			return opt;
+		}
+	}
+
+	//Validate Certificate
+	if (!params.Certificate || typeof params.Certificate !== 'string') {
+		opt.err =  !params.Certificate ? 'Certificate should be defined!' : 'Certificate should be string!';
+			if(log.isLevelEnabled('warn')){
+				log.runLog('warn', methodName, opt.err);
+			}
+			return opt;
+	}
+
+	//Validate CertificateChain
+	if (params.CertificateChain !== undefined) {
+
+		if (typeof params.CertificateChain !== 'string') {
+			opt.err =  'CertificateChain should be string!';
+			if(log.isLevelEnabled('warn')){
+				log.runLog('warn', methodName, opt.err);
+			}
+			return opt;
+		}
+	}
+
+	//Validate PrivateKey
+	if (!params.PrivateKey || typeof params.PrivateKey !== 'string') {
+		opt.err = !params.PrivateKey ? 'PrivateKey should be defined!' : 'PrivateKey should be string!';
+			if(log.isLevelEnabled('warn')){
+				log.runLog('warn', methodName, opt.err);
+			}
+			return opt;
+	}
+}
+
+Utils.prototype.shouldUseProxy = function(requestUrl) {
+	if (this.noProxyList.length === 0) {
+		return true
+	}
+	return !this.noProxyList.some(pattern => isMatchingPattern(requestUrl, pattern));
+}
+
+Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
+	if (this.is_shadow_client) {
+		try {
+			await this.waitForCloudAllianceGetsReady();
+			await this.checkKeysExpiredAndRefresh()
+		} catch (error) {
+			return bc(error);
+		}
+	}
+
+	let log = this.log;
+	let body = opt.xml;
+	let readable = body instanceof streamLib.Readable;
+	let signatureContext = opt.signatureContext || this.signatureContext;
+	let nowDate = new Date();
+	opt.headers.Date = nowDate.toUTCString();
+	delete opt.headers.Authorization;// retry bug fix
+	
+	let ex = opt.headers;
+	let path = (opt.requestUri ? opt.requestUri : opt.uri) + opt.urlPath;
+	let method = opt.method;
+	
+	if (methodName === customDomainCertificateMethod && opt.xml !== undefined) {
+		if (isValidStringInKb(opt.xml) > 40) {
+			const err =  'Total XML body of Certificate should be equal or less than 40KB!';
+			if(log.isLevelEnabled('warn')){
+				log.runLog('warn', methodName, opt.err);
+			}
+			return bc(err);
+		}
+	}
+	if(this.ak && this.sk && methodName !== negotiateMethod){
+		if(this.securityToken){
+			opt.headers[signatureContext.headerPrefix + 'security-token'] = this.securityToken;
+		}
+	    if(signatureContext.signature === 'v4'){
+	    	this.v4Auth(opt, methodName, signatureContext); 
+	    }else{
+	    	this.doAuth(opt, methodName, signatureContext);
+	    }
+	}
+
+	ex['User-Agent'] = this.userAgent;
+	
+	if(log.isLevelEnabled('info')){
+		log.runLog('info', methodName, 'prepare request parameters ok, then start to send request to service');
+	}
+	if(log.isLevelEnabled('debug')){
+		let header_msg = {};
+		for (let key in ex){
+			if ({}.hasOwnProperty.call(ex, key)){
+				header_msg[key] = ex[key];
+			}
+		}
+		header_msg.Authorization = '****';
+		
+		if (header_msg[signatureContext.stsToken]) {
+			header_msg[signatureContext.stsToken] = '****';
+		}
+		
+		let msg = 'method:' + method + ', path:' + path + 'headers:' + headerTostring(header_msg);
+		if (body && !readable) {
+			msg += 'body:' + body;
+		}
+		log.runLog('debug', methodName, 'request msg:' + msg);
+	}
+	
+	let ca = null;
+	if(this.sslVerify && this.sslVerify !== true && fs.existsSync(String(this.sslVerify))){
+		ca = fs.readFileSync(String(this.sslVerify));
+	}
+	
+	let reopt = {
+		method : method,
+		host : ex.Host,
+		port : opt.port || this.port,
+		path : path,
+		ca : ca,
+		checkServerIdentity: function (host, cert) {
+		    return undefined; // do not verify hostname
+		},
+		rejectUnauthorized : this.sslVerify || false,
+		headers : ex,
+		highWaterMark : opt.$highWaterMark || null,
+	};
+
+	let requestPath = reopt.host + ':' + reopt.port + reopt.path;
+	
+	let start = nowDate.getTime();
+	
+	let _isSecure = opt.protocol ? opt.protocol.toLowerCase().indexOf('https') === 0 : this.isSecure;
+	
+	reopt.agent = _isSecure ? this.httpsAgent : this.httpAgent;
+	if (!this.shouldUseProxy(reopt.host) && reopt.agent.proxyUri) {
+		reopt.agent = null;
+	}
+	
+	let _http = _isSecure ? httpsLib : httpLib;
+	if (this.thirdHttpLib) {
+		_http = this.thirdHttpLib;
+	}
+	let req = _http.request(reopt);
+
+	if(opt.$requestHook){
+		opt.$requestHook(req);
+	}
+	
+	let that = this;
+	
+	let progressListener;
+	let errorListener;
+	let doAbort = function(){
+		if(body && (body instanceof streamLib.Readable)){
+			if(progressListener){
+				body.removeListener('data', progressListener);
+			}
+			if(errorListener){
+				body.removeListener('error', errorListener);
+			}
+			body.destroy();
+		}
+	};
+
+	if (!this.thirdHttpLib) {
+		req.setNoDelay(true);
+		req.setTimeout(this.timeout * 1000, function () {
+			doAbort();
+			bc(new TimedOutError(ex.Host));
+		});
+	}
+
+	req.once('response', function(serverback) {
+		if(log.isLevelEnabled('info')){
+			log.runLog('info', methodName, 'get http response for ' + requestPath +  ' cost ' +  (new Date().getTime() - start) + ' ms');
+		}
+		
+		if(opt.$responseHook){
+			opt.$responseHook(serverback);
+		}
+		that.getRequest(methodName, serverback, opt.dstFile, opt.SaveAsStream, readable, signatureContext, retryCount, doAbort, bc, opt.ProgressCallback);
+	}).once('error', function(err){
+		if(log.isLevelEnabled('error')){
+			log.runLog('error', methodName, 'Send request to service error [' + headerTostring(err) + ']');
+		}
+		if(log.isLevelEnabled('info')){
+			log.runLog('info', methodName, 'get http response for ' + requestPath + ' cost ' +  (new Date().getTime() - start) + ' ms');
+		}
+		if(!req.aborted){
+			bc(err);
+		}
+	}).once('abort', function(){
+		doAbort();
+		bc(new Error('pause'));
+	});
+	
+	if(log.isLevelEnabled('info')){
+		req.once('socket', function(socket){
+			if(log.isLevelEnabled('debug')){
+				socket.once('connect', function(){
+					log.runLog('debug', methodName, 'do http connect for ' + requestPath + ' cost ' +  (new Date().getTime() - start) + ' ms');
+				}).once('lookup', function(){
+					log.runLog('debug', methodName, 'dns resolve for ' + requestPath + ' cost ' +  (new Date().getTime() - start) + ' ms');
+				});
+			}
+			log.runLog('info', methodName, 'get tcp socket for ' + requestPath + ' cost ' +  (new Date().getTime() - start) + ' ms');
+		});
+	}
+	
+	if(['GET', 'HEAD', 'OPTIONS'].includes(method)){
+		return req.end();
+	}
+	
+	let progressCallback = opt.ProgressCallback;
+	let writeCount = 0;
+	let writeStart = new Date().getTime();
+
+	if(body){
+		if(!readable){
+			let data = String(body);
+			return req.end(data, function(){
+				if(progressCallback){
+					progressCallback(data.length, data.length, (new Date().getTime()-writeStart)/1000, data);
+				}
+			});
+		}
+		
+		errorListener = function(err){
+			req.removeAllListeners('abort');
+			req.abort();
+			doAbort();
+			if(log.isLevelEnabled('error')){
+				log.runLog('error', methodName, 'read file to send error [' + headerTostring(err) + ']');
+			}
+			bc(err);
+		};
+		
+		body.once('error', errorListener);
+		
+		let contentLength = ('ContentLength' in opt) ? parseInt(opt.ContentLength, 10) : -1;
+		
+		if(contentLength > 0 && body.end === Infinity){
+			body.end =  (body.start ? body.start : 0) + contentLength - 1;
+		}
+		
+		if(progressCallback){
+			progressListener = function(data){
+				writeCount += data.length;
+				progressCallback(writeCount, contentLength, (new Date().getTime()-writeStart)/1000, data);
+			};
+			body.on('data', progressListener);
+		}
+		
+		if(opt.$pipeHook){
+			return opt.$pipeHook(body, req);
+		}
+		return body.pipe(req);
+	}
+	
+	if(!('srcFile' in opt)){
+		return req.end();
+	}
+	
+	let stream = null;
+	let offset = opt.Offset >= 0 ? opt.Offset : 0;
+	if('PartSize' in opt){
+		stream = fs.createReadStream(opt.srcFile, {start:offset, end:offset + Math.max(parseInt(opt.PartSize, 10)-1, 0)});
+	}else if('ContentLength' in opt){
+		stream = fs.createReadStream(opt.srcFile, {start:offset, end:offset+Math.max(parseInt(opt.ContentLength, 10)-1, 0)});
+	}
+	
+	if(!stream){
+		stream = fs.createReadStream(opt.srcFile);
+	}
+	body = stream;
+	if(progressCallback){
+		let fileSize = fs.statSync(opt.srcFile).size;
+		progressListener = function(data){
+			writeCount += data.length;
+			progressCallback(writeCount, fileSize, (new Date().getTime()-writeStart)/1000);
+		}; 
+		stream.on('data', progressListener);
+	}
+	errorListener = function(err){
+		req.removeAllListeners('abort');
+		req.abort();
+		doAbort();
+		if(log.isLevelEnabled('error')){
+			log.runLog('error', methodName, 'read file to send error [' + headerTostring(err) + ']');
+		}
+		bc(err);
+	};
+	
+	stream.once('error', errorListener);
+	
+	if(opt.$pipeHook){
+		return opt.$pipeHook(stream, req);
+	}
+	stream.pipe(req);
+};
+
+Utils.prototype.bufMD5 = function(buf) {
+	return crypto.createHash('md5').update(buf).digest('base64');
+};
+
+Utils.prototype.fileMD5 = function (filePath, bc){
+	let stream = fs.createReadStream(filePath);
+	let sha = crypto.createHash('md5');
+	sha.on('finish', ()=>{
+		bc(null, sha.digest('base64'));
+	});
+	
+	stream.on('error',function(err){
+		sha.destroy();
+		bc(err);
+	}).on('data', function(data){
+		sha.update(data);
+	});
+};
+
+
+Utils.prototype.createSignedUrlSync = function(param){
+	return this.signatureContext.signature === 'v4' ? this.createV4SignedUrlSync(param) : this.createV2SignedUrlSync(param);
+};
+
+Utils.prototype.createV2SignedUrlSync = function(param){
+	param = param || {};
+	
+	let method = param.Method ? String(param.Method) : 'GET';
+	let bucketName = param.Bucket ? String(param.Bucket) : null;
+	let objectKey = param.Key ? String(param.Key) : null;
+	let specialParam = param.SpecialParam ? String(param.SpecialParam) : null;
+	
+	if(this.signatureContext.signature === 'obs' && specialParam === 'storagePolicy'){
+		specialParam = 'storageClass';
+	}else if(this.signatureContext.signature === 'v2' && specialParam === 'storageClass'){
+		specialParam = 'storagePolicy';
+	}
+
+	let policy = param.Policy ?  Buffer.from(String(param.Policy),'utf8').toString('base64') : null;
+	let prefix = param.Prefix ? String(param.Prefix) : null;
+	let expires = param.Expires ? parseInt(param.Expires, 10) : 300;
+	let headers = {};
+	if(param.Headers && (param.Headers instanceof Object) && !(param.Headers instanceof Array)){
+		for(let key in param.Headers){
+			if ({}.hasOwnProperty.call(param.Headers, key)) {
+				headers[key] = param.Headers[key];
+			}
+		}
+	}
+	
+	let queryParams = {};
+	if(param.QueryParams && (param.QueryParams instanceof Object) && !(param.QueryParams instanceof Array)){
+		for(let key in param.QueryParams){
+			if ({}.hasOwnProperty.call(param.QueryParams, key)) {
+				queryParams[key] = param.QueryParams[key];
+			}
+		}
+	}
+	
+	if(this.securityToken && !queryParams[this.signatureContext.headerPrefix + 'security-token']){
+		queryParams[this.signatureContext.headerPrefix + 'security-token'] = this.securityToken;
+	}
+
+	let isShareFolder = policy && prefix;
+	let result = '';
+	let resource = '';
+	let host = this.server;
+	if(this.isCname){
+		resource += '/' + host + '/';
+	}else if(bucketName){
+		resource += '/' + bucketName;
+		if(this.pathStyle){
+			result += '/' + bucketName;
+		}else{
+			host = bucketName + '.' + host;
+			resource += '/';
+		}
+	}
+	
+	headers.Host = host;
+	
+	if(objectKey){
+		objectKey = encodeURIWithSafe(objectKey, '/');
+		result += '/' + objectKey;
+		if(resource.lastIndexOf('/') !== resource.length - 1){
+			resource += '/';
+		}
+		resource += objectKey;
+	}
+	
+	if(resource === ''){
+		resource = '/';
+	}
+	
+	result += '?';
+	
+	if(specialParam){
+		queryParams[specialParam] = '';
+	}
+	
+	if(this.signatureContext.signature === 'v2'){
+		queryParams.AWSAccessKeyId = this.ak;
+	}else{
+		queryParams.AccessKeyId = this.ak;
+	}
+	
+	if(expires < 0){
+		expires = 300;
+	}
+	expires = parseInt(new Date().getTime() / 1000, 10) + expires;
+
+	if (isShareFolder) {
+		queryParams.Policy = policy;
+		queryParams.prefix = prefix;
+	} else {
+		queryParams.Expires = String(expires);
+	}
+
+	let interestHeaders = {};
+	for(let name in headers){
+		if ({}.hasOwnProperty.call(headers, name)) {
+			let key = String(name).toLowerCase();
+			if(key === 'content-type' || key === 'content-md5' || key.length > this.signatureContext.headerPrefix.length && key.slice(0,this.signatureContext.headerPrefix.length) === this.signatureContext.headerPrefix){
+				interestHeaders[key] = headers[name];
+			}
+		}
+	}
+	
+	let queryParamsKeys = [];
+	for(let key in queryParams){
+		if ({}.hasOwnProperty.call(queryParams, key)) {
+			queryParamsKeys.push(key);
+		}
+	}
+	queryParamsKeys.sort();
+	let flag = false;
+	let _resource = [];
+	let safeKey = isShareFolder ? '': '/';
+	for(let i=0;i<queryParamsKeys.length;i++){
+		let key = queryParamsKeys[i];
+		let val = queryParams[key];
+		key = encodeURIWithSafe(key, safeKey);
+		val = encodeURIWithSafe(val, safeKey);
+		result += key;
+		if(val){
+			result += '=' + val;
+		}
+		result += '&';
+		if (isShareFolder && key.toLocaleLowerCase() === 'policy') {
+			continue;
+		}
+		if(allowedResourceParameterNames.indexOf(key.toLowerCase())>=0 || key.toLowerCase().indexOf(this.signatureContext.headerPrefix) === 0){
+			flag = true;
+			let _val = val ? key + '=' + decodeURIComponent(val) : key;
+			_resource.push(_val);
+		}
+	}
+	_resource = _resource.join('&');
+	if(flag){
+		_resource = '?' + _resource;
+	}
+	resource += _resource;
+
+	let stringToSign = [method];
+	stringToSign.push('\n');
+	
+	if('content-md5' in interestHeaders){
+		stringToSign.push(interestHeaders['content-md5']);
+	}
+	stringToSign.push('\n');
+	
+	if('content-type' in interestHeaders){
+		stringToSign.push(interestHeaders['content-type']);
+	}
+
+	stringToSign.push('\n');
+	if (isShareFolder) {
+		stringToSign.push(policy);
+	} else {
+		stringToSign.push(String(expires));
+	}
+
+	stringToSign.push('\n');
+
+	let temp = [];
+	let i = 0;
+	for(let key in interestHeaders){
+		if ({}.hasOwnProperty.call(interestHeaders, key)){
+			if (key.length > this.signatureContext.headerPrefix.length && key.slice(0, this.signatureContext.headerPrefix.length) === this.signatureContext.headerPrefix){
+				temp[i++] = key;
+			}
+		}
+	}
+	temp = temp.sort();
+	for(let j=0;j<temp.length;j++){
+		stringToSign.push(temp[j]);
+		stringToSign.push(':');
+		stringToSign.push(interestHeaders[temp[j]]);
+		stringToSign.push('\n');
+	}
+
+	if (!isShareFolder) {
+		stringToSign.push(resource);
+	} else {
+		stringToSign.push(_resource);
+	}
+
+	let hmac = crypto.createHmac('sha1', this.sk);
+	hmac.update(stringToSign.join(''));
+	if (policy && prefix) {
+		result += 'Signature=' + encodeURIWithSafe(hmac.digest('base64'));
+	} else {
+		result += 'Signature=' + encodeURIWithSafe(hmac.digest('base64'), '/');
+	}
+
+	return {
+		ActualSignedRequestHeaders : headers,
+		SignedUrl : (this.isSecure ? 'https' : 'http') + '://' + host + ':' + this.port + result
+	};
+};
+
+Utils.prototype.createV4SignedUrlSync = function(param){
+	param = param || {};
+
+	let method = param.Method ? String(param.Method) : 'GET';
+	let bucketName = param.Bucket ? String(param.Bucket) : null;
+	let objectKey = param.Key ? String(param.Key) : null;
+	let specialParam = param.SpecialParam ? String(param.SpecialParam) : null;
+	
+	if(specialParam === 'storageClass'){
+		specialParam = 'storagePolicy';
+	}
+
+	let expires = param.Expires ? parseInt(param.Expires, 10) : 300;
+	let headers = {};
+	if(param.Headers && (param.Headers instanceof Object) && !(param.Headers instanceof Array)){
+		for(let key in param.Headers){
+			if ({}.hasOwnProperty.call(param.Headers, key)) {
+				headers[key] = param.Headers[key];
+			}
+		}
+	}
+	
+	let queryParams = {};
+	if(param.QueryParams && (param.QueryParams instanceof Object) && !(param.QueryParams instanceof Array)){
+		for(let key in param.QueryParams){
+			if ({}.hasOwnProperty.call(param.QueryParams, key)) {
+				queryParams[key] = param.QueryParams[key];
+			}
+		}
+	}
+	
+	if(this.securityToken && !queryParams[this.signatureContext.headerPrefix + 'security-token']){
+		queryParams[this.signatureContext.headerPrefix + 'security-token'] = this.securityToken;
+	}
+			
+	let result = '';
+	let resource = '';
+	let host = this.server;
+	if(bucketName){
+		if(this.pathStyle){
+			result += '/' + bucketName;
+			resource += '/' + bucketName;
+		}else{
+			host = bucketName + '.' + host;
+		}
+	}
+	
+	if(objectKey){
+		objectKey = encodeURIWithSafe(objectKey, '/');
+		result += '/' + objectKey;
+		resource += '/' + objectKey;
+	}
+	
+	if(resource === ''){
+		resource = '/';
+	}
+	
+	result += '?';
+	
+	if(specialParam){
+		queryParams[specialParam] = '';
+	}
+	
+	if(expires < 0){
+		expires = 300;
+	}
+
+	let utcDateStr = headers.date || headers.Date || new Date().toUTCString();
+	
+	let dates = getDates(utcDateStr);
+	let shortDate = dates[0];
+	let longDate = dates[1];
+	
+	headers.Host = host + ((this.port === 80 || this.port === 443) ? '' : ':' + this.port);
+	
+	
+	queryParams['X-Amz-Algorithm'] = 'AWS4-HMAC-SHA256';
+	queryParams['X-Amz-Credential'] = this.ak + '/' + shortDate + '/' + this.region + '/s3/aws4_request';
+	queryParams['X-Amz-Date'] = longDate;
+	queryParams['X-Amz-Expires'] = String(expires);
+	
+    let signedAndCanonicalHeaders = getSignedAndCanonicalHeaders(headers);
+	
+	queryParams['X-Amz-SignedHeaders'] = signedAndCanonicalHeaders[0];
+	
+	let _queryParams = {};
+	let queryParamsKeys = [];
+	for(let key in queryParams){
+		if ({}.hasOwnProperty.call(queryParams, key)){
+			let val = queryParams[key];
+			key = encodeURIWithSafe(key, '/');
+			val = encodeURIWithSafe(val);
+			_queryParams[key] = val;
+			queryParamsKeys.push(key);
+			result += key;
+			if(val){
+				result += '=' + val;
+			}
+			result += '&';
+		}
+	}
+	
+	let canonicalQueryString = '';
+	
+	queryParamsKeys.sort();
+	
+	for(let i=0;i<queryParamsKeys.length;){
+		canonicalQueryString += queryParamsKeys[i] + '=' + _queryParams[queryParamsKeys[i]];
+		if(++i !== queryParamsKeys.length){
+			canonicalQueryString += '&';
+		}
+	}
+	
+	let canonicalRequest = method + '\n';
+	canonicalRequest += resource +  '\n';
+	canonicalRequest += canonicalQueryString + '\n';
+	canonicalRequest += signedAndCanonicalHeaders[1] + '\n';
+	canonicalRequest += signedAndCanonicalHeaders[0] + '\n';
+	canonicalRequest += 'UNSIGNED-PAYLOAD';
+	
+	let signature = getV4Signature(shortDate, longDate, this.sk, this.region, canonicalRequest);
+	
+	result += 'X-Amz-Signature=' + encodeURIWithSafe(signature);
+	
+	return {
+		ActualSignedRequestHeaders : headers,
+		SignedUrl : (this.isSecure ? 'https' : 'http') + '://' + host + ':' + this.port + result
+	};
+			
+};
+
+
+Utils.prototype.createPostSignatureSync = function(param){
+	
+	if(this.signatureContext.signature === 'v4'){
+		return this.createV4PostSignatureSync(param);
+	}
+	
+	param = param || {};
+	let bucketName = param.Bucket ? String(param.Bucket) : null;
+	let objectKey = param.Key ? String(param.Key) : null;
+	let expires = param.Expires ? parseInt(param.Expires, 10) : 300;
+	let formParams = {};
+	
+	if(param.FormParams && (param.FormParams instanceof Object) && !(param.FormParams instanceof Array)){
+		for(let key in param.FormParams){
+			if ({}.hasOwnProperty.call(param.FormParams, key)){
+				formParams[key] = param.FormParams[key];
+			}
+		}
+	}
+	
+	if(this.securityToken && !formParams[this.signatureContext.headerPrefix + 'security-token']){
+		formParams[this.signatureContext.headerPrefix + 'security-token'] = this.securityToken;
+	}
+	
+	let expireDate = new Date();
+	expireDate.setTime(parseInt(new Date().getTime(), 10) + expires * 1000);
+	expireDate = getExpireDate(expireDate.toUTCString());
+	
+	if(bucketName){
+		formParams.bucket = bucketName;
+	}
+	
+	if(objectKey){
+		formParams.key = objectKey;
+	}
+	
+	let policy = [];
+	policy.push('{"expiration":"');
+	policy.push(expireDate);
+	policy.push('", "conditions":[');
+	
+	let matchAnyBucket = true;
+	let matchAnyKey = true;
+	
+	let conditionAllowKeys = ['acl', 'bucket', 'key', 'success_action_redirect', 'redirect', 'success_action_status'];
+	
+	for(let key in formParams){
+		if ({}.hasOwnProperty.call(formParams, key)){
+			if(!key){
+				continue;
+			}
+			let val = formParams[key];
+			key = String(key).toLowerCase();
+
+			if(key === 'bucket'){
+				matchAnyBucket = false;
+			}else if(key === 'key'){
+				matchAnyKey = false;
+			}
+
+			if(allowedResponseHttpHeaderMetadataNames.indexOf(key) < 0 && conditionAllowKeys.indexOf(key) < 0 && key.indexOf(this.signatureContext.headerPrefix) !== 0){
+				continue;
+			}
+
+			policy.push('{"');
+			policy.push(key);
+			policy.push('":"');
+			policy.push(val !== null ? String(val) : '');
+			policy.push('"},');
+		}
+	}
+	
+	
+	if(matchAnyBucket){
+		policy.push('["starts-with", "$bucket", ""],');
+	}
+	
+	if(matchAnyKey){
+		policy.push('["starts-with", "$key", ""],');
+	}
+	
+	// 去除末尾的逗号
+	let originPolicy = policy.join('').replace(/,$/, '') + ']}';
+	
+	policy = Buffer.from(originPolicy,'utf8').toString('base64');
+	
+	let signature = crypto.createHmac('sha1', this.sk).update(policy).digest('base64');
+	
+	return {
+		OriginPolicy : originPolicy,
+		Policy : policy,
+		Signature : signature,
+		Token : this.ak + ':' + signature + ':' + policy
+	};
+};
+
+
+Utils.prototype.createV4PostSignatureSync = function(param){
+	param = param || {};
+	
+	let bucketName = param.Bucket ? String(param.Bucket) : null;
+	let objectKey = param.Key ? String(param.Key) : null;
+	let expires = param.Expires ? parseInt(param.Expires, 10) : 300;
+	let formParams = {};
+	
+	if(param.FormParams && (param.FormParams instanceof Object) && !(param.FormParams instanceof Array)){
+		for(let key in param.FormParams){
+			if ({}.hasOwnProperty.call(param.FormParams, key)) {
+				formParams[key] = param.FormParams[key];
+			}
+		}
+	}
+	
+	if(this.securityToken && !formParams[this.signatureContext.headerPrefix + 'security-token']){
+		formParams[this.signatureContext.headerPrefix + 'security-token'] = this.securityToken;
+	}
+	
+	let utcDateStr = new Date().toUTCString();
+	let dates = getDates(utcDateStr);
+	let shortDate = dates[0];
+	let longDate = dates[1];
+	
+	let credential = this.ak + '/' + shortDate + '/' + this.region + '/s3/aws4_request';
+	
+	let expireDate = new Date();
+	expireDate.setTime(parseInt(new Date().getTime(), 10) + expires * 1000);
+	
+	expireDate = getExpireDate(expireDate.toUTCString());
+	
+	formParams['X-Amz-Algorithm'] = 'AWS4-HMAC-SHA256';
+	formParams['X-Amz-Date'] = longDate;
+	formParams['X-Amz-Credential'] = credential;
+	
+	if(bucketName){
+		formParams.bucket = bucketName;
+	}
+	
+	if(objectKey){
+		formParams.key = objectKey;
+	}
+	
+	let policy = [];
+	policy.push('{"expiration":"');
+	policy.push(expireDate);
+	policy.push('", "conditions":[');
+	
+	let matchAnyBucket = true;
+	let matchAnyKey = true;
+	
+	let conditionAllowKeys = ['acl', 'bucket', 'key', 'success_action_redirect', 'redirect', 'success_action_status'];
+	
+	for(let key in formParams){
+		if(!key){
+			continue;
+		}
+		let val = formParams[key];
+		key = String(key).toLowerCase();
+		
+		if(key === 'bucket'){
+			matchAnyBucket = false;
+		}else if(key === 'key'){
+			matchAnyKey = false;
+		}
+		
+		if(allowedResponseHttpHeaderMetadataNames.indexOf(key) < 0 && conditionAllowKeys.indexOf(key) < 0 && key.indexOf(this.signatureContext.headerPrefix) !== 0){
+			continue;
+		}
+		
+		policy.push('{"');
+		policy.push(key);
+		policy.push('":"');
+		policy.push(val !== null ? String(val) : '');
+		policy.push('"},');
+	}
+	
+	if(matchAnyBucket){
+		policy.push('["starts-with", "$bucket", ""],');
+	}
+	
+	if(matchAnyKey){
+		policy.push('["starts-with", "$key", ""],');
+	}
+	
+	policy.push(']}');
+	
+	let originPolicy = policy.join('');
+	
+	policy = Buffer.from(originPolicy,'utf8').toString('base64');
+	
+	let signature = createV4Signature(shortDate, this.sk, this.region, policy);
+	
+	return {
+		OriginPolicy : originPolicy,
+		Policy : policy,
+		Algorithm : formParams['X-Amz-Algorithm'],
+		Credential : formParams['X-Amz-Credential'],
+		Date : formParams['X-Amz-Date'],
+		Signature : signature
+	};
+};
+
+module.exports = Utils;
+
+
+/***/ }),
+
+/***/ 5755:
+/***/ ((module) => {
+
+/**
+ * Copyright 2019 Huawei Technologies Co.,Ltd.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed
+ * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ */
+
+const owner = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'Owner',
+	'parameters' : {
+		'ID' : {
+			'sentAs' : 'ID',
+		},
+		'Name' : {
+			'sentAs' : 'DisplayName'
+		}
+	}
+};
+
+const initiator = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'Initiator',
+	'parameters' : {
+		'ID' : {
+			'sentAs' : 'ID',
+		},
+		'Name' : {
+			'sentAs' : 'DisplayName',
+		},
+	},
+};
+const commonPrefixes = {
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'CommonPrefixes',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'Prefix' : {
+				'decode' : true,
+				'sentAs' : 'Prefix',
+			},
+		}
+	}
+};
+
+const grants = {
+	'type' : 'array',
+	'location' : 'xml',
+	'wrapper' : 'AccessControlList',
+	'sentAs' : 'Grant',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'Grantee' : {
+				'data' : {
+					'xsiNamespace' : 'http://www.w3.org/2001/XMLSchema-instance',
+					'xsiType' : 'Type',
+				},
+				'type' : 'object',
+				'sentAs' : 'Grantee',
+				'parameters' : {
+					'Type' : {
+						'type' : 'ignore',
+					},
+					'ID' : {
+						'sentAs' : 'ID',
+						'notAllowEmpty' : true,
+					},
+					'Name' : {
+						'sentAs' : 'DisplayName',
+						'notAllowEmpty' : true,
+					},
+					'URI' : {
+						'sentAs' :  'URI',
+						'type' : 'adapter',
+						'notAllowEmpty' : true,
+					}
+				},
+			},
+			'Permission' : {
+				'sentAs' : 'Permission',
+			},
+		},
+	},
+};
+
+const loggingEnabled = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'LoggingEnabled',
+	'parameters' : {
+		'TargetBucket' : {
+			'sentAs' : 'TargetBucket',
+		},
+		'TargetPrefix' : {
+			'sentAs' : 'TargetPrefix',
+		},
+		'TargetGrants' : {
+			'type' : 'array',
+			'wrapper' : 'TargetGrants',
+			'sentAs' : 'Grant',
+			'items' : {
+				'type' : 'object',
+				'parameters' : {
+					'Grantee' : {
+						'data' : {
+							'xsiNamespace' : 'http://www.w3.org/2001/XMLSchema-instance',
+							'xsiType' : 'Type',
+						},
+						'type' : 'object',
+						'sentAs' : 'Grantee',
+						'parameters' : {
+							'Type' : {
+								'type' : 'ignore',
+							},
+							'ID' : {
+								'sentAs' : 'ID',
+							},
+							'Name' : {
+								'sentAs' : 'DisplayName',
+							},
+							'URI' : {
+								'sentAs' :  'URI',
+								'type' : 'adapter'
+							}
+						},
+					},
+					'Permission' : {
+						'sentAs' : 'Permission',
+					},
+				},
+			},
+		},
+	},
+};
+
+const rules = {
+	'required' : true,
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'Rule',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'ID' : {
+				'sentAs' : 'ID',
+			},
+			'Prefix' : {
+				'sentAs' : 'Prefix',
+			},
+			'Status' : {
+				'sentAs' : 'Status',
+			},
+			'Transitions' : {
+				'type' : 'array',
+				'sentAs' : 'Transition',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'StorageClass' :{
+							'sentAs' : 'StorageClass',
+							'type' : 'adapter'
+						},
+						'Date' : {
+							'sentAs' : 'Date',
+						},
+						'Days' : {
+							'type' : 'number',
+							'sentAs' : 'Days'
+						}
+					}
+				}
+			},
+			'Expiration' : {
+				'type' : 'object',
+				'sentAs' : 'Expiration',
+				'parameters' : {
+					'Date' : {
+						'sentAs' : 'Date',
+					},
+					'Days' : {
+						'type' : 'number',
+						'sentAs' : 'Days'
+					},
+				},
+			},
+			'NoncurrentVersionTransitions' :{
+				'type' : 'array',
+				'sentAs' : 'NoncurrentVersionTransition',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'StorageClass' :{
+							'sentAs' : 'StorageClass',
+							'type' : 'adapter'
+						},
+						'NoncurrentDays' : {
+							'type' : 'number',
+							'sentAs' : 'NoncurrentDays'
+						}
+					}
+				}
+			},
+			'NoncurrentVersionExpiration' : {
+				'type' : 'object',
+				'sentAs' : 'NoncurrentVersionExpiration',
+				'parameters' : {
+					'NoncurrentDays' : {
+						'type' : 'number',
+						'sentAs' : 'NoncurrentDays',
+					},
+				},
+			}
+		},
+	},
+};
+
+const redirectAllRequestsTo = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'RedirectAllRequestsTo',
+	'parameters' : {
+		'HostName' : {
+			'sentAs' : 'HostName',
+		},
+		'Protocol' : {
+			'sentAs' : 'Protocol',
+		},
+	}
+};
+
+const routingRules = {
+	'type' : 'array',
+	'wrapper' : 'RoutingRules',
+	'location' : 'xml',
+	'sentAs' : 'RoutingRule',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'Condition' : {
+				'type' : 'object',
+				'sentAs' : 'Condition',
+				'parameters' : {
+					'HttpErrorCodeReturnedEquals' : {
+						'sentAs' : 'HttpErrorCodeReturnedEquals',
+					},
+					'KeyPrefixEquals' : {
+						'sentAs' : 'KeyPrefixEquals',
+					},
+				},
+			},
+			'Redirect' : {
+				'type' : 'object',
+				'sentAs' : 'Redirect',
+				'parameters' : {
+					'HostName' : {
+						'sentAs' : 'HostName',
+					},
+					'HttpRedirectCode' : {
+						'sentAs' : 'HttpRedirectCode',
+					},
+					'Protocol' : {
+						'sentAs' : 'Protocol',
+					},
+					'ReplaceKeyPrefixWith' : {
+						'sentAs' : 'ReplaceKeyPrefixWith',
+					},
+					'ReplaceKeyWith' : {
+						'sentAs' : 'ReplaceKeyWith',
+					}
+				}
+			},
+		},
+	},
+};
+
+const indexDocument = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'IndexDocument',
+	'parameters' : {
+		'Suffix' : {
+			'sentAs' : 'Suffix',
+		},
+	}
+};
+
+const errorDocument = {
+	'type' : 'object',
+	'location' : 'xml',
+	'sentAs' : 'ErrorDocument',
+	'parameters' : {
+		'Key' : {
+			'sentAs' : 'Key',
+		},
+	}
+};
+
+const corsRule = {
+	'required' : true,
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'CORSRule',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'ID' : {
+				'sentAs' : 'ID',
+			},
+			'AllowedMethod' : {
+				'type' : 'array',
+				'sentAs' : 'AllowedMethod',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'AllowedOrigin' : {
+				'type' : 'array',
+				'sentAs' : 'AllowedOrigin',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'AllowedHeader' : {
+				'type' : 'array',
+				'sentAs' : 'AllowedHeader',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'MaxAgeSeconds' : {
+				'type' : 'number',
+				'sentAs' : 'MaxAgeSeconds',
+			},
+			'ExposeHeader' : {
+				'type' : 'array',
+				'sentAs' : 'ExposeHeader',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+		},
+	},
+};
+
+const functionGraphConfiguration = {
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'FunctionGraphConfiguration',
+	'items' : {
+		'type' : 'object',
+		'location' : 'xml',
+		'parameters' : {
+			'ID' : {
+				'sentAs' : 'Id'
+			},
+			'Filter' : {
+				'type' : 'object',
+				'parameters' : {
+					'FilterRules' : {
+						'wrapper' : 'S3Key',
+						'type' : 'array',
+						'sentAs' : 'FilterRule',
+						'items' : {
+							'type' : 'object',
+							'parameters' : {
+								'Name' : {},
+								'Value' : {}
+							}
+						}
+					}
+				}
+			},
+			'FunctionGraph' : {},
+	
+			'Event' : {
+				'type' : 'array',
+				'items' : {
+					'type' : 'adapter',
+				}
+			}
+		}
+	}	
+};
+
+const topicConfiguration = {
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'TopicConfiguration',
+	'items' : {
+		'type' : 'object',
+		'location' : 'xml',
+		'parameters' : {
+			'ID' : {
+				'sentAs' : 'Id'
+			},
+			'Filter' : {
+				'type' : 'object',
+				'parameters' : {
+					'FilterRules' : {
+						'wrapper' : 'S3Key',
+						'type' : 'array',
+						'sentAs' : 'FilterRule',
+						'items' : {
+							'type' : 'object',
+							'parameters' : {
+								'Name' : {},
+								'Value' : {}
+							}
+						}
+					}
+				}
+			},
+			'Topic' : {},
+	
+			'Event' : {
+				'type' : 'array',
+				'items' : {
+					'type' : 'adapter',
+				}
+			}
+		}
+	}
+};
+
+const tagSet = {
+	'required' : true,
+	'type' : 'array',
+	'location' : 'xml',
+	'wrapper' : 'TagSet',
+	'sentAs' : 'Tag',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'Key' : {
+				'sentAs' : 'Key',
+			},
+			'Value' : {
+				'sentAs' : 'Value',
+			}
+		}
+	}
+};
+
+const replicationRules = {
+	'required' : true,
+	'type' : 'array',
+	'location' : 'xml',
+	'sentAs' : 'Rule',
+	'items' : {
+		'type' : 'object',
+		'parameters' : {
+			'ID' : {
+				'sentAs' : 'ID',
+			},
+			'Prefix' : {
+				'sentAs' : 'Prefix',
+			},
+			'Status' : {
+				'sentAs' : 'Status',
+			},
+			'Destination' :{
+				'type' : 'object',
+				'sentAs' : 'Destination',
+				'parameters' :{
+					'Bucket' : {
+						'sentAs' : 'Bucket',
+						'type' : 'adapter'
+					},
+					'StorageClass' :{
+						'sentAs' : 'StorageClass',
+						'type' : 'adapter'
+					}
+				}
+			}
+		},
+	}
+};
+
+const bucketEncryptionRule = {
+	'type': 'object',
+	'location': 'xml',
+	'sentAs': 'Rule',
+	'parameters': {
+		'ApplyServerSideEncryptionByDefault': {
+			'type': 'object',
+			'sentAs': 'ApplyServerSideEncryptionByDefault',
+			'parameters': {
+				'SSEAlgorithm': {
+					'sentAs': 'SSEAlgorithm'
+				},
+				'KMSMasterKeyID': {
+					'sentAs': 'KMSMasterKeyID'
+				}
+			}
+		}
+	}
+};
+
+const PublicAccessBlockBody = {
+    'BlockPublicAcls' : {
+        'location' : 'xml',
+        'sentAs' : 'BlockPublicAcls',
+    },
+    'IgnorePublicAcls' : {
+        'location' : 'xml',
+        'sentAs' : 'IgnorePublicAcls',
+    },
+    'BlockPublicPolicy' : {
+        'location' : 'xml',
+        'sentAs' : 'BlockPublicPolicy',
+    },
+    'RestrictPublicBuckets' : {
+        'location' : 'xml',
+        'sentAs' : 'RestrictPublicBuckets',
+    }
+};
+
+const CustomDomainCertificateConfig = {
+	'type': 'object',
+	'location': 'xml',
+	'required': false,
+
+	'sentAs': 'customDomainCertificateConfig',
+	'parameters': {
+
+		'Name': {
+			'type': 'string',
+			'required': true
+		},
+		'CertificateId': {
+			'type':'string',
+		},
+		'Certificate': {
+			'type': 'string',
+			'required': true,
+		},
+		'CertificateChain': {
+			'type': 'string',
+		},
+		'PrivateKey': {
+			'type': 'string',
+			'required': true,
+		}
+			
+	}
+}
+
+const operations = {
+	'CreateBucket' : {
+		'httpMethod' : 'PUT',
+		'data' : {
+			'xmlRoot' : 'CreateBucketConfiguration',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'x-default-storage-class',
+				'type' : 'adapter'
+			},
+			'Location' : {
+				'location' : 'xml',
+				'sentAs' : 'LocationConstraint'
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			
+			'GrantWrite' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write',
+				'withPrefix' : true,
+			},
+			
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+
+			'AzRedundancy': {
+				'location': 'header',
+				'sentAs': 'x-obs-az-redundancy',
+			},
+			'MultiEnterprise': {
+				'location': 'header',
+				'sentAs': 'x-obs-az-redundancy',
+			},
+			'FileInterface':{
+				'location' : 'header',
+				'sentAs' : 'fs-file-interface',
+				'withPrefix': true
+			},
+		}
+	},
+	
+    'ListBuckets' : {
+		'httpMethod' : 'GET',
+		'parameters' : {
+			'QueryLocation' : {
+				'location' : 'header',
+				'sentAs' : 'location',
+				'type' : 'boolean',
+				'withPrefix' : true,
+			},
+			'BucketType': {
+				'location': 'header',
+				'sentAs': 'bucket-type',
+				'withPrefix': true
+			},
+			'Marker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'marker',
+			},
+			'MaxKeys' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'max-keys',
+			},
+		}
+	},
+
+	'ListBucketsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ListAllMyBucketsResult',
+		},
+		'parameters' : {
+			'Owner' : {
+				'type' : 'object',
+				'location' : 'xml',
+				'sentAs' : 'Owner',
+				'parameters' : {
+					'ID' : {
+						'sentAs' : 'ID',
+					},
+					'Name' : {
+						'sentAs' : 'DisplayName',
+					},
+				},
+			},
+			'Marker' : {
+				'location' : 'xml',
+				'sentAs' : 'Marker',
+			},
+			'IsTruncated' : {
+				'location' : 'xml',
+				'sentAs' : 'IsTruncated',
+			},
+			'NextMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'NextMarker',
+			},
+			'MaxKeys' : {
+				'location' : 'xml',
+				'sentAs' : 'MaxKeys',
+			},
+			'Buckets' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'wrapper' : 'Buckets',
+				'sentAs' : 'Bucket',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'BucketName' : {
+							'sentAs' : 'Name',
+						},
+						'CreationDate' : {
+							'sentAs' : 'CreationDate'
+						},
+						'Location' : {
+							'sentAs' : 'Location'
+						},
+						'BucketType' : {
+							'sentAs' : 'BucketType'
+						}
+					},
+				},
+			},
+		},
+	},
+
+	'HeadBucket' : {
+		'httpMethod' : 'HEAD',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+		},
+	},
+	
+	'HeadApiVersion' : {
+		'httpMethod' : 'HEAD',
+		'urlPath' : 'apiversion',
+		'parameters' : {
+			'Bucket' : {
+				'location' : 'uri',
+			},
+		},
+	},
+	
+	'HeadApiVersionOutput' : {
+		'parameters' : {
+			'ApiVersion' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-api'
+			},
+		}
+	},
+
+
+	'GetBucketMetadata' : {
+		'httpMethod' : 'HEAD',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+
+			'Origin' : {
+				'location' : 'header',
+				'sentAs' : 'Origin'
+			},
+
+			'RequestHeader' : {
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Headers'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'GetBucketMetadataOutput' : {
+		'parameters' : {
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'x-default-storage-class'
+			},
+			'ObsVersion' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version'
+			},
+			'FsInterface': {
+				'location': 'header',
+				'sentAs': 'x-obs-fs-file-interface'
+			},
+			'Location' : {
+				'location' : 'header',
+				'sentAs' : 'bucket-region',
+				'withPrefix' : true
+			},
+			'AzRedundancy': {
+				'location': 'header',
+				'sentAs': 'x-obs-az-redundancy',
+			},
+			'AllowOrigin' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-origin'
+			},
+			'MaxAgeSeconds' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-max-age'
+			},
+			'ExposeHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-expose-headers'
+			},
+			'AllowMethod' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-methods'
+			},
+			'AllowHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-headers'
+			},
+			'MultiEnterprise': {
+				'location': 'header',
+				'sentAs': 'epid',
+				'withPrefix' : true
+			},
+			'ErrorCode': {
+				'location': 'header',
+				'sentAs': 'x-amz-error-code'
+			},
+			'ErrorMessage': {
+				'location': 'header',
+				'sentAs': 'x-amz-error-message'
+			}
+		}
+	},
+
+	'DeleteBucket' : {
+		'httpMethod' : 'DELETE',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'ListObjects' : {
+		'httpMethod' : 'GET',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Prefix' : {
+				'location' : 'urlPath',
+				'sentAs' : 'prefix',
+			},
+			'Marker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'marker',
+			},
+			'MaxKeys' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'max-keys',
+			},
+			'Delimiter' : {
+				'location' : 'urlPath',
+				'sentAs' : 'delimiter',
+			},
+			'AccessKeyId': {
+				'location': 'urlPath',
+				'sentAs': 'AccessKeyId'
+			},
+			'Signature': {
+				'location': 'urlPath',
+				'sentAs': 'Signature'
+			},
+			'Policy': {
+				'location': 'urlPath',
+				'sentAs': 'Policy'
+			},
+			'SecurityToken': {
+				'location': 'urlPath',
+				'sentAs': 'x-amz-security-token'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type'
+			},
+		},
+	},
+
+	'ListObjectsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ListBucketResult',
+		},
+		'parameters' : {
+			'Location' : {
+				'location' : 'header',
+				'sentAs' : 'bucket-region',
+				'withPrefix' : true
+			},
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Name',
+			},
+			'Delimiter' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Delimiter',
+			},
+			'IsTruncated' : {
+				'location' : 'xml',
+				'sentAs' : 'IsTruncated',
+			},
+			'Prefix' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Prefix',
+			},
+			'Marker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Marker',
+			},
+			'NextMarker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'NextMarker',
+			},
+			'MaxKeys' : {
+				'location' : 'xml',
+				'sentAs' : 'MaxKeys',
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+			'Contents' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Contents',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'LastModified' : {
+							'sentAs' : 'LastModified',
+						},
+						'ETag' : {
+							'sentAs' : 'ETag',
+						},
+						'Size' : {
+							'sentAs' : 'Size',
+						},
+						'StorageClass' : {
+							'sentAs' : 'StorageClass',
+						},
+						'Type' :{
+							'sentAs' : 'Type'
+						},
+						'Owner' : owner
+					},
+				},
+
+			},
+			'CommonPrefixes' : commonPrefixes
+		},
+	},
+
+	'ListVersions' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'versions',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Prefix' : {
+				'location' : 'urlPath',
+				'sentAs' : 'prefix',
+			},
+			'KeyMarker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'key-marker',
+			},
+			'MaxKeys' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'max-keys',
+			},
+			'Delimiter' : {
+				'location' : 'urlPath',
+				'sentAs' : 'delimiter',
+			},
+			'VersionIdMarker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'version-id-marker',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type',
+			},
+		},
+	},
+	'ListVersionsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ListVersionsResult',
+		},
+		'parameters' : {
+			'Location' : {
+				'location' : 'header',
+				'sentAs' : 'bucket-region',
+				'withPrefix' : true
+			},
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Name',
+			},
+			'Prefix' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Prefix',
+			},
+			'Delimiter' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Delimiter',
+			},
+			'KeyMarker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'KeyMarker',
+			},
+			'VersionIdMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'VersionIdMarker',
+			},
+			'NextKeyMarker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'NextKeyMarker',
+			},
+			'NextVersionIdMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'NextVersionIdMarker',
+			},
+			'MaxKeys' : {
+				'location' : 'xml',
+				'sentAs' : 'MaxKeys',
+			},
+			'IsTruncated' : {
+				'location' : 'xml',
+				'sentAs' : 'IsTruncated',
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+			'Versions' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Version',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'VersionId' : {
+							'sentAs' : 'VersionId',
+						},
+						'IsLatest' : {
+							'sentAs' : 'IsLatest',
+						},
+						'LastModified' : {
+							'sentAs' : 'LastModified',
+						},
+						'ETag' : {
+							'sentAs' : 'ETag',
+						},
+						'Size' : {
+							'sentAs' : 'Size',
+						},
+						'Type' :{
+							'sentAs' : 'Type'
+						},
+						'Owner' : owner,
+						'StorageClass' : {
+							'sentAs' : 'StorageClass',
+						}
+					}
+				},
+			},
+			'DeleteMarkers' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'DeleteMarker',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'VersionId' : {
+							'sentAs' : 'VersionId',
+						},
+						'IsLatest' : {
+							'sentAs' : 'IsLatest',
+						},
+						'LastModified' : {
+							'sentAs' : 'LastModified',
+						},
+						'Owner' : owner
+					}
+				},
+			},
+			'CommonPrefixes' : commonPrefixes
+		},
+	},
+
+	'GetBucketLocation' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'location',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	
+	'GetBucketLocationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'CreateBucketConfiguration',
+		},
+		'parameters' : {
+			'Location' : {
+				'location' : 'xml',
+				'sentAs' : 'LocationConstraint'
+			},
+		},
+	},
+
+	'GetBucketStorageInfo' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'storageinfo',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetBucketStorageInfoOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'GetBucketStorageInfoResult',
+		},
+		'parameters' : {
+			'Size' : {
+				'location' : 'xml',
+				'sentAs' : 'Size',
+			},
+			'ObjectNumber' : {
+				'location' : 'xml',
+				'sentAs' : 'ObjectNumber',
+			},
+		},
+	},
+
+	'SetBucketQuota' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'quota',
+		'data' : {
+			'xmlRoot' : 'Quota',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'StorageQuota' : {
+				'required' : true,
+				'location' : 'xml',
+				'sentAs' : 'StorageQuota',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'GetBucketQuota' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'quota',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+
+		},
+	},
+	'GetBucketQuotaOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'Quota',
+		},
+		'parameters' : {
+			'StorageQuota' : {
+				'location' : 'xml',
+				'sentAs' : 'StorageQuota',
+			},
+		},
+	},
+	
+	'SetBucketAcl' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'acl',
+		'data' : {
+			'xmlRoot' : 'AccessControlPolicy',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'Owner' : owner,
+			'Grants' : grants,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	
+	'GetBucketAcl' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'acl',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetBucketAclOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'AccessControlPolicy',
+		},
+		'parameters' : {
+			'Owner' : owner,
+			'Grants' : grants
+		}
+	},
+	
+	'SetBucketLoggingConfiguration' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'logging',
+		'data' : {
+			'xmlRoot' : 'BucketLoggingStatus',
+			'xmlAllowEmpty' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'LoggingEnabled' : loggingEnabled,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'GetBucketLoggingConfiguration' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'logging',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetBucketLoggingConfigurationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'BucketLoggingStatus',
+		},
+		'parameters' : {
+			'LoggingEnabled' : loggingEnabled,
+		},
+	},
+
+	'SetBucketPolicy' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'policy',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Policy' : {
+				'required' : true,
+				'location' : 'body',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	
+	'GetBucketPolicy' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'policy',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetBucketPolicyOutput' : {
+		'data' : {
+			'type' : 'body',
+		},
+		'parameters' : {
+			'Policy' : {
+				'location' : 'body',
+			},
+		},
+	},
+	'DeleteBucketPolicy' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'policy',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'SetBucketLifecycleConfiguration' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'lifecycle',
+		'data' : {
+			'xmlRoot' : 'LifecycleConfiguration',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Rules' : rules,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'GetBucketLifecycleConfiguration' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'lifecycle',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetBucketLifecycleConfigurationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'LifecycleConfiguration',
+		},
+		'parameters' : {
+			'Rules' : rules
+		},
+	},
+	
+	'DeleteBucketLifecycleConfiguration' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'lifecycle',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'SetBucketWebsiteConfiguration' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'website',
+		'data' : {
+			'xmlRoot' : 'WebsiteConfiguration',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RedirectAllRequestsTo' : redirectAllRequestsTo,
+			'IndexDocument' : indexDocument,
+			'ErrorDocument' : errorDocument,
+			'RoutingRules' : routingRules,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	
+	'GetBucketWebsiteConfiguration' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'website',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetBucketWebsiteConfigurationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'WebsiteConfiguration',
+		},
+		'parameters' : {
+			'RedirectAllRequestsTo' : redirectAllRequestsTo,
+			'IndexDocument' : indexDocument,
+			'ErrorDocument' : errorDocument,
+			'RoutingRules' : routingRules,
+		},
+	},
+	'DeleteBucketWebsiteConfiguration' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'website',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'SetBucketVersioningConfiguration' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'versioning',
+		'data' : {
+			'xmlRoot' : 'VersioningConfiguration',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionStatus' : {
+				'required' : true,
+				'location' : 'xml',
+				'sentAs' : 'Status',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	
+	'GetBucketVersioningConfiguration' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'versioning',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetBucketVersioningConfigurationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'VersioningConfiguration',
+		},
+		'parameters' : {
+			'VersionStatus' : {
+				'location' : 'xml',
+				'sentAs' : 'Status',
+			},
+		},
+	},
+
+	'SetBucketCors' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'cors',
+		'data' : {
+			'xmlRoot' : 'CORSConfiguration',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'CorsRules' : corsRule,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetBucketCors' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'cors',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetBucketCorsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'CORSConfiguration',
+		},
+		'parameters' : {
+			'CorsRules' : corsRule
+		},
+	},
+	'DeleteBucketCors' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'cors',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'SetBucketNotification' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'notification',
+		'data' : {
+			'xmlRoot' : 'NotificationConfiguration',
+			'xmlAllowEmpty' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'TopicConfigurations' : topicConfiguration,
+			'FunctionGraphConfigurations' : functionGraphConfiguration,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+
+	'GetBucketNotification' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'notification',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'GetBucketNotificationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'NotificationConfiguration',
+		},
+		'parameters' : {
+			'TopicConfigurations' : topicConfiguration,
+			'FunctionGraphConfigurations' : functionGraphConfiguration,
+		},
+	},
+
+	'OptionsBucket' : {
+		'httpMethod' : 'OPTIONS',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Origin' : {
+				'required' : true,
+				'location' : 'header',
+				'sentAs' : 'Origin',
+			},
+			'AccessControlRequestMethods' : {
+				'required' : true,
+				'type' : 'array',
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Method',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'AccessControlRequestHeaders' : {
+				'type' : 'array',
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Headers',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'OptionsBucketOutput' : {
+		'parameters' : {
+			'AllowOrigin' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-origin',
+			},
+			'AllowHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-headers',
+			},
+			'AllowMethod' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-methods',
+			},
+			'ExposeHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-expose-headers',
+			},
+			'MaxAgeSeconds' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-max-age',
+			},
+		},
+	},
+
+	'SetBucketTagging' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'tagging',
+		'data' : {
+			'xmlRoot' : 'Tagging',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Tags' : tagSet,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'GetBucketTagging' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'tagging',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'GetBucketTaggingOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'Tagging',
+		},
+		'parameters' : {
+			'Tags' : tagSet
+		}
+	},
+
+	'DeleteBucketTagging' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'tagging',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'SetBucketStoragePolicy' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'storagePolicy',
+		'data' : {
+			'xmlRoot' : 'StoragePolicy',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'StorageClass' :{
+				'required' : true,
+				'location' : 'xml',
+				'type' : 'adapter',
+				'sentAs' : 'DefaultStorageClass'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+	
+	'GetBucketStoragePolicy' :{
+		'httpMethod' : 'GET',
+		'urlPath' : 'storagePolicy',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+	
+	'GetBucketStoragePolicyOutput' :{
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'StoragePolicy',
+		},
+		'parameters' : {
+			'StorageClass' : {
+				'location' : 'xml',
+				'type' : 'string',
+				'sentAs' : 'DefaultStorageClass'
+			}
+		}
+	},
+
+	'SetBucketReplication' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'replication',
+		'data' : {
+			'xmlRoot' : 'ReplicationConfiguration',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Agency' :{
+				'location' : 'xml',
+				'sentAs' : 'Agency'
+			},
+			'Rules' : replicationRules,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'GetBucketReplication' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'replication',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'GetBucketReplicationOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ReplicationConfiguration',
+		},
+		'parameters' : {
+			'Agency' :{
+				'location' : 'xml',
+				'sentAs' : 'Agency'
+			},
+			'Rules' : replicationRules
+		}
+	},
+
+	'DeleteBucketReplication' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'replication',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'GetBucketRequesterPayment': {
+		'httpMethod': 'GET',
+		'urlPath': 'requestPayment',
+		'parameters': {
+			'Bucket': {
+				'required': true,
+				'location': 'uri'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+	'GetBucketRequesterPaymentOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'RequestPaymentConfiguration'
+		},
+		'parameters' : {
+			'Payer' : {
+				'location': 'xml',
+				'sentAs': 'Payer',
+			}
+		}
+	},
+	'SetBucketRequesterPayment': {
+		'httpMethod' : 'PUT',
+		'urlPath': 'requestPayment',
+		'data' : {
+			'xmlRoot' : 'RequestPaymentConfiguration'
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Payer' : {
+				'location': 'xml',
+				'sentAs': 'Payer'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+	'SetBucketRequesterPaymentOutput': {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'RequestPaymentConfiguration'
+		},
+		'parameters' : {
+			'Payer' : {
+				'location': 'xml',
+				'sentAs': 'Payer',
+			}
+		}
+	},
+	
+	'PutObject' : {
+		'httpMethod' : 'PUT',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'ContentMD5' : {
+				'location' : 'header',
+				'sentAs' : 'Content-MD5',
+			},
+			'ContentSHA256' : {
+				'location' : 'header',
+				'sentAs' : 'content-sha256',
+				'withPrefix' : true,
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'Offset' : {
+				'type' : 'plain'
+			},
+			'ProgressCallback' :{
+				'type' : 'plain'
+			},
+			'ContentLength' :{
+				'location' : 'header',
+				'sentAs' : 'Content-Length',
+				'type' : 'plain'
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'Metadata' : {
+				'type' : 'object',
+				'location' : 'header',
+				'sentAs' : 'meta-',
+				'withPrefix' : true,
+			},
+			'CacheControl': {
+				'location': 'header',
+				'sentAs': 'Cache-Control'
+			},
+			'ContentDisposition': {
+				'location': 'header',
+				'sentAs': 'Content-Disposition',
+				'encodingSafe': ' ;/?:@&=+$,"'
+			},
+			'ContentLanguage': {
+				'location': 'header',
+				'sentAs': 'Content-Language'
+			},
+			'ContentEncoding': {
+				'location': 'header',
+				'sentAs': 'Content-Encoding'
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true,
+			},
+			'Tags' : {
+				'location' : 'header',
+				'sentAs' : 'tagging',
+				'withPrefix' : true,
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-expires',
+				'type' : 'number'
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true,
+			},
+			'Body' : {
+				'location' : 'body',
+			},
+			'SourceFile' : {
+				'type' : 'srcFile',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'PutObjectOutput' : {
+		'parameters' : {
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true,
+			},
+			'StorageClass' :{
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true,
+			}
+		},
+	},
+
+	'RenameObject': {
+		'httpMethod': 'POST',
+		'urlPath': 'rename',
+		'parameters': {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Name': {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'name',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'ModifyObject': {
+		'httpMethod': 'PUT',
+		'urlPath': 'modify',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Position' : {
+				'location' : 'urlPath',
+				'sentAs' : 'position',
+				'type' : 'number'
+			},
+			'ContentMD5' : {
+				'location' : 'header',
+				'sentAs' : 'Content-MD5',
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'Offset' : {
+				'type' : 'plain'
+			},
+
+			'ProgressCallback' :{
+				'type' : 'plain'
+			},
+
+			'ContentLength' :{
+				'location' : 'header',
+				'sentAs' : 'Content-Length',
+				'type' : 'plain'
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'Metadata' : {
+				'type' : 'object',
+				'location' : 'header',
+				'sentAs' : 'meta-',
+				'withPrefix' : true,
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true,
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'expires',
+				'type' : 'number',
+				'withPrefix' : true,
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true,
+			},
+			'Body' : {
+				'location' : 'body',
+			},
+			'SourceFile' : {
+				'type' : 'srcFile',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'ModifyObjectOutput': {
+		'parameters' : {
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true,
+			},
+			'VersionIdObs' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-version-id',
+			},
+			'VersionIdV2' : {
+				'location' : 'header',
+				'sentAs' : 'x-amz-version-id',
+			},
+			'StorageClass' :{
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+			},
+			'StorageClassObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-storage-class',
+			},
+			'StorageClassV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-storage-class',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption',
+			},
+			'SseKmsV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption',
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseKmsKeyObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-kms-key-id',
+			},
+			'SseKmsKeyV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-kms-key-id',
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCObs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-algorithm',
+			},
+			'SseCV2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-algorithm',
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true,
+			},
+			'SseCKeyMd5Obs' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-server-side-encryption-customer-key-MD5',
+			},
+			'SseCKeyMd5V2' :{
+				'location' : 'header',
+				'sentAs' : 'x-amz-server-side-encryption-customer-key-MD5',
+			}
+		},
+	},
+
+	'AppendObject' : {
+		'httpMethod' : 'POST',
+		'urlPath' : 'append',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Position' : {
+				'location' : 'urlPath',
+				'sentAs' : 'position',
+				'type' : 'number'
+			},
+			'ContentMD5' : {
+				'location' : 'header',
+				'sentAs' : 'Content-MD5',
+			},
+			'Offset' : {
+				'type' : 'plain'
+			},
+			'ProgressCallback' :{
+				'type' : 'plain'
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'ContentLength' :{
+				'location' : 'header',
+				'sentAs' : 'Content-Length',
+				'type' : 'plain'
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'Metadata' : {
+				'type' : 'object',
+				'location' : 'header',
+				'sentAs' : 'meta-',
+				'withPrefix' : true,
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true,
+			},
+			'Tags' : {
+				'location' : 'header',
+				'sentAs' : 'tagging',
+				'withPrefix' : true,
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-expires',
+				'type' : 'number'
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true,
+			},
+			'Body' : {
+				'location' : 'body',
+			},
+			'SourceFile' : {
+				'type' : 'srcFile',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'AppendObjectOutput' : {
+		'parameters' : {
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'NextPosition' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-next-append-position',
+			},
+			'StorageClass' :{
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true,
+			}
+		},
+	},
+	
+	'GetObject' : {
+		'httpMethod' : 'GET',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'AccessKeyId': {
+				'location': 'urlPath',
+			},
+			'Signature': {
+				'location': 'urlPath'
+			},
+			'Policy': {
+				'location': 'urlPath'
+			},
+			'SecurityToken': {
+				'location': 'urlPath',
+				'sentAs': 'x-amz-security-token'
+			},
+			'ResponseCacheControl' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-cache-control',
+			},
+			'ResponseContentDisposition' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-content-disposition',
+			},
+			'ResponseContentEncoding' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-content-encoding',
+			},
+			'ResponseContentLanguage' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-content-language',
+			},
+			'ResponseContentType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-content-type',
+			},
+			'ResponseExpires' : {
+				'location' : 'urlPath',
+				'sentAs' : 'response-expires',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'ImageProcess' : {
+				'location' : 'urlPath',
+				'sentAs' : 'x-image-process',
+			},
+			'IfMatch' : {
+				'location' : 'header',
+				'sentAs' : 'If-Match',
+			},
+			'IfModifiedSince' : {
+				'location' : 'header',
+				'sentAs' : 'If-Modified-Since',
+			},
+			'IfNoneMatch' : {
+				'location' : 'header',
+				'sentAs' : 'If-None-Match',
+			},
+			'IfUnmodifiedSince' : {
+				'location' : 'header',
+				'sentAs' : 'If-Unmodified-Since',
+			},
+			'Range' : {
+				'location' : 'header',
+				'sentAs' : 'Range',
+			},
+			'Origin' :{
+				'location' : 'header',
+				'sentAs' : 'Origin'
+			},
+			'RequestHeader' : {
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Headers'
+			},
+			'SaveAsFile' : {
+				'type' : 'dstFile',
+			},
+			'SaveAsStream' : {
+				'type' : 'plain'
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'ProgressCallback' :{
+				'type' : 'plain'
+			}
+		}
+	},
+	'GetObjectOutput' : {
+		'data' : {
+			'type' : 'body'
+		},
+		'parameters' : {
+			'Content' : {
+				'location' : 'body',
+			},
+			'Expiration' : {
+				'location' : 'header',
+				'sentAs' : 'expiration',
+				'withPrefix' : true
+			},
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'CacheControl' : {
+				'location' : 'header',
+				'sentAs' : 'Cache-Control',
+			},
+			'ContentDisposition' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Disposition',
+			},
+			'ContentEncoding' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Encoding',
+			},
+			'ContentLanguage' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Language',
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type',
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'Expires',
+			},
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'ContentLength' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Length',
+			},
+			'DeleteMarker' : {
+				'location' : 'header',
+				'sentAs' : 'delete-marker',
+				'withPrefix' : true
+			},
+			'LastModified' : {
+				'location' : 'header',
+				'sentAs' : 'Last-Modified',
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true
+			},
+			'Restore' : {
+				'location' : 'header',
+				'sentAs' : 'restore',
+				'withPrefix' : true
+			},
+			'AllowOrigin' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-origin'
+			},
+			'MaxAgeSeconds' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-max-age'
+			},
+			'ExposeHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-expose-headers'
+			},
+			'AllowMethod' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-methods'
+			},
+			'AllowHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-headers'
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			},
+			'Metadata' : {
+				'location' : 'header',
+				'type' : 'object',
+				'sentAs' : 'meta-',
+				'withPrefix' : true
+			}
+		},
+	},
+	'CopyObject' : {
+		'httpMethod' : 'PUT',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'CopySource' : {
+				'required' : true,
+				'location' : 'header',
+				'sentAs' : 'copy-source',
+				'withPrefix' : true,
+				'skipEncoding' : true,
+			},
+			'CopySourceIfMatch' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-if-match',
+				'withPrefix' : true
+			},
+			'CopySourceIfModifiedSince' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-if-modified-since',
+				'withPrefix' : true
+			},
+			'CopySourceIfNoneMatch' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-if-none-match',
+				'withPrefix' : true
+			},
+			'CopySourceIfUnmodifiedSince' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-if-unmodified-since',
+				'withPrefix' : true
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'ContentEncoding' : {
+				'location' : 'header',
+				'sentAs' : 'content-encoding'
+			},
+			'ContentLanguage' : {
+				'location' : 'header',
+				'sentAs' : 'content-language'
+			},
+			'ContentDisposition' : {
+				'location' : 'header',
+				'sentAs' : 'content-disposition'
+			},
+			'CacheControl' : {
+				'location' : 'header',
+				'sentAs' : 'cache-control'
+			},
+			'TagDirective' : {
+				'location' : 'header',
+				'sentAs' : 'tagging-directive',
+				'withPrefix' : true,
+			},
+			'Tags' : {
+				'location' : 'header',
+				'sentAs' : 'tagging',
+				'withPrefix' : true,
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'expires'
+			},
+			'Metadata' : {
+				'type' : 'object',
+				'location' : 'header',
+				'sentAs' : 'meta-',
+				'withPrefix' : true
+			},
+			'MetadataDirective' : {
+				'location' : 'header',
+				'sentAs' : 'metadata-directive',
+				'withPrefix' : true
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'CopySourceSseC' :{
+				'location' : 'header',
+				'sentAs' : 'copy-source-server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'CopySourceSseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'copy-source-server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'CopyObjectOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'CopyObjectResult',
+		},
+		'parameters' : {
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'CopySourceVersionId' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-version-id',
+				'withPrefix' : true
+			},
+			'ETag' : {
+				'location' : 'xml',
+				'sentAs' : 'ETag',
+			},
+			'LastModified' : {
+				'location' : 'xml',
+				'sentAs' : 'LastModified',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			}
+		},
+	},
+
+	'RestoreObject' : {
+		'httpMethod' : 'POST',
+		'urlPath' : 'restore',
+		'data' : {
+			'xmlRoot' : 'RestoreRequest',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'Days' : {
+				'location' : 'xml',
+				'sentAs' : 'Days'
+			},
+			'Tier' : {
+				'wrapper' : 'GlacierJobParameters',
+				'location' : 'xml',
+				'sentAs' : 'Tier',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'GetObjectMetadata' : {
+		'httpMethod' : 'HEAD',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'Origin' : {
+				'location' : 'header',
+				'sentAs' : 'Origin'
+			},
+			'RequestHeader' : {
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Headers'
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetObjectMetadataOutput' : {
+		'parameters' : {
+			'Expiration' : {
+				'location' : 'header',
+				'sentAs' : 'expiration',
+				'withPrefix' : true
+			},
+			'LastModified' : {
+				'location' : 'header',
+				'sentAs' : 'Last-Modified',
+			},
+			'ContentLength' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Length',
+			},
+			'ContentType' :{
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'CacheControl': {
+				'location': 'header',
+				'sentAs': 'Cache-Control'
+			},
+			'ContentDisposition': {
+				'location': 'header',
+				'sentAs': 'Content-Disposition'
+			},
+			'ContentLanguage': {
+				'location': 'header',
+				'sentAs': 'Content-Language'
+			},
+			'ContentEncoding': {
+				'location': 'header',
+				'sentAs': 'Content-Encoding'
+			},
+			'TaggingCount' : {
+				'location' : 'header',
+				'sentAs' : 'tagging-count',
+				'withPrefix': true
+			},
+			'Expires': {
+				'location': 'header',
+				'sentAs': 'Expires'
+			},
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true
+			},
+			'Restore' : {
+				'location' : 'header',
+				'sentAs' : 'restore',
+				'withPrefix' : true
+			},
+			'ObjectType' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-object-type',
+			},
+			'NextPosition' :{
+				'location' : 'header',
+				'sentAs' : 'x-obs-next-append-position',
+			},
+			'AllowOrigin' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-origin'
+			},
+			'MaxAgeSeconds' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-max-age'
+			},
+			'ExposeHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-expose-headers'
+			},
+			'AllowMethod' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-methods'
+			},
+			'AllowHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-headers'
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			},
+			'Metadata' : {
+				'location' : 'header',
+				'type' : 'object',
+				'sentAs' : 'meta-',
+				'withPrefix' : true
+			}
+		},
+	},
+	
+	 'SetObjectMetadata': {
+	        'httpMethod': 'PUT',
+	        'urlPath': 'metadata',
+	        'parameters': {
+	            'Bucket': {
+	                'required': true,
+	                'location': 'uri'
+	            },
+	            'Key': {
+	                'required': true,
+	                'location': 'uri'
+	            },
+	            'VersionId': {
+	                'location': 'urlPath',
+	                'sentAs': 'versionId'
+	            },
+	            'Origin': {
+	                'location': 'header',
+	                'sentAs': 'Origin'
+	            },
+	            'RequestHeader': {
+	                'location': 'header',
+	                'sentAs': 'Access-Control-Request-Headers'
+	            },
+	            'CacheControl': {
+	                'location': 'header',
+	                'sentAs': 'Cache-Control'
+	            },
+	            'ContentDisposition': {
+	                'location': 'header',
+	                'sentAs': 'Content-Disposition',
+					'encodingSafe': ' ;/?:@&=+$,"'
+	            },
+	            'ContentLanguage': {
+	                'location': 'header',
+	                'sentAs': 'Content-Language'
+	            },
+	            'ContentEncoding': {
+	            	'location': 'header', 
+	            	'sentAs': 'Content-Encoding'
+	            },
+	            'ContentType': {
+	                'location': 'header',
+	                'sentAs': 'Content-Type'
+	            },
+				'Tags' : {
+					'location' : 'header',
+					'sentAs' : 'tagging',
+					'withPrefix': true
+				},
+	            'Expires': {
+	                'location': 'header',
+	                'sentAs': 'Expires'
+	            },
+	            'Metadata': {
+	            	'type' : 'object',
+	            	'location': 'header', 
+	            	'sentAs': 'meta-',
+	                'withPrefix': true
+	            },
+	            'MetadataDirective' : {
+					'location' : 'header',
+					'sentAs' : 'metadata-directive',
+					'withPrefix' : true
+				},
+	            'StorageClass': {
+	                'location': 'header',
+	                'sentAs': 'storage-class',
+	                'withPrefix': true,
+	                'type' : 'adapter',
+	            },
+	            'WebsiteRedirectLocation': {
+	                'location': 'header',
+	                'sentAs': 'website-redirect-location',
+	                'withPrefix': true
+	            },
+				'RequestPayer': {
+					'location': 'header',
+					'sentAs': 'request-payer',
+					'withPrefix': true
+				}
+	        }
+	    },
+	    'SetObjectMetadataOutput': {
+	        'parameters': {
+	            'Expires': {
+	                'location': 'header',
+	                'sentAs': 'Expires'
+	            },
+				'ContentEncoding': {
+					'location': 'header',
+					'sentAs': 'Content-Encoding'
+				},
+	            'ContentType': {
+	                'location': 'header',
+	                'sentAs': 'Content-Type'
+	            },
+	            'ContentLanguage': {
+	                'location': 'header',
+	                'sentAs': 'Content-Language'
+	            },
+	            'CacheControl': {
+	                'location': 'header',
+	                'sentAs': 'Cache-Control'
+	            },
+	            'ContentDisposition': {
+	                'location': 'header',
+	                'sentAs': 'Content-Disposition'
+	            },
+	            'WebsiteRedirectLocation': {
+	                'location': 'header',
+	                'sentAs': 'website-redirect-location',
+	                'withPrefix': true
+	            },
+	            'StorageClass': {
+	                'location': 'header',
+	                'sentAs': 'storage-class',
+	                'withPrefix': true
+	            },
+	            'Metadata': {
+	                'location': 'header',
+	                'type': 'object',
+	                'sentAs': 'meta-',
+	                'withPrefix': true
+	            },
+				'MetadataDirective': {
+					'location' : 'header',
+					'sentAs' : 'metadata-directive',
+					'withPrefix' : true
+				}
+	        }
+	    },
+
+	'SetObjectAcl' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'acl',
+		'data' : {
+			'xmlRoot' : 'AccessControlPolicy',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'Owner' : owner,
+			'Grants' : grants,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'SetObjectAclOutput' : {
+		'parameters' : {
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+		},
+	},
+	'GetObjectAcl' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'acl',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'GetObjectAclOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'AccessControlPolicy',
+		},
+		'parameters' : {
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'Owner' : owner,
+			'Grants' : grants
+		},
+	},
+
+	'SetObjectTagging' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'tagging',
+		'data' : {
+			'xmlRoot' : 'Tagging',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'Tags' : tagSet
+		}
+	},
+
+	'GetObjectTagging' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'tagging',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+		}
+	},
+
+	'GetObjectTaggingOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'Tagging',
+		},
+		'parameters' : {
+			'Tags' : tagSet
+		}
+	},
+
+	'DeleteObjectTagging' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'tagging',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+		}
+	},
+
+	'DeleteObject' : {
+		'httpMethod' : 'DELETE',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'VersionId' : {
+				'location' : 'urlPath',
+				'sentAs' : 'versionId',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'DeleteObjectOutput' : {
+		'parameters' : {
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'DeleteMarker' : {
+				'location' : 'header',
+				'sentAs' : 'delete-marker',
+				'withPrefix' : true
+			},
+		},
+	},
+	'DeleteObjects' : {
+		'httpMethod' : 'POST',
+		'urlPath' : 'delete',
+		'data' : {
+			'xmlRoot' : 'Delete',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Quiet' : {
+				'location' : 'xml',
+				'sentAs' : 'Quiet',
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+			'Objects' : {
+				'required' : true,
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Object',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'sentAs' : 'Key',
+						},
+						'VersionId' : {
+							'sentAs' : 'VersionId',
+						},
+					},
+				},
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'DeleteObjectsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'DeleteResult',
+		},
+		'parameters' : {
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+			'Deleteds' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Deleted',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'VersionId' : {
+							'sentAs' : 'VersionId',
+						},
+						'DeleteMarker' : {
+							'sentAs' : 'DeleteMarker',
+						},
+						'DeleteMarkerVersionId' : {
+							'sentAs' : 'DeleteMarkerVersionId',
+						},
+					}
+				},
+			},
+			'Errors' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Error',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'VersionId' : {
+							'sentAs' : 'VersionId',
+						},
+						'Code' : {
+							'sentAs' : 'Code',
+						},
+						'Message' : {
+							'sentAs' : 'Message',
+						},
+					}
+				},
+			},
+		},
+	},
+	'InitiateMultipartUpload' : {
+		'httpMethod' : 'POST',
+		'urlPath' : 'uploads',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'ACL' : {
+				'location' : 'header',
+				'sentAs' : 'acl',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'GrantRead' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read',
+				'withPrefix' : true,
+			},
+			'GrantReadAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-read-acp',
+				'withPrefix' : true,
+			},
+			'GrantWriteAcp' : {
+				'location' : 'header',
+				'sentAs' : 'grant-write-acp',
+				'withPrefix' : true,
+			},
+			'GrantFullControl' : {
+				'location' : 'header',
+				'sentAs' : 'grant-full-control',
+				'withPrefix' : true,
+			},
+			'StorageClass' : {
+				'location' : 'header',
+				'sentAs' : 'storage-class',
+				'withPrefix' : true,
+				'type' : 'adapter',
+			},
+			'Metadata' : {
+				'type' : 'object',
+				'location' : 'header',
+				'sentAs' : 'meta-',
+				'withPrefix' : true,
+			},
+			'CacheControl': {
+				'location': 'header',
+				'sentAs': 'Cache-Control'
+			},
+			'ContentDisposition': {
+				'location': 'header',
+				'sentAs': 'Content-Disposition',
+				'encodingSafe': ' ;/?:@&=+$,"'
+			},
+			'ContentLanguage': {
+				'location': 'header',
+				'sentAs': 'Content-Language'
+			},
+			'ContentEncoding': {
+				'location': 'header',
+				'sentAs': 'Content-Encoding'
+			},
+			'WebsiteRedirectLocation' : {
+				'location' : 'header',
+				'sentAs' : 'website-redirect-location',
+				'withPrefix' : true,
+			},
+			'Tags' : {
+				'location' : 'header',
+				'sentAs' : 'tagging',
+				'withPrefix': true
+			},
+			'Expires' : {
+				'location' : 'header',
+				'sentAs' : 'x-obs-expires',
+				'type' : 'number'
+			},
+			'ContentType' : {
+				'location' : 'header',
+				'sentAs' : 'Content-Type'
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+				'type' : 'adapter'
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true,
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type',
+			},
+		},
+	},
+	'InitiateMultipartUploadOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'InitiateMultipartUploadResult',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Bucket',
+			},
+			'Key' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Key',
+			},
+			'UploadId' : {
+				'location' : 'xml',
+				'sentAs' : 'UploadId',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true,
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true,
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true,
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true,
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+		},
+	},
+	'ListMultipartUploads' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'uploads',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Delimiter' : {
+				'location' : 'urlPath',
+				'sentAs' : 'delimiter',
+			},
+			'KeyMarker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'key-marker',
+			},
+			'MaxUploads' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'max-uploads',
+			},
+			'Prefix' : {
+				'location' : 'urlPath',
+				'sentAs' : 'prefix',
+			},
+			'UploadIdMarker' : {
+				'location' : 'urlPath',
+				'sentAs' : 'upload-id-marker',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type',
+			}
+		},
+	},
+	'ListMultipartUploadsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ListMultipartUploadsResult',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Bucket',
+			},
+			'KeyMarker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'KeyMarker',
+			},
+			'UploadIdMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'UploadIdMarker',
+			},
+			'NextKeyMarker' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'NextKeyMarker',
+			},
+			'Prefix' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Prefix',
+			},
+			'Delimiter' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Delimiter',
+			},
+			'NextUploadIdMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'NextUploadIdMarker',
+			},
+			'MaxUploads' : {
+				'location' : 'xml',
+				'sentAs' : 'MaxUploads',
+			},
+			'IsTruncated' : {
+				'location' : 'xml',
+				'sentAs' : 'IsTruncated',
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType'
+			},
+			'Uploads' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Upload',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'UploadId' : {
+							'sentAs' : 'UploadId',
+						},
+						'Key' : {
+							'decode' : true,
+							'sentAs' : 'Key',
+						},
+						'Initiated' : {
+							'sentAs' : 'Initiated',
+						},
+						'StorageClass' : {
+							'sentAs' : 'StorageClass',
+						},
+						'Owner' : owner,
+						'Initiator' : initiator
+					},
+				},
+			},
+			'CommonPrefixes' : commonPrefixes
+		},
+	},
+	'UploadPart' : {
+		'httpMethod' : 'PUT',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'PartNumber' : {
+				'required' : true,
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'partNumber',
+			},
+			'UploadId' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'uploadId',
+			},
+			'ContentMD5' : {
+				'location' : 'header',
+				'sentAs' : 'Content-MD5',
+			},
+			'ContentSHA256' : {
+				'location' : 'header',
+				'sentAs' : 'content-sha256',
+				'withPrefix' : true,
+			},
+			'Body' : {
+				'location' : 'body',
+			},
+			'SourceFile' : {
+				'type' : 'srcFile',
+			},
+			'Offset' : {
+				'type' : 'plain'
+			},
+			'PartSize' : {
+				'type' : 'plain'
+			},
+			'ProgressCallback' :{
+				'type' : 'plain'
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'UploadPartOutput' : {
+		'parameters' : {
+			'ETag' : {
+				'location' : 'header',
+				'sentAs' : 'etag',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			}
+		},
+	},
+	'ListParts' : {
+		'httpMethod' : 'GET',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'UploadId' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'uploadId',
+			},
+			'MaxParts' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'max-parts',
+			},
+			'PartNumberMarker' : {
+				'type' : 'number',
+				'location' : 'urlPath',
+				'sentAs' : 'part-number-marker',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type',
+			},
+		},
+	},
+	'ListPartsOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ListPartsResult',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Bucket',
+			},
+			'Key' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Key',
+			},
+			'UploadId' : {
+				'location' : 'xml',
+				'sentAs' : 'UploadId',
+			},
+			'PartNumberMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'PartNumberMarker',
+			},
+			'NextPartNumberMarker' : {
+				'location' : 'xml',
+				'sentAs' : 'NextPartNumberMarker',
+			},
+			'MaxParts' : {
+				'location' : 'xml',
+				'sentAs' : 'MaxParts',
+			},
+			'IsTruncated' : {
+				'location' : 'xml',
+				'sentAs' : 'IsTruncated',
+			},
+			'StorageClass' : {
+				'location' : 'xml',
+				'sentAs' : 'StorageClass',
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'EncodingType',
+			},
+			'Initiator':initiator,
+			'Owner' : owner,
+			'Parts' : {
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Part',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'PartNumber' : {
+							'sentAs' : 'PartNumber',
+						},
+						'LastModified' : {
+							'sentAs' : 'LastModified',
+						},
+						'ETag' : {
+							'sentAs' : 'ETag',
+						},
+						'Size' : {
+							'sentAs' : 'Size',
+						},
+					},
+				},
+			}
+		},
+	},
+	'CopyPart' : {
+		'httpMethod' : 'PUT',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'PartNumber' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'partNumber',
+				'type' : 'number',
+			},
+			'UploadId' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'uploadId',
+			},
+			'CopySource' : {
+				'required' : true,
+				'location' : 'header',
+				'sentAs' : 'copy-source',
+				'skipEncoding' : true,
+				'withPrefix' : true
+			},
+			'CopySourceRange' : {
+				'location' : 'header',
+				'sentAs' : 'copy-source-range',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'CopySourceSseC' :{
+				'location' : 'header',
+				'sentAs' : 'copy-source-server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'CopySourceSseCKey' :{
+				'location' : 'header',
+				'sentAs' : 'copy-source-server-side-encryption-customer-key',
+				'type' : 'password',
+				'withPrefix' : true
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'CopyPartOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'CopyPartResult',
+		},
+		'parameters' : {
+			'LastModified' : {
+				'location' : 'xml',
+				'sentAs' : 'LastModified',
+			},
+			'ETag' : {
+				'location' : 'xml',
+				'sentAs' : 'ETag',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			}
+		},
+	},
+	'AbortMultipartUpload' : {
+		'httpMethod' : 'DELETE',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'UploadId' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'uploadId',
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+
+	'CompleteMultipartUpload' : {
+		'httpMethod' : 'POST',
+		'data' : {
+			'xmlRoot' : 'CompleteMultipartUpload',
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'UploadId' : {
+				'required' : true,
+				'location' : 'urlPath',
+				'sentAs' : 'uploadId',
+			},
+			'EncodingType' : {
+				'location' : 'urlPath',
+				'sentAs' : 'encoding-type',
+			},
+			'Parts' : {
+				'required' : true,
+				'type' : 'array',
+				'location' : 'xml',
+				'sentAs' : 'Part',
+				'items' : {
+					'type' : 'object',
+					'parameters' : {
+						'PartNumber' : {
+							'sentAs' : 'PartNumber',
+						},
+						'ETag' : {
+							'sentAs' : 'ETag',
+						},
+					},
+				},
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'CompleteMultipartUploadOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'CompleteMultipartUploadResult',
+		},
+		'parameters' : {
+			'VersionId' : {
+				'location' : 'header',
+				'sentAs' : 'version-id',
+				'withPrefix' : true
+			},
+			'Location' : {
+				'location' : 'xml',
+				'sentAs' : 'Location',
+			},
+			'Bucket' : {
+				'location' : 'xml',
+				'sentAs' : 'Bucket',
+			},
+			'Key' : {
+				'decode' : true,
+				'location' : 'xml',
+				'sentAs' : 'Key',
+			},
+			'ETag' : {
+				'location' : 'xml',
+				'sentAs' : 'ETag',
+			},
+			'SseKms' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption',
+				'withPrefix' : true
+			},
+			'SseKmsKey' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-aws-kms-key-id',
+				'withPrefix' : true
+			},
+			'SseKmsProjectId' :{
+				'location' : 'header',
+				'sentAs' : 'sse-kms-key-project-id',
+				'withPrefix' : true
+			},
+			'SseC' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-algorithm',
+				'withPrefix' : true
+			},
+			'SseCKeyMd5' :{
+				'location' : 'header',
+				'sentAs' : 'server-side-encryption-customer-key-MD5',
+				'withPrefix' : true
+			},
+			'EncodingType' : {
+				'location' : 'xml',
+				'sentAs' : 'EncodingType',
+			},
+		},
+	},
+
+	'OptionsObject' : {
+		'httpMethod' : 'OPTIONS',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Key' : {
+				'required' : true,
+				'location' : 'uri',
+			},
+			'Origin' : {
+				'required' : true,
+				'location' : 'header',
+				'sentAs' : 'Origin',
+			},
+			'AccessControlRequestMethods' : {
+				'required' : true,
+				'type' : 'array',
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Method',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'AccessControlRequestHeaders' : {
+				'type' : 'array',
+				'location' : 'header',
+				'sentAs' : 'Access-Control-Request-Headers',
+				'items' : {
+					'type' : 'string',
+				},
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		},
+	},
+	'OptionsObjectOutput' : {
+		'parameters' : {
+			'AllowOrigin' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-origin',
+			},
+			'AllowHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-headers',
+			},
+			'AllowMethod' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-allow-methods',
+			},
+			'ExposeHeader' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-expose-headers',
+			},
+			'MaxAgeSeconds' : {
+				'location' : 'header',
+				'sentAs' : 'access-control-max-age',
+			},
+		},
+	},
+
+	'GetBucketDirectColdAccess': {
+		'httpMethod': 'GET',
+		'urlPath': 'directcoldaccess',
+		'parameters': {
+			'Bucket': {
+				'required': true,
+				'location': 'uri'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'GetBucketDirectColdAccessOutput': {
+		'data': {
+			'type': 'xml',
+			'xmlRoot': 'DirectColdAccessConfiguration'
+		},
+		'parameters': {
+			'Status': {
+				'location': 'xml',
+				'sentAs': 'Status'
+			}
+		}
+	},
+
+	'SetBucketDirectColdAccess': {
+		'httpMethod': 'PUT',
+		'urlPath': 'directcoldaccess',
+		'data': {
+			'xmlRoot': 'DirectColdAccessConfiguration',
+			'md5' : true
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Status': {
+				'required': true,
+				'location': 'xml',
+				'sentAs': 'Status'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'SetBucketDirectColdAccessOutput': {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'DirectColdAccessConfiguration'
+		},
+		'parameters' : {
+			'Status': {
+				'location': 'xml',
+				'sentAs': 'Status'
+			}
+		}
+	},
+
+	'DeleteBucketDirectColdAccess': {
+		'httpMethod': 'DELETE',
+		'urlPath': 'directcoldaccess',
+		'parameters': {
+			'Bucket': {
+				'required': true,
+				'location': 'uri'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+
+	'DeleteBucketDirectColdAccessOutput': {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'DirectColdAccessConfiguration'
+		},
+		'parameters' : {
+			'Status': {
+				'location': 'xml',
+				'sentAs': 'Status'
+			}
+		}
+	},
+
+	'GetBucketEncryption' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'encryption',
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+	'GetBucketEncryptionOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ServerSideEncryptionConfiguration'
+		},
+		'parameters' : {
+			'Rule' : {
+				'type': 'object',
+				'location': 'xml',
+				'sentAs': 'Rule',
+
+				'parameters': {
+					'ApplyServerSideEncryptionByDefault': {
+						'type': 'object',
+						'sentAs': 'ApplyServerSideEncryptionByDefault',
+						'parameters': {
+							'SSEAlgorithm': {
+								'sentAs': 'SSEAlgorithm'
+							},
+							'KMSMasterKeyID': {
+								'sentAs': 'KMSMasterKeyID'
+							}
+						}
+					}
+				}
+			}
+		}
+	},
+	'SetBucketEncryption': {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'encryption',
+		'data' : {
+			'xmlRoot' : 'ServerSideEncryptionConfiguration'
+		},
+		'parameters' : {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'Rule' : bucketEncryptionRule,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+	'SetBucketEncryptionOutput': {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ServerSideEncryptionConfiguration'
+		},
+		'parameters' : {
+			'Rule' : bucketEncryptionRule
+		}
+	},
+	'DeleteBucketEncryption': {
+		'httpMethod': 'DELETE',
+		'urlPath': 'encryption',
+		'parameters': {
+			'Bucket': {
+				'required': true,
+				'location': 'uri'
+			},
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+	'DeleteBucketEncryptionOutput': {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'ServerSideEncryptionConfiguration'
+		},
+		'parameters' : {
+			'Rule' : bucketEncryptionRule,
+			'RequestPayer': {
+				'location': 'header',
+				'sentAs': 'request-payer',
+				'withPrefix': true
+			}
+		}
+	},
+	'PutBucketPublicAccessBlock' : {
+		'httpMethod' : 'PUT',
+		'urlPath' : 'publicAccessBlock',
+		'data' : {
+			'xmlRoot' : 'PublicAccessBlockConfiguration'
+		},
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+					'location' : 'uri'
+			},
+			...PublicAccessBlockBody
+		}
+	},
+	'GetBucketPublicAccessBlock' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'publicAccessBlock',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+					'location' : 'uri'
+			},
+		}
+	},
+	'GetBucketPublicAccessBlockOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'PublicAccessBlockConfiguration'
+		},
+		"parameters": {
+			...PublicAccessBlockBody
+		}
+	},
+	'DeleteBucketPublicAccessBlock' : {
+		'httpMethod' : 'DELETE',
+		'urlPath' : 'publicAccessBlock',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+					'location' : 'uri'
+			},
+		}
+	},
+	'GetBucketPolicyPublicStatus' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'policyStatus',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+					'location' : 'uri'
+			},
+		}
+	},
+	'GetBucketPolicyPublicStatusOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'PolicyStatus'
+		},
+		"parameters": {
+			'IsPublic' : {
+				'location' : 'xml',
+				'sentAs' : 'IsPublic',
+			}, 
+		}
+	},
+	'GetBucketPublicStatus' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'bucketStatus',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+		}
+	},
+	'GetBucketPublicStatusOutput' : {
+		'data' : {
+			'type' : 'xml',
+			'xmlRoot' : 'BucketStatus'
+		},
+		"parameters": {
+			'IsPublic' : {
+				'location' : 'xml',
+				'sentAs' : 'IsPublic',
+			}, 
+		}
+	},
+	'SetBucketCustomDomain' : {
+		'httpMethod' : 'PUT',
+		// 'urlPath' : 'customdomain',
+		'data' : {
+			'md5' : true
+		},
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+				'location': 'uri',
+			},
+			'DomainName' : {
+				'required': true,
+				'location': 'urlPath',
+				'sentAs':'customdomain'
+			},
+			'DomainBody':CustomDomainCertificateConfig
+		}
+	},
+	'GetBucketCustomDomain' : {
+		'httpMethod' : 'GET',
+		'urlPath' : 'customdomain',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+				'location': 'uri',
+				'type': 'string'
+			},
+		}
+	},
+	'GetBucketCustomDomainOutput': {
+		'data': {
+			'type': 'xml',
+			'xmlRoot': 'ListBucketCustomDomainsResult'
+		},
+		'parameters': {
+			'Domains': {
+				'location': 'xml',
+				'sentAs': 'Domains',
+				'type': 'array',
+				'items': {
+					'type': 'object',
+					'parameters': {
+						'DomainName': {
+							'sentAs': 'DomainName',
+						},
+						'Value': {
+							'sentAs': 'CreateTime',
+						},
+						'CertificateId': {
+							'sentAs': 'CertificateId',
+						}
+					},
+				}
+			}
+		}
+	},
+	'DeleteBucketCustomDomain' : {
+		'httpMethod' : 'DELETE',
+		"parameters": {
+			'Bucket' : {
+				'required' : true,
+				'location' : 'uri'
+			},
+			'DomainName': {
+				'required': true,
+				'location': 'urlPath',
+				'sentAs':'customdomain'
+			}
+		}
+	}
+};
+
+
+module.exports = operations;
+
+/***/ }),
+
+/***/ 9741:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const validator = __nccwpck_require__(9433);
+const XMLParser = __nccwpck_require__(9844);
+const XMLBuilder = __nccwpck_require__(659);
+
+module.exports = {
+  XMLParser: XMLParser,
+  XMLValidator: validator,
+  XMLBuilder: XMLBuilder
+}
+
+/***/ }),
+
+/***/ 812:
+/***/ ((module) => {
+
+function getIgnoreAttributesFn(ignoreAttributes) {
+    if (typeof ignoreAttributes === 'function') {
+        return ignoreAttributes
+    }
+    if (Array.isArray(ignoreAttributes)) {
+        return (attrName) => {
+            for (const pattern of ignoreAttributes) {
+                if (typeof pattern === 'string' && attrName === pattern) {
+                    return true
+                }
+                if (pattern instanceof RegExp && pattern.test(attrName)) {
+                    return true
+                }
+            }
+        }
+    }
+    return () => false
+}
+
+module.exports = getIgnoreAttributesFn
+
+/***/ }),
+
+/***/ 7019:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+
+const nameStartChar = ':A-Za-z_\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD';
+const nameChar = nameStartChar + '\\-.\\d\\u00B7\\u0300-\\u036F\\u203F-\\u2040';
+const nameRegexp = '[' + nameStartChar + '][' + nameChar + ']*'
+const regexName = new RegExp('^' + nameRegexp + '$');
+
+const getAllMatches = function (string, regex) {
+  const matches = [];
+  let match = regex.exec(string);
+  while (match) {
+    const allmatches = [];
+    allmatches.startIndex = regex.lastIndex - match[0].length;
+    const len = match.length;
+    for (let index = 0; index < len; index++) {
+      allmatches.push(match[index]);
+    }
+    matches.push(allmatches);
+    match = regex.exec(string);
+  }
+  return matches;
+};
+
+const isName = function (string) {
+  const match = regexName.exec(string);
+  return !(match === null || typeof match === 'undefined');
+};
+
+exports.isExist = function (v) {
+  return typeof v !== 'undefined';
+};
+
+exports.isEmptyObject = function (obj) {
+  return Object.keys(obj).length === 0;
+};
+
+/**
+ * Copy all the properties of a into b.
+ * @param {*} target
+ * @param {*} a
+ */
+exports.merge = function (target, a, arrayMode) {
+  if (a) {
+    const keys = Object.keys(a); // will return an array of own properties
+    const len = keys.length; //don't make it inline
+    for (let i = 0; i < len; i++) {
+      if (arrayMode === 'strict') {
+        target[keys[i]] = [a[keys[i]]];
+      } else {
+        target[keys[i]] = a[keys[i]];
+      }
+    }
+  }
+};
+/* exports.merge =function (b,a){
+  return Object.assign(b,a);
+} */
+
+exports.getValue = function (v) {
+  if (exports.isExist(v)) {
+    return v;
+  } else {
+    return '';
+  }
+};
+
+/**
+ * Dangerous property names that could lead to prototype pollution or security issues
+ */
+const DANGEROUS_PROPERTY_NAMES = [
+  // '__proto__',
+  // 'constructor',
+  // 'prototype',
+  'hasOwnProperty',
+  'toString',
+  'valueOf',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__'
+];
+
+const criticalProperties = ["__proto__", "constructor", "prototype"];
+
+exports.isName = isName;
+exports.getAllMatches = getAllMatches;
+exports.nameRegexp = nameRegexp;
+exports.DANGEROUS_PROPERTY_NAMES = DANGEROUS_PROPERTY_NAMES;
+exports.criticalProperties = criticalProperties;
+
+
+/***/ }),
+
+/***/ 9433:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const util = __nccwpck_require__(7019);
+
+const defaultOptions = {
+  allowBooleanAttributes: false, //A tag can have attributes without any value
+  unpairedTags: []
+};
+
+//const tagsPattern = new RegExp("<\\/?([\\w:\\-_\.]+)\\s*\/?>","g");
+exports.validate = function (xmlData, options) {
+  options = Object.assign({}, defaultOptions, options);
+
+  //xmlData = xmlData.replace(/(\r\n|\n|\r)/gm,"");//make it single line
+  //xmlData = xmlData.replace(/(^\s*<\?xml.*?\?>)/g,"");//Remove XML starting tag
+  //xmlData = xmlData.replace(/(<!DOCTYPE[\s\w\"\.\/\-\:]+(\[.*\])*\s*>)/g,"");//Remove DOCTYPE
+  const tags = [];
+  let tagFound = false;
+
+  //indicates that the root tag has been closed (aka. depth 0 has been reached)
+  let reachedRoot = false;
+
+  if (xmlData[0] === '\ufeff') {
+    // check for byte order mark (BOM)
+    xmlData = xmlData.substr(1);
+  }
+  
+  for (let i = 0; i < xmlData.length; i++) {
+
+    if (xmlData[i] === '<' && xmlData[i+1] === '?') {
+      i+=2;
+      i = readPI(xmlData,i);
+      if (i.err) return i;
+    }else if (xmlData[i] === '<') {
+      //starting of tag
+      //read until you reach to '>' avoiding any '>' in attribute value
+      let tagStartPos = i;
+      i++;
+      
+      if (xmlData[i] === '!') {
+        i = readCommentAndCDATA(xmlData, i);
+        continue;
+      } else {
+        let closingTag = false;
+        if (xmlData[i] === '/') {
+          //closing tag
+          closingTag = true;
+          i++;
+        }
+        //read tagname
+        let tagName = '';
+        for (; i < xmlData.length &&
+          xmlData[i] !== '>' &&
+          xmlData[i] !== ' ' &&
+          xmlData[i] !== '\t' &&
+          xmlData[i] !== '\n' &&
+          xmlData[i] !== '\r'; i++
+        ) {
+          tagName += xmlData[i];
+        }
+        tagName = tagName.trim();
+        //console.log(tagName);
+
+        if (tagName[tagName.length - 1] === '/') {
+          //self closing tag without attributes
+          tagName = tagName.substring(0, tagName.length - 1);
+          //continue;
+          i--;
+        }
+        if (!validateTagName(tagName)) {
+          let msg;
+          if (tagName.trim().length === 0) {
+            msg = "Invalid space after '<'.";
+          } else {
+            msg = "Tag '"+tagName+"' is an invalid name.";
+          }
+          return getErrorObject('InvalidTag', msg, getLineNumberForPosition(xmlData, i));
+        }
+
+        const result = readAttributeStr(xmlData, i);
+        if (result === false) {
+          return getErrorObject('InvalidAttr', "Attributes for '"+tagName+"' have open quote.", getLineNumberForPosition(xmlData, i));
+        }
+        let attrStr = result.value;
+        i = result.index;
+
+        if (attrStr[attrStr.length - 1] === '/') {
+          //self closing tag
+          const attrStrStart = i - attrStr.length;
+          attrStr = attrStr.substring(0, attrStr.length - 1);
+          const isValid = validateAttributeString(attrStr, options);
+          if (isValid === true) {
+            tagFound = true;
+            //continue; //text may presents after self closing tag
+          } else {
+            //the result from the nested function returns the position of the error within the attribute
+            //in order to get the 'true' error line, we need to calculate the position where the attribute begins (i - attrStr.length) and then add the position within the attribute
+            //this gives us the absolute index in the entire xml, which we can use to find the line at last
+            return getErrorObject(isValid.err.code, isValid.err.msg, getLineNumberForPosition(xmlData, attrStrStart + isValid.err.line));
+          }
+        } else if (closingTag) {
+          if (!result.tagClosed) {
+            return getErrorObject('InvalidTag', "Closing tag '"+tagName+"' doesn't have proper closing.", getLineNumberForPosition(xmlData, i));
+          } else if (attrStr.trim().length > 0) {
+            return getErrorObject('InvalidTag', "Closing tag '"+tagName+"' can't have attributes or invalid starting.", getLineNumberForPosition(xmlData, tagStartPos));
+          } else if (tags.length === 0) {
+            return getErrorObject('InvalidTag', "Closing tag '"+tagName+"' has not been opened.", getLineNumberForPosition(xmlData, tagStartPos));
+          } else {
+            const otg = tags.pop();
+            if (tagName !== otg.tagName) {
+              let openPos = getLineNumberForPosition(xmlData, otg.tagStartPos);
+              return getErrorObject('InvalidTag',
+                "Expected closing tag '"+otg.tagName+"' (opened in line "+openPos.line+", col "+openPos.col+") instead of closing tag '"+tagName+"'.",
+                getLineNumberForPosition(xmlData, tagStartPos));
+            }
+
+            //when there are no more tags, we reached the root level.
+            if (tags.length == 0) {
+              reachedRoot = true;
+            }
+          }
+        } else {
+          const isValid = validateAttributeString(attrStr, options);
+          if (isValid !== true) {
+            //the result from the nested function returns the position of the error within the attribute
+            //in order to get the 'true' error line, we need to calculate the position where the attribute begins (i - attrStr.length) and then add the position within the attribute
+            //this gives us the absolute index in the entire xml, which we can use to find the line at last
+            return getErrorObject(isValid.err.code, isValid.err.msg, getLineNumberForPosition(xmlData, i - attrStr.length + isValid.err.line));
+          }
+
+          //if the root level has been reached before ...
+          if (reachedRoot === true) {
+            return getErrorObject('InvalidXml', 'Multiple possible root nodes found.', getLineNumberForPosition(xmlData, i));
+          } else if(options.unpairedTags.indexOf(tagName) !== -1){
+            //don't push into stack
+          } else {
+            tags.push({tagName, tagStartPos});
+          }
+          tagFound = true;
+        }
+
+        //skip tag text value
+        //It may include comments and CDATA value
+        for (i++; i < xmlData.length; i++) {
+          if (xmlData[i] === '<') {
+            if (xmlData[i + 1] === '!') {
+              //comment or CADATA
+              i++;
+              i = readCommentAndCDATA(xmlData, i);
+              continue;
+            } else if (xmlData[i+1] === '?') {
+              i = readPI(xmlData, ++i);
+              if (i.err) return i;
+            } else{
+              break;
+            }
+          } else if (xmlData[i] === '&') {
+            const afterAmp = validateAmpersand(xmlData, i);
+            if (afterAmp == -1)
+              return getErrorObject('InvalidChar', "char '&' is not expected.", getLineNumberForPosition(xmlData, i));
+            i = afterAmp;
+          }else{
+            if (reachedRoot === true && !isWhiteSpace(xmlData[i])) {
+              return getErrorObject('InvalidXml', "Extra text at the end", getLineNumberForPosition(xmlData, i));
+            }
+          }
+        } //end of reading tag text value
+        if (xmlData[i] === '<') {
+          i--;
+        }
+      }
+    } else {
+      if ( isWhiteSpace(xmlData[i])) {
+        continue;
+      }
+      return getErrorObject('InvalidChar', "char '"+xmlData[i]+"' is not expected.", getLineNumberForPosition(xmlData, i));
+    }
+  }
+
+  if (!tagFound) {
+    return getErrorObject('InvalidXml', 'Start tag expected.', 1);
+  }else if (tags.length == 1) {
+      return getErrorObject('InvalidTag', "Unclosed tag '"+tags[0].tagName+"'.", getLineNumberForPosition(xmlData, tags[0].tagStartPos));
+  }else if (tags.length > 0) {
+      return getErrorObject('InvalidXml', "Invalid '"+
+          JSON.stringify(tags.map(t => t.tagName), null, 4).replace(/\r?\n/g, '')+
+          "' found.", {line: 1, col: 1});
+  }
+
+  return true;
+};
+
+function isWhiteSpace(char){
+  return char === ' ' || char === '\t' || char === '\n'  || char === '\r';
+}
+/**
+ * Read Processing insstructions and skip
+ * @param {*} xmlData
+ * @param {*} i
+ */
+function readPI(xmlData, i) {
+  const start = i;
+  for (; i < xmlData.length; i++) {
+    if (xmlData[i] == '?' || xmlData[i] == ' ') {
+      //tagname
+      const tagname = xmlData.substr(start, i - start);
+      if (i > 5 && tagname === 'xml') {
+        return getErrorObject('InvalidXml', 'XML declaration allowed only at the start of the document.', getLineNumberForPosition(xmlData, i));
+      } else if (xmlData[i] == '?' && xmlData[i + 1] == '>') {
+        //check if valid attribut string
+        i++;
+        break;
+      } else {
+        continue;
+      }
+    }
+  }
+  return i;
+}
+
+function readCommentAndCDATA(xmlData, i) {
+  if (xmlData.length > i + 5 && xmlData[i + 1] === '-' && xmlData[i + 2] === '-') {
+    //comment
+    for (i += 3; i < xmlData.length; i++) {
+      if (xmlData[i] === '-' && xmlData[i + 1] === '-' && xmlData[i + 2] === '>') {
+        i += 2;
+        break;
+      }
+    }
+  } else if (
+    xmlData.length > i + 8 &&
+    xmlData[i + 1] === 'D' &&
+    xmlData[i + 2] === 'O' &&
+    xmlData[i + 3] === 'C' &&
+    xmlData[i + 4] === 'T' &&
+    xmlData[i + 5] === 'Y' &&
+    xmlData[i + 6] === 'P' &&
+    xmlData[i + 7] === 'E'
+  ) {
+    let angleBracketsCount = 1;
+    for (i += 8; i < xmlData.length; i++) {
+      if (xmlData[i] === '<') {
+        angleBracketsCount++;
+      } else if (xmlData[i] === '>') {
+        angleBracketsCount--;
+        if (angleBracketsCount === 0) {
+          break;
+        }
+      }
+    }
+  } else if (
+    xmlData.length > i + 9 &&
+    xmlData[i + 1] === '[' &&
+    xmlData[i + 2] === 'C' &&
+    xmlData[i + 3] === 'D' &&
+    xmlData[i + 4] === 'A' &&
+    xmlData[i + 5] === 'T' &&
+    xmlData[i + 6] === 'A' &&
+    xmlData[i + 7] === '['
+  ) {
+    for (i += 8; i < xmlData.length; i++) {
+      if (xmlData[i] === ']' && xmlData[i + 1] === ']' && xmlData[i + 2] === '>') {
+        i += 2;
+        break;
+      }
+    }
+  }
+
+  return i;
+}
+
+const doubleQuote = '"';
+const singleQuote = "'";
+
+/**
+ * Keep reading xmlData until '<' is found outside the attribute value.
+ * @param {string} xmlData
+ * @param {number} i
+ */
+function readAttributeStr(xmlData, i) {
+  let attrStr = '';
+  let startChar = '';
+  let tagClosed = false;
+  for (; i < xmlData.length; i++) {
+    if (xmlData[i] === doubleQuote || xmlData[i] === singleQuote) {
+      if (startChar === '') {
+        startChar = xmlData[i];
+      } else if (startChar !== xmlData[i]) {
+        //if vaue is enclosed with double quote then single quotes are allowed inside the value and vice versa
+      } else {
+        startChar = '';
+      }
+    } else if (xmlData[i] === '>') {
+      if (startChar === '') {
+        tagClosed = true;
+        break;
+      }
+    }
+    attrStr += xmlData[i];
+  }
+  if (startChar !== '') {
+    return false;
+  }
+
+  return {
+    value: attrStr,
+    index: i,
+    tagClosed: tagClosed
+  };
+}
+
+/**
+ * Select all the attributes whether valid or invalid.
+ */
+const validAttrStrRegxp = new RegExp('(\\s*)([^\\s=]+)(\\s*=)?(\\s*([\'"])(([\\s\\S])*?)\\5)?', 'g');
+
+//attr, ="sd", a="amit's", a="sd"b="saf", ab  cd=""
+
+function validateAttributeString(attrStr, options) {
+  //console.log("start:"+attrStr+":end");
+
+  //if(attrStr.trim().length === 0) return true; //empty string
+
+  const matches = util.getAllMatches(attrStr, validAttrStrRegxp);
+  const attrNames = {};
+
+  for (let i = 0; i < matches.length; i++) {
+    if (matches[i][1].length === 0) {
+      //nospace before attribute name: a="sd"b="saf"
+      return getErrorObject('InvalidAttr', "Attribute '"+matches[i][2]+"' has no space in starting.", getPositionFromMatch(matches[i]))
+    } else if (matches[i][3] !== undefined && matches[i][4] === undefined) {
+      return getErrorObject('InvalidAttr', "Attribute '"+matches[i][2]+"' is without value.", getPositionFromMatch(matches[i]));
+    } else if (matches[i][3] === undefined && !options.allowBooleanAttributes) {
+      //independent attribute: ab
+      return getErrorObject('InvalidAttr', "boolean attribute '"+matches[i][2]+"' is not allowed.", getPositionFromMatch(matches[i]));
+    }
+    /* else if(matches[i][6] === undefined){//attribute without value: ab=
+                    return { err: { code:"InvalidAttr",msg:"attribute " + matches[i][2] + " has no value assigned."}};
+                } */
+    const attrName = matches[i][2];
+    if (!validateAttrName(attrName)) {
+      return getErrorObject('InvalidAttr', "Attribute '"+attrName+"' is an invalid name.", getPositionFromMatch(matches[i]));
+    }
+    if (!attrNames.hasOwnProperty(attrName)) {
+      //check for duplicate attribute.
+      attrNames[attrName] = 1;
+    } else {
+      return getErrorObject('InvalidAttr', "Attribute '"+attrName+"' is repeated.", getPositionFromMatch(matches[i]));
+    }
+  }
+
+  return true;
+}
+
+function validateNumberAmpersand(xmlData, i) {
+  let re = /\d/;
+  if (xmlData[i] === 'x') {
+    i++;
+    re = /[\da-fA-F]/;
+  }
+  for (; i < xmlData.length; i++) {
+    if (xmlData[i] === ';')
+      return i;
+    if (!xmlData[i].match(re))
+      break;
+  }
+  return -1;
+}
+
+function validateAmpersand(xmlData, i) {
+  // https://www.w3.org/TR/xml/#dt-charref
+  i++;
+  if (xmlData[i] === ';')
+    return -1;
+  if (xmlData[i] === '#') {
+    i++;
+    return validateNumberAmpersand(xmlData, i);
+  }
+  let count = 0;
+  for (; i < xmlData.length; i++, count++) {
+    if (xmlData[i].match(/\w/) && count < 20)
+      continue;
+    if (xmlData[i] === ';')
+      break;
+    return -1;
+  }
+  return i;
+}
+
+function getErrorObject(code, message, lineNumber) {
+  return {
+    err: {
+      code: code,
+      msg: message,
+      line: lineNumber.line || lineNumber,
+      col: lineNumber.col,
+    },
+  };
+}
+
+function validateAttrName(attrName) {
+  return util.isName(attrName);
+}
+
+// const startsWithXML = /^xml/i;
+
+function validateTagName(tagname) {
+  return util.isName(tagname) /* && !tagname.match(startsWithXML) */;
+}
+
+//this function returns the line number for the character at the given index
+function getLineNumberForPosition(xmlData, index) {
+  const lines = xmlData.substring(0, index).split(/\r?\n/);
+  return {
+    line: lines.length,
+
+    // column number is last line's length + 1, because column numbering starts at 1:
+    col: lines[lines.length - 1].length + 1
+  };
+}
+
+//this function returns the position of the first character of match within attrStr
+function getPositionFromMatch(match) {
+  return match.startIndex + match[1].length;
+}
+
+
+/***/ }),
+
+/***/ 659:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+//parse Empty Node as self closing node
+const buildFromOrderedJs = __nccwpck_require__(3997);
+const getIgnoreAttributesFn = __nccwpck_require__(812)
+
+const defaultOptions = {
+  attributeNamePrefix: '@_',
+  attributesGroupName: false,
+  textNodeName: '#text',
+  ignoreAttributes: true,
+  cdataPropName: false,
+  format: false,
+  indentBy: '  ',
+  suppressEmptyNode: false,
+  suppressUnpairedNode: true,
+  suppressBooleanAttributes: true,
+  tagValueProcessor: function(key, a) {
+    return a;
+  },
+  attributeValueProcessor: function(attrName, a) {
+    return a;
+  },
+  preserveOrder: false,
+  commentPropName: false,
+  unpairedTags: [],
+  entities: [
+    { regex: new RegExp("&", "g"), val: "&amp;" },//it must be on top
+    { regex: new RegExp(">", "g"), val: "&gt;" },
+    { regex: new RegExp("<", "g"), val: "&lt;" },
+    { regex: new RegExp("\'", "g"), val: "&apos;" },
+    { regex: new RegExp("\"", "g"), val: "&quot;" }
+  ],
+  processEntities: true,
+  stopNodes: [],
+  // transformTagName: false,
+  // transformAttributeName: false,
+  oneListGroup: false
+};
+
+function Builder(options) {
+  this.options = Object.assign({}, defaultOptions, options);
+  if (this.options.ignoreAttributes === true || this.options.attributesGroupName) {
+    this.isAttribute = function(/*a*/) {
+      return false;
+    };
+  } else {
+    this.ignoreAttributesFn = getIgnoreAttributesFn(this.options.ignoreAttributes)
+    this.attrPrefixLen = this.options.attributeNamePrefix.length;
+    this.isAttribute = isAttribute;
+  }
+
+  this.processTextOrObjNode = processTextOrObjNode
+
+  if (this.options.format) {
+    this.indentate = indentate;
+    this.tagEndChar = '>\n';
+    this.newLine = '\n';
+  } else {
+    this.indentate = function() {
+      return '';
+    };
+    this.tagEndChar = '>';
+    this.newLine = '';
+  }
+}
+
+Builder.prototype.build = function(jObj) {
+  if(this.options.preserveOrder){
+    return buildFromOrderedJs(jObj, this.options);
+  }else {
+    if(Array.isArray(jObj) && this.options.arrayNodeName && this.options.arrayNodeName.length > 1){
+      jObj = {
+        [this.options.arrayNodeName] : jObj
+      }
+    }
+    return this.j2x(jObj, 0, []).val;
+  }
+};
+
+Builder.prototype.j2x = function(jObj, level, ajPath) {
+  let attrStr = '';
+  let val = '';
+  const jPath = ajPath.join('.')
+  for (let key in jObj) {
+    if(!Object.prototype.hasOwnProperty.call(jObj, key)) continue;
+    if (typeof jObj[key] === 'undefined') {
+      // supress undefined node only if it is not an attribute
+      if (this.isAttribute(key)) {
+        val += '';
+      }
+    } else if (jObj[key] === null) {
+      // null attribute should be ignored by the attribute list, but should not cause the tag closing
+      if (this.isAttribute(key)) {
+        val += '';
+      } else if (key === this.options.cdataPropName) {
+        val += '';
+      } else if (key[0] === '?') {
+        val += this.indentate(level) + '<' + key + '?' + this.tagEndChar;
+      } else {
+        val += this.indentate(level) + '<' + key + '/' + this.tagEndChar;
+      }
+      // val += this.indentate(level) + '<' + key + '/' + this.tagEndChar;
+    } else if (jObj[key] instanceof Date) {
+      val += this.buildTextValNode(jObj[key], key, '', level);
+    } else if (typeof jObj[key] !== 'object') {
+      //premitive type
+      const attr = this.isAttribute(key);
+      if (attr && !this.ignoreAttributesFn(attr, jPath)) {
+        attrStr += this.buildAttrPairStr(attr, '' + jObj[key]);
+      } else if (!attr) {
+        //tag value
+        if (key === this.options.textNodeName) {
+          let newval = this.options.tagValueProcessor(key, '' + jObj[key]);
+          val += this.replaceEntitiesValue(newval);
+        } else {
+          val += this.buildTextValNode(jObj[key], key, '', level);
+        }
+      }
+    } else if (Array.isArray(jObj[key])) {
+      //repeated nodes
+      const arrLen = jObj[key].length;
+      let listTagVal = "";
+      let listTagAttr = "";
+      for (let j = 0; j < arrLen; j++) {
+        const item = jObj[key][j];
+        if (typeof item === 'undefined') {
+          // supress undefined node
+        } else if (item === null) {
+          if(key[0] === "?") val += this.indentate(level) + '<' + key + '?' + this.tagEndChar;
+          else val += this.indentate(level) + '<' + key + '/' + this.tagEndChar;
+          // val += this.indentate(level) + '<' + key + '/' + this.tagEndChar;
+        } else if (typeof item === 'object') {
+          if(this.options.oneListGroup){
+            const result = this.j2x(item, level + 1, ajPath.concat(key));
+            listTagVal += result.val;
+            if (this.options.attributesGroupName && item.hasOwnProperty(this.options.attributesGroupName)) {
+              listTagAttr += result.attrStr
+            }
+          }else{
+            listTagVal += this.processTextOrObjNode(item, key, level, ajPath)
+          }
+        } else {
+          if (this.options.oneListGroup) {
+            let textValue = this.options.tagValueProcessor(key, item);
+            textValue = this.replaceEntitiesValue(textValue);
+            listTagVal += textValue;
+          } else {
+            listTagVal += this.buildTextValNode(item, key, '', level);
+          }
+        }
+      }
+      if(this.options.oneListGroup){
+        listTagVal = this.buildObjectNode(listTagVal, key, listTagAttr, level);
+      }
+      val += listTagVal;
+    } else {
+      //nested node
+      if (this.options.attributesGroupName && key === this.options.attributesGroupName) {
+        const Ks = Object.keys(jObj[key]);
+        const L = Ks.length;
+        for (let j = 0; j < L; j++) {
+          attrStr += this.buildAttrPairStr(Ks[j], '' + jObj[key][Ks[j]]);
+        }
+      } else {
+        val += this.processTextOrObjNode(jObj[key], key, level, ajPath)
+      }
+    }
+  }
+  return {attrStr: attrStr, val: val};
+};
+
+Builder.prototype.buildAttrPairStr = function(attrName, val){
+  val = this.options.attributeValueProcessor(attrName, '' + val);
+  val = this.replaceEntitiesValue(val);
+  if (this.options.suppressBooleanAttributes && val === "true") {
+    return ' ' + attrName;
+  } else return ' ' + attrName + '="' + val + '"';
+}
+
+function processTextOrObjNode (object, key, level, ajPath) {
+  const result = this.j2x(object, level + 1, ajPath.concat(key));
+  if (object[this.options.textNodeName] !== undefined && Object.keys(object).length === 1) {
+    return this.buildTextValNode(object[this.options.textNodeName], key, result.attrStr, level);
+  } else {
+    return this.buildObjectNode(result.val, key, result.attrStr, level);
+  }
+}
+
+Builder.prototype.buildObjectNode = function(val, key, attrStr, level) {
+  if(val === ""){
+    if(key[0] === "?") return  this.indentate(level) + '<' + key + attrStr+ '?' + this.tagEndChar;
+    else {
+      return this.indentate(level) + '<' + key + attrStr + this.closeTag(key) + this.tagEndChar;
+    }
+  }else{
+
+    let tagEndExp = '</' + key + this.tagEndChar;
+    let piClosingChar = "";
+    
+    if(key[0] === "?") {
+      piClosingChar = "?";
+      tagEndExp = "";
+    }
+  
+    // attrStr is an empty string in case the attribute came as undefined or null
+    if ((attrStr || attrStr === '') && val.indexOf('<') === -1) {
+      return ( this.indentate(level) + '<' +  key + attrStr + piClosingChar + '>' + val + tagEndExp );
+    } else if (this.options.commentPropName !== false && key === this.options.commentPropName && piClosingChar.length === 0) {
+      const safeVal = String(val)
+        .replace(/--/g, '- -')   // -- is illegal anywhere in comment content
+        .replace(/-$/, '- ');    // trailing - would form --> with the closing delimiter
+      return this.indentate(level) + `<!--${safeVal}-->` + this.newLine;
+    }else {
+      return (
+        this.indentate(level) + '<' + key + attrStr + piClosingChar + this.tagEndChar +
+        val +
+        this.indentate(level) + tagEndExp    );
+    }
+  }
+}
+
+Builder.prototype.closeTag = function(key){
+  let closeTag = "";
+  if(this.options.unpairedTags.indexOf(key) !== -1){ //unpaired
+    if(!this.options.suppressUnpairedNode) closeTag = "/"
+  }else if(this.options.suppressEmptyNode){ //empty
+    closeTag = "/";
+  }else{
+    closeTag = `></${key}`
+  }
+  return closeTag;
+}
+
+function buildEmptyObjNode(val, key, attrStr, level) {
+  if (val !== '') {
+    return this.buildObjectNode(val, key, attrStr, level);
+  } else {
+    if(key[0] === "?") return  this.indentate(level) + '<' + key + attrStr+ '?' + this.tagEndChar;
+    else {
+      return  this.indentate(level) + '<' + key + attrStr + '/' + this.tagEndChar;
+      // return this.buildTagStr(level,key, attrStr);
+    }
+  }
+}
+
+Builder.prototype.buildTextValNode = function(val, key, attrStr, level) {
+  if (this.options.cdataPropName !== false && key === this.options.cdataPropName) {
+    const safeVal = String(val).replace(/\]\]>/g, ']]]]><![CDATA[>');
+    return this.indentate(level) + `<![CDATA[${safeVal}]]>` +  this.newLine;
+  }else if (this.options.commentPropName !== false && key === this.options.commentPropName) {
+    const safeVal = String(val)
+      .replace(/--/g, '- -')   // -- is illegal anywhere in comment content
+      .replace(/-$/, '- ');    // trailing - would form --> with the closing delimiter
+    return this.indentate(level) + `<!--${safeVal}-->` +  this.newLine;
+  }else if(key[0] === "?") {//PI tag
+    return  this.indentate(level) + '<' + key + attrStr+ '?' + this.tagEndChar; 
+  }else{
+    let textValue = this.options.tagValueProcessor(key, val);
+    textValue = this.replaceEntitiesValue(textValue);
+  
+    if( textValue === ''){
+      return this.indentate(level) + '<' + key + attrStr + this.closeTag(key) + this.tagEndChar;
+    }else{
+      return this.indentate(level) + '<' + key + attrStr + '>' +
+         textValue +
+        '</' + key + this.tagEndChar;
+    }
+  }
+}
+
+Builder.prototype.replaceEntitiesValue = function(textValue){
+  if(textValue && textValue.length > 0 && this.options.processEntities){
+    for (let i=0; i<this.options.entities.length; i++) {
+      const entity = this.options.entities[i];
+      textValue = textValue.replace(entity.regex, entity.val);
+    }
+  }
+  return textValue;
+}
+
+function indentate(level) {
+  return this.options.indentBy.repeat(level);
+}
+
+function isAttribute(name /*, options*/) {
+  if (name.startsWith(this.options.attributeNamePrefix) && name !== this.options.textNodeName) {
+    return name.substr(this.attrPrefixLen);
+  } else {
+    return false;
+  }
+}
+
+module.exports = Builder;
+
+
+/***/ }),
+
+/***/ 3997:
+/***/ ((module) => {
+
+const EOL = "\n";
+
+/**
+ * 
+ * @param {array} jArray 
+ * @param {any} options 
+ * @returns 
+ */
+function toXml(jArray, options) {
+    let indentation = "";
+    if (options.format && options.indentBy.length > 0) {
+        indentation = EOL;
+    }
+    return arrToStr(jArray, options, "", indentation);
+}
+
+function arrToStr(arr, options, jPath, indentation) {
+    let xmlStr = "";
+    let isPreviousElementTag = false;
+
+
+    if (!Array.isArray(arr)) {
+        // Non-array values (e.g. string tag values) should be treated as text content
+        if (arr !== undefined && arr !== null) {
+            let text = arr.toString();
+            text = replaceEntitiesValue(text, options);
+            return text;
+        }
+        return "";
+    }
+
+    for (let i = 0; i < arr.length; i++) {
+        const tagObj = arr[i];
+        const tagName = propName(tagObj);
+        if (tagName === undefined) continue;
+
+        let newJPath = "";
+        if (jPath.length === 0) newJPath = tagName
+        else newJPath = `${jPath}.${tagName}`;
+
+        if (tagName === options.textNodeName) {
+            let tagText = tagObj[tagName];
+            if (!isStopNode(newJPath, options)) {
+                tagText = options.tagValueProcessor(tagName, tagText);
+                tagText = replaceEntitiesValue(tagText, options);
+            }
+            if (isPreviousElementTag) {
+                xmlStr += indentation;
+            }
+            xmlStr += tagText;
+            isPreviousElementTag = false;
+            continue;
+        } else if (tagName === options.cdataPropName) {
+            if (isPreviousElementTag) {
+                xmlStr += indentation;
+            }
+            const cdataVal = String(tagObj[tagName][0][options.textNodeName]).replace(/\]\]>/g, ']]]]><![CDATA[>');
+            xmlStr += `<![CDATA[${cdataVal}]]>`;
+            isPreviousElementTag = false;
+            continue;
+        } else if (tagName === options.commentPropName) {
+            const commentVal = String(tagObj[tagName][0][options.textNodeName])
+                .replace(/--/g, '- -')   // -- is illegal anywhere in comment content
+                .replace(/-$/, '- ');    // trailing - would form --> with the closing delimiter
+            xmlStr += indentation + `<!--${commentVal}-->`;
+            isPreviousElementTag = true;
+            continue;
+        } else if (tagName[0] === "?") {
+            const attStr = attr_to_str(tagObj[":@"], options);
+            const tempInd = tagName === "?xml" ? "" : indentation;
+            let piTextNodeName = tagObj[tagName][0][options.textNodeName];
+            piTextNodeName = piTextNodeName.length !== 0 ? " " + piTextNodeName : ""; //remove extra spacing
+            xmlStr += tempInd + `<${tagName}${piTextNodeName}${attStr}?>`;
+            isPreviousElementTag = true;
+            continue;
+        }
+        let newIdentation = indentation;
+        if (newIdentation !== "") {
+            newIdentation += options.indentBy;
+        }
+        const attStr = attr_to_str(tagObj[":@"], options);
+        const tagStart = indentation + `<${tagName}${attStr}`;
+        const tagValue = arrToStr(tagObj[tagName], options, newJPath, newIdentation);
+        if (options.unpairedTags.indexOf(tagName) !== -1) {
+            if (options.suppressUnpairedNode) xmlStr += tagStart + ">";
+            else xmlStr += tagStart + "/>";
+        } else if ((!tagValue || tagValue.length === 0) && options.suppressEmptyNode) {
+            xmlStr += tagStart + "/>";
+        } else if (tagValue && tagValue.endsWith(">")) {
+            xmlStr += tagStart + `>${tagValue}${indentation}</${tagName}>`;
+        } else {
+            xmlStr += tagStart + ">";
+            if (tagValue && indentation !== "" && (tagValue.includes("/>") || tagValue.includes("</"))) {
+                xmlStr += indentation + options.indentBy + tagValue + indentation;
+            } else {
+                xmlStr += tagValue;
+            }
+            xmlStr += `</${tagName}>`;
+        }
+        isPreviousElementTag = true;
+    }
+
+    return xmlStr;
+}
+
+function propName(obj) {
+    const keys = Object.keys(obj);
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+        if (key !== ":@") return key;
+    }
+}
+
+function attr_to_str(attrMap, options) {
+    let attrStr = "";
+    if (attrMap && !options.ignoreAttributes) {
+        for (let attr in attrMap) {
+            if (!Object.prototype.hasOwnProperty.call(attrMap, attr)) continue;
+            let attrVal = options.attributeValueProcessor(attr, attrMap[attr]);
+            attrVal = replaceEntitiesValue(attrVal, options);
+            if (attrVal === true && options.suppressBooleanAttributes) {
+                attrStr += ` ${attr.substr(options.attributeNamePrefix.length)}`;
+            } else {
+                attrStr += ` ${attr.substr(options.attributeNamePrefix.length)}="${attrVal}"`;
+            }
+        }
+    }
+    return attrStr;
+}
+
+function isStopNode(jPath, options) {
+    jPath = jPath.substr(0, jPath.length - options.textNodeName.length - 1);
+    let tagName = jPath.substr(jPath.lastIndexOf(".") + 1);
+    for (let index in options.stopNodes) {
+        if (options.stopNodes[index] === jPath || options.stopNodes[index] === "*." + tagName) return true;
+    }
+    return false;
+}
+
+function replaceEntitiesValue(textValue, options) {
+    if (textValue && textValue.length > 0 && options.processEntities) {
+        for (let i = 0; i < options.entities.length; i++) {
+            const entity = options.entities[i];
+            textValue = textValue.replace(entity.regex, entity.val);
+        }
+    }
+    return textValue;
+}
+module.exports = toXml;
+
+
+/***/ }),
+
+/***/ 151:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const util = __nccwpck_require__(7019);
+
+class DocTypeReader {
+    constructor(options) {
+        this.suppressValidationErr = !options;
+        this.options = options || {};
+    }
+
+    readDocType(xmlData, i) {
+        const entities = Object.create(null);
+        let entityCount = 0;
+
+        if (xmlData[i + 3] === 'O' &&
+            xmlData[i + 4] === 'C' &&
+            xmlData[i + 5] === 'T' &&
+            xmlData[i + 6] === 'Y' &&
+            xmlData[i + 7] === 'P' &&
+            xmlData[i + 8] === 'E') {
+
+            i = i + 9;
+            let angleBracketsCount = 1;
+            let hasBody = false, comment = false;
+            let exp = "";
+
+            for (; i < xmlData.length; i++) {
+                if (xmlData[i] === '<' && !comment) { //Determine the tag type
+                    if (hasBody && hasSeq(xmlData, "!ENTITY", i)) {
+                        i += 7;
+                        let entityName, val;
+                        [entityName, val, i] = this.readEntityExp(xmlData, i + 1, this.suppressValidationErr);
+                        if (val.indexOf("&") === -1) { //Parameter entities are not supported
+                            if (this.options.enabled !== false &&
+                                this.options.maxEntityCount != null &&
+                                entityCount >= this.options.maxEntityCount) {
+                                throw new Error(
+                                    `Entity count (${entityCount + 1}) exceeds maximum allowed (${this.options.maxEntityCount})`
+                                );
+                            }
+                            //const escaped = entityName.replace(/[.\-+*:]/g, '\\.');
+                            const escaped = entityName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                            entities[entityName] = {
+                                regx: RegExp(`&${escaped};`, "g"),
+                                val: val
+                            };
+                            entityCount++;
+                        }
+                    } else if (hasBody && hasSeq(xmlData, "!ELEMENT", i)) {
+                        i += 8; //Not supported
+                        const { index } = this.readElementExp(xmlData, i + 1);
+                        i = index;
+                    } else if (hasBody && hasSeq(xmlData, "!ATTLIST", i)) {
+                        i += 8; //Not supported
+                        // const {index} = this.readAttlistExp(xmlData,i+1);
+                        // i = index;
+                    } else if (hasBody && hasSeq(xmlData, "!NOTATION", i)) {
+                        i += 9; //Not supported
+                        const { index } = this.readNotationExp(xmlData, i + 1, this.suppressValidationErr);
+                        i = index;
+                    } else if (hasSeq(xmlData, "!--", i)) {
+                        comment = true;
+                    } else {
+                        throw new Error(`Invalid DOCTYPE`);
+                    }
+
+                    angleBracketsCount++;
+                    exp = "";
+                } else if (xmlData[i] === '>') { //Read tag content
+                    if (comment) {
+                        if (xmlData[i - 1] === "-" && xmlData[i - 2] === "-") {
+                            comment = false;
+                            angleBracketsCount--;
+                        }
+                    } else {
+                        angleBracketsCount--;
+                    }
+                    if (angleBracketsCount === 0) {
+                        break;
+                    }
+                } else if (xmlData[i] === '[') {
+                    hasBody = true;
+                } else {
+                    exp += xmlData[i];
+                }
+            }
+
+            if (angleBracketsCount !== 0) {
+                throw new Error(`Unclosed DOCTYPE`);
+            }
+        } else {
+            throw new Error(`Invalid Tag instead of DOCTYPE`);
+        }
+
+        return { entities, i };
+    }
+
+    readEntityExp(xmlData, i) {
+        //External entities are not supported
+        //    <!ENTITY ext SYSTEM "http://normal-website.com" >
+
+        //Parameter entities are not supported
+        //    <!ENTITY entityname "&anotherElement;">
+
+        //Internal entities are supported
+        //    <!ENTITY entityname "replacement text">
+
+        // Skip leading whitespace after <!ENTITY
+        i = skipWhitespace(xmlData, i);
+
+        // Read entity name
+        let entityName = "";
+        while (i < xmlData.length && !/\s/.test(xmlData[i]) && xmlData[i] !== '"' && xmlData[i] !== "'") {
+            entityName += xmlData[i];
+            i++;
+        }
+        validateEntityName(entityName);
+
+        // Skip whitespace after entity name
+        i = skipWhitespace(xmlData, i);
+
+        // Check for unsupported constructs (external entities or parameter entities)
+        if (!this.suppressValidationErr) {
+            if (xmlData.substring(i, i + 6).toUpperCase() === "SYSTEM") {
+                throw new Error("External entities are not supported");
+            } else if (xmlData[i] === "%") {
+                throw new Error("Parameter entities are not supported");
+            }
+        }
+
+        // Read entity value (internal entity)
+        let entityValue = "";
+        [i, entityValue] = this.readIdentifierVal(xmlData, i, "entity");
+
+        // Validate entity size
+        if (this.options.enabled !== false &&
+            this.options.maxEntitySize != null &&
+            entityValue.length > this.options.maxEntitySize) {
+            throw new Error(
+                `Entity "${entityName}" size (${entityValue.length}) exceeds maximum allowed size (${this.options.maxEntitySize})`
+            );
+        }
+
+        i--;
+        return [entityName, entityValue, i];
+    }
+
+    readNotationExp(xmlData, i) {
+        // Skip leading whitespace after <!NOTATION
+        i = skipWhitespace(xmlData, i);
+
+        // Read notation name
+        let notationName = "";
+        while (i < xmlData.length && !/\s/.test(xmlData[i])) {
+            notationName += xmlData[i];
+            i++;
+        }
+        !this.suppressValidationErr && validateEntityName(notationName);
+
+        // Skip whitespace after notation name
+        i = skipWhitespace(xmlData, i);
+
+        // Check identifier type (SYSTEM or PUBLIC)
+        const identifierType = xmlData.substring(i, i + 6).toUpperCase();
+        if (!this.suppressValidationErr && identifierType !== "SYSTEM" && identifierType !== "PUBLIC") {
+            throw new Error(`Expected SYSTEM or PUBLIC, found "${identifierType}"`);
+        }
+        i += identifierType.length;
+
+        // Skip whitespace after identifier type
+        i = skipWhitespace(xmlData, i);
+
+        // Read public identifier (if PUBLIC)
+        let publicIdentifier = null;
+        let systemIdentifier = null;
+
+        if (identifierType === "PUBLIC") {
+            [i, publicIdentifier] = this.readIdentifierVal(xmlData, i, "publicIdentifier");
+
+            // Skip whitespace after public identifier
+            i = skipWhitespace(xmlData, i);
+
+            // Optionally read system identifier
+            if (xmlData[i] === '"' || xmlData[i] === "'") {
+                [i, systemIdentifier] = this.readIdentifierVal(xmlData, i, "systemIdentifier");
+            }
+        } else if (identifierType === "SYSTEM") {
+            // Read system identifier (mandatory for SYSTEM)
+            [i, systemIdentifier] = this.readIdentifierVal(xmlData, i, "systemIdentifier");
+
+            if (!this.suppressValidationErr && !systemIdentifier) {
+                throw new Error("Missing mandatory system identifier for SYSTEM notation");
+            }
+        }
+
+        return { notationName, publicIdentifier, systemIdentifier, index: --i };
+    }
+
+    readIdentifierVal(xmlData, i, type) {
+        let identifierVal = "";
+        const startChar = xmlData[i];
+        if (startChar !== '"' && startChar !== "'") {
+            throw new Error(`Expected quoted string, found "${startChar}"`);
+        }
+        i++;
+
+        while (i < xmlData.length && xmlData[i] !== startChar) {
+            identifierVal += xmlData[i];
+            i++;
+        }
+
+        if (xmlData[i] !== startChar) {
+            throw new Error(`Unterminated ${type} value`);
+        }
+        i++;
+        return [i, identifierVal];
+    }
+
+    readElementExp(xmlData, i) {
+        // <!ELEMENT br EMPTY>
+        // <!ELEMENT div ANY>
+        // <!ELEMENT title (#PCDATA)>
+        // <!ELEMENT book (title, author+)>
+        // <!ELEMENT name (content-model)>
+
+        // Skip leading whitespace after <!ELEMENT
+        i = skipWhitespace(xmlData, i);
+
+        // Read element name
+        let elementName = "";
+        while (i < xmlData.length && !/\s/.test(xmlData[i])) {
+            elementName += xmlData[i];
+            i++;
+        }
+
+        // Validate element name
+        if (!this.suppressValidationErr && !util.isName(elementName)) {
+            throw new Error(`Invalid element name: "${elementName}"`);
+        }
+
+        // Skip whitespace after element name
+        i = skipWhitespace(xmlData, i);
+        let contentModel = "";
+
+        // Expect '(' to start content model
+        if (xmlData[i] === "E" && hasSeq(xmlData, "MPTY", i)) {
+            i += 4;
+        } else if (xmlData[i] === "A" && hasSeq(xmlData, "NY", i)) {
+            i += 2;
+        } else if (xmlData[i] === "(") {
+            i++; // Move past '('
+
+            // Read content model
+            while (i < xmlData.length && xmlData[i] !== ")") {
+                contentModel += xmlData[i];
+                i++;
+            }
+            if (xmlData[i] !== ")") {
+                throw new Error("Unterminated content model");
+            }
+        } else if (!this.suppressValidationErr) {
+            throw new Error(`Invalid Element Expression, found "${xmlData[i]}"`);
+        }
+
+        return {
+            elementName,
+            contentModel: contentModel.trim(),
+            index: i
+        };
+    }
+
+    readAttlistExp(xmlData, i) {
+        // Skip leading whitespace after <!ATTLIST
+        i = skipWhitespace(xmlData, i);
+
+        // Read element name
+        let elementName = "";
+        while (i < xmlData.length && !/\s/.test(xmlData[i])) {
+            elementName += xmlData[i];
+            i++;
+        }
+
+        // Validate element name
+        validateEntityName(elementName);
+
+        // Skip whitespace after element name
+        i = skipWhitespace(xmlData, i);
+
+        // Read attribute name
+        let attributeName = "";
+        while (i < xmlData.length && !/\s/.test(xmlData[i])) {
+            attributeName += xmlData[i];
+            i++;
+        }
+
+        // Validate attribute name
+        if (!validateEntityName(attributeName)) {
+            throw new Error(`Invalid attribute name: "${attributeName}"`);
+        }
+
+        // Skip whitespace after attribute name
+        i = skipWhitespace(xmlData, i);
+
+        // Read attribute type
+        let attributeType = "";
+        if (xmlData.substring(i, i + 8).toUpperCase() === "NOTATION") {
+            attributeType = "NOTATION";
+            i += 8; // Move past "NOTATION"
+
+            // Skip whitespace after "NOTATION"
+            i = skipWhitespace(xmlData, i);
+
+            // Expect '(' to start the list of notations
+            if (xmlData[i] !== "(") {
+                throw new Error(`Expected '(', found "${xmlData[i]}"`);
+            }
+            i++; // Move past '('
+
+            // Read the list of allowed notations
+            let allowedNotations = [];
+            while (i < xmlData.length && xmlData[i] !== ")") {
+                let notation = "";
+                while (i < xmlData.length && xmlData[i] !== "|" && xmlData[i] !== ")") {
+                    notation += xmlData[i];
+                    i++;
+                }
+
+                // Validate notation name
+                notation = notation.trim();
+                if (!validateEntityName(notation)) {
+                    throw new Error(`Invalid notation name: "${notation}"`);
+                }
+
+                allowedNotations.push(notation);
+
+                // Skip '|' separator or exit loop
+                if (xmlData[i] === "|") {
+                    i++; // Move past '|'
+                    i = skipWhitespace(xmlData, i); // Skip optional whitespace after '|'
+                }
+            }
+
+            if (xmlData[i] !== ")") {
+                throw new Error("Unterminated list of notations");
+            }
+            i++; // Move past ')'
+
+            // Store the allowed notations as part of the attribute type
+            attributeType += " (" + allowedNotations.join("|") + ")";
+        } else {
+            // Handle simple types (e.g., CDATA, ID, IDREF, etc.)
+            while (i < xmlData.length && !/\s/.test(xmlData[i])) {
+                attributeType += xmlData[i];
+                i++;
+            }
+
+            // Validate simple attribute type
+            const validTypes = ["CDATA", "ID", "IDREF", "IDREFS", "ENTITY", "ENTITIES", "NMTOKEN", "NMTOKENS"];
+            if (!this.suppressValidationErr && !validTypes.includes(attributeType.toUpperCase())) {
+                throw new Error(`Invalid attribute type: "${attributeType}"`);
+            }
+        }
+
+        // Skip whitespace after attribute type
+        i = skipWhitespace(xmlData, i);
+
+        // Read default value
+        let defaultValue = "";
+        if (xmlData.substring(i, i + 8).toUpperCase() === "#REQUIRED") {
+            defaultValue = "#REQUIRED";
+            i += 8;
+        } else if (xmlData.substring(i, i + 7).toUpperCase() === "#IMPLIED") {
+            defaultValue = "#IMPLIED";
+            i += 7;
+        } else {
+            [i, defaultValue] = this.readIdentifierVal(xmlData, i, "ATTLIST");
+        }
+
+        return {
+            elementName,
+            attributeName,
+            attributeType,
+            defaultValue,
+            index: i
+        };
+    }
+}
+
+// Helper functions
+const skipWhitespace = (data, index) => {
+    while (index < data.length && /\s/.test(data[index])) {
+        index++;
+    }
+    return index;
+};
+
+function hasSeq(data, seq, i) {
+    for (let j = 0; j < seq.length; j++) {
+        if (seq[j] !== data[i + j + 1]) return false;
+    }
+    return true;
+}
+
+function validateEntityName(name) {
+    if (util.isName(name))
+        return name;
+    else
+        throw new Error(`Invalid entity name ${name}`);
+}
+
+module.exports = DocTypeReader;
+
+/***/ }),
+
+/***/ 4769:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+
+const { DANGEROUS_PROPERTY_NAMES, criticalProperties } = __nccwpck_require__(7019);
+
+const defaultOnDangerousProperty = (name) => {
+  if (DANGEROUS_PROPERTY_NAMES.includes(name)) {
+    return "__" + name;
+  }
+  return name;
+};
+const defaultOptions = {
+  preserveOrder: false,
+  attributeNamePrefix: '@_',
+  attributesGroupName: false,
+  textNodeName: '#text',
+  ignoreAttributes: true,
+  removeNSPrefix: false, // remove NS from tag name or attribute name if true
+  allowBooleanAttributes: false, //a tag can have attributes without any value
+  //ignoreRootElement : false,
+  parseTagValue: true,
+  parseAttributeValue: false,
+  trimValues: true, //Trim string values of tag and attributes
+  cdataPropName: false,
+  numberParseOptions: {
+    hex: true,
+    leadingZeros: true,
+    eNotation: true
+  },
+  tagValueProcessor: function (tagName, val) {
+    return val;
+  },
+  attributeValueProcessor: function (attrName, val) {
+    return val;
+  },
+  stopNodes: [], //nested tags will not be parsed even for errors
+  alwaysCreateTextNode: false,
+  isArray: () => false,
+  commentPropName: false,
+  unpairedTags: [],
+  processEntities: true,
+  htmlEntities: false,
+  ignoreDeclaration: false,
+  ignorePiTags: false,
+  transformTagName: false,
+  transformAttributeName: false,
+  updateTag: function (tagName, jPath, attrs) {
+    return tagName
+  },
+  // skipEmptyListItem: false
+  captureMetaData: false,
+  maxNestedTags: 100,
+  strictReservedNames: true,
+  onDangerousProperty: defaultOnDangerousProperty
+};
+/**
+ * Validates that a property name is safe to use
+ * @param {string} propertyName - The property name to validate
+ * @param {string} optionName - The option field name (for error message)
+ * @throws {Error} If property name is dangerous
+ */
+function validatePropertyName(propertyName, optionName) {
+  if (typeof propertyName !== 'string') {
+    return; // Only validate string property names
+  }
+
+  const normalized = propertyName.toLowerCase();
+  if (DANGEROUS_PROPERTY_NAMES.some(dangerous => normalized === dangerous.toLowerCase())) {
+    throw new Error(
+      `[SECURITY] Invalid ${optionName}: "${propertyName}" is a reserved JavaScript keyword that could cause prototype pollution`
+    );
+  }
+
+  if (criticalProperties.some(dangerous => normalized === dangerous.toLowerCase())) {
+    throw new Error(
+      `[SECURITY] Invalid ${optionName}: "${propertyName}" is a reserved JavaScript keyword that could cause prototype pollution`
+    );
+  }
+}
+
+/**
+ * Normalizes processEntities option for backward compatibility
+ * @param {boolean|object} value 
+ * @returns {object} Always returns normalized object
+ */
+function normalizeProcessEntities(value) {
+  // Boolean backward compatibility
+  if (typeof value === 'boolean') {
+    return {
+      enabled: value, // true or false
+      maxEntitySize: 10000,
+      maxExpansionDepth: 10,
+      maxTotalExpansions: 1000,
+      maxExpandedLength: 100000,
+      allowedTags: null,
+      tagFilter: null
+    };
+  }
+
+  // Object config - merge with defaults
+  if (typeof value === 'object' && value !== null) {
+    return {
+      enabled: value.enabled !== false,
+      maxEntitySize: Math.max(1, value.maxEntitySize ?? 10000),
+      maxExpansionDepth: Math.max(1, value.maxExpansionDepth ?? 10000),
+      maxTotalExpansions: Math.max(1, value.maxTotalExpansions ?? Infinity),
+      maxExpandedLength: Math.max(1, value.maxExpandedLength ?? 100000),
+      maxEntityCount: Math.max(1, value.maxEntityCount ?? 1000),
+      allowedTags: value.allowedTags ?? null,
+      tagFilter: value.tagFilter ?? null
+    };
+  }
+
+  // Default to enabled with limits
+  return normalizeProcessEntities(true);
+}
+
+const buildOptions = function (options) {
+  const built = Object.assign({}, defaultOptions, options);
+
+
+  // Validate property names to prevent prototype pollution
+  const propertyNameOptions = [
+    { value: built.attributeNamePrefix, name: 'attributeNamePrefix' },
+    { value: built.attributesGroupName, name: 'attributesGroupName' },
+    { value: built.textNodeName, name: 'textNodeName' },
+    { value: built.cdataPropName, name: 'cdataPropName' },
+    { value: built.commentPropName, name: 'commentPropName' }
+  ];
+
+  for (const { value, name } of propertyNameOptions) {
+    if (value) {
+      validatePropertyName(value, name);
+    }
+  }
+
+  if (built.onDangerousProperty === null) {
+    built.onDangerousProperty = defaultOnDangerousProperty;
+  }
+
+  // Always normalize processEntities for backward compatibility and validation
+  built.processEntities = normalizeProcessEntities(built.processEntities);
+  //console.debug(built.processEntities)
+  return built;
+};
+
+exports.buildOptions = buildOptions;
+exports.defaultOptions = defaultOptions;
+
+/***/ }),
+
+/***/ 3017:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+///@ts-check
+
+const util = __nccwpck_require__(7019);
+const xmlNode = __nccwpck_require__(9307);
+const DocTypeReader = __nccwpck_require__(151);
+const toNumber = __nccwpck_require__(6496);
+const getIgnoreAttributesFn = __nccwpck_require__(812)
+
+// const regx =
+//   '<((!\\[CDATA\\[([\\s\\S]*?)(]]>))|((NAME:)?(NAME))([^>]*)>|((\\/)(NAME)\\s*>))([^<]*)'
+//   .replace(/NAME/g, util.nameRegexp);
+
+//const tagsRegx = new RegExp("<(\\/?[\\w:\\-\._]+)([^>]*)>(\\s*"+cdataRegx+")*([^<]+)?","g");
+//const tagsRegx = new RegExp("<(\\/?)((\\w*:)?([\\w:\\-\._]+))([^>]*)>([^<]*)("+cdataRegx+"([^<]*))*([^<]+)?","g");
+
+class OrderedObjParser {
+  constructor(options) {
+    this.options = options;
+    this.currentNode = null;
+    this.tagsNodeStack = [];
+    this.docTypeEntities = {};
+    this.lastEntities = {
+      "apos": { regex: /&(apos|#39|#x27);/g, val: "'" },
+      "gt": { regex: /&(gt|#62|#x3E);/g, val: ">" },
+      "lt": { regex: /&(lt|#60|#x3C);/g, val: "<" },
+      "quot": { regex: /&(quot|#34|#x22);/g, val: "\"" },
+    };
+    this.ampEntity = { regex: /&(amp|#38|#x26);/g, val: "&" };
+    this.htmlEntities = {
+      "space": { regex: /&(nbsp|#160);/g, val: " " },
+      // "lt" : { regex: /&(lt|#60);/g, val: "<" },
+      // "gt" : { regex: /&(gt|#62);/g, val: ">" },
+      // "amp" : { regex: /&(amp|#38);/g, val: "&" },
+      // "quot" : { regex: /&(quot|#34);/g, val: "\"" },
+      // "apos" : { regex: /&(apos|#39);/g, val: "'" },
+      "cent": { regex: /&(cent|#162);/g, val: "¢" },
+      "pound": { regex: /&(pound|#163);/g, val: "£" },
+      "yen": { regex: /&(yen|#165);/g, val: "¥" },
+      "euro": { regex: /&(euro|#8364);/g, val: "€" },
+      "copyright": { regex: /&(copy|#169);/g, val: "©" },
+      "reg": { regex: /&(reg|#174);/g, val: "®" },
+      "inr": { regex: /&(inr|#8377);/g, val: "₹" },
+      "num_dec": { regex: /&#([0-9]{1,7});/g, val: (_, str) => fromCodePoint(str, 10, "&#") },
+      "num_hex": { regex: /&#x([0-9a-fA-F]{1,6});/g, val: (_, str) => fromCodePoint(str, 16, "&#x") },
+    };
+    this.addExternalEntities = addExternalEntities;
+    this.parseXml = parseXml;
+    this.parseTextData = parseTextData;
+    this.resolveNameSpace = resolveNameSpace;
+    this.buildAttributesMap = buildAttributesMap;
+    this.isItStopNode = isItStopNode;
+    this.replaceEntitiesValue = replaceEntitiesValue;
+    this.readStopNodeData = readStopNodeData;
+    this.saveTextToParentTag = saveTextToParentTag;
+    this.addChild = addChild;
+    this.ignoreAttributesFn = getIgnoreAttributesFn(this.options.ignoreAttributes)
+    this.entityExpansionCount = 0;
+    this.currentExpandedLength = 0;
+
+    if (this.options.stopNodes && this.options.stopNodes.length > 0) {
+      this.stopNodesExact = new Set();
+      this.stopNodesWildcard = new Set();
+      for (let i = 0; i < this.options.stopNodes.length; i++) {
+        const stopNodeExp = this.options.stopNodes[i];
+        if (typeof stopNodeExp !== 'string') continue;
+        if (stopNodeExp.startsWith("*.")) {
+          this.stopNodesWildcard.add(stopNodeExp.substring(2));
+        } else {
+          this.stopNodesExact.add(stopNodeExp);
+        }
+      }
+    }
+  }
+
+}
+
+function addExternalEntities(externalEntities) {
+  const entKeys = Object.keys(externalEntities);
+  for (let i = 0; i < entKeys.length; i++) {
+    const ent = entKeys[i];
+    const escaped = ent.replace(/[.\-+*:]/g, '\\.');
+    this.lastEntities[ent] = {
+      regex: new RegExp("&" + escaped + ";", "g"),
+      val: externalEntities[ent]
+    }
+  }
+}
+
+/**
+ * @param {string} val
+ * @param {string} tagName
+ * @param {string} jPath
+ * @param {boolean} dontTrim
+ * @param {boolean} hasAttributes
+ * @param {boolean} isLeafNode
+ * @param {boolean} escapeEntities
+ */
+function parseTextData(val, tagName, jPath, dontTrim, hasAttributes, isLeafNode, escapeEntities) {
+  if (val !== undefined) {
+    if (this.options.trimValues && !dontTrim) {
+      val = val.trim();
+    }
+    if (val.length > 0) {
+      if (!escapeEntities) val = this.replaceEntitiesValue(val, tagName, jPath);
+
+      const newval = this.options.tagValueProcessor(tagName, val, jPath, hasAttributes, isLeafNode);
+      if (newval === null || newval === undefined) {
+        //don't parse
+        return val;
+      } else if (typeof newval !== typeof val || newval !== val) {
+        //overwrite
+        return newval;
+      } else if (this.options.trimValues) {
+        return parseValue(val, this.options.parseTagValue, this.options.numberParseOptions);
+      } else {
+        const trimmedVal = val.trim();
+        if (trimmedVal === val) {
+          return parseValue(val, this.options.parseTagValue, this.options.numberParseOptions);
+        } else {
+          return val;
+        }
+      }
+    }
+  }
+}
+
+function resolveNameSpace(tagname) {
+  if (this.options.removeNSPrefix) {
+    const tags = tagname.split(':');
+    const prefix = tagname.charAt(0) === '/' ? '/' : '';
+    if (tags[0] === 'xmlns') {
+      return '';
+    }
+    if (tags.length === 2) {
+      tagname = prefix + tags[1];
+    }
+  }
+  return tagname;
+}
+
+//TODO: change regex to capture NS
+//const attrsRegx = new RegExp("([\\w\\-\\.\\:]+)\\s*=\\s*(['\"])((.|\n)*?)\\2","gm");
+const attrsRegx = new RegExp('([^\\s=]+)\\s*(=\\s*([\'"])([\\s\\S]*?)\\3)?', 'gm');
+
+function buildAttributesMap(attrStr, jPath, tagName) {
+  if (this.options.ignoreAttributes !== true && typeof attrStr === 'string') {
+    // attrStr = attrStr.replace(/\r?\n/g, ' ');
+    //attrStr = attrStr || attrStr.trim();
+
+    const matches = util.getAllMatches(attrStr, attrsRegx);
+    const len = matches.length; //don't make it inline
+    const attrs = {};
+    for (let i = 0; i < len; i++) {
+      const attrName = this.resolveNameSpace(matches[i][1]);
+      if (this.ignoreAttributesFn(attrName, jPath)) {
+        continue
+      }
+      let oldVal = matches[i][4];
+      let aName = this.options.attributeNamePrefix + attrName;
+      if (attrName.length) {
+        if (this.options.transformAttributeName) {
+          aName = this.options.transformAttributeName(aName);
+        }
+        aName = sanitizeName(aName, this.options);
+        if (oldVal !== undefined) {
+          if (this.options.trimValues) {
+            oldVal = oldVal.trim();
+          }
+          oldVal = this.replaceEntitiesValue(oldVal, tagName, jPath);
+          const newVal = this.options.attributeValueProcessor(attrName, oldVal, jPath);
+          if (newVal === null || newVal === undefined) {
+            //don't parse
+            attrs[aName] = oldVal;
+          } else if (typeof newVal !== typeof oldVal || newVal !== oldVal) {
+            //overwrite
+            attrs[aName] = newVal;
+          } else {
+            //parse
+            attrs[aName] = parseValue(
+              oldVal,
+              this.options.parseAttributeValue,
+              this.options.numberParseOptions
+            );
+          }
+        } else if (this.options.allowBooleanAttributes) {
+          attrs[aName] = true;
+        }
+      }
+    }
+    if (!Object.keys(attrs).length) {
+      return;
+    }
+    if (this.options.attributesGroupName) {
+      const attrCollection = {};
+      attrCollection[this.options.attributesGroupName] = attrs;
+      return attrCollection;
+    }
+    return attrs
+  }
+}
+
+const parseXml = function (xmlData) {
+  xmlData = xmlData.replace(/\r\n?/g, "\n"); //TODO: remove this line
+  const xmlObj = new xmlNode('!xml');
+  let currentNode = xmlObj;
+  let textData = "";
+  let jPath = "";
+
+  // Reset entity expansion counters for this document
+  this.entityExpansionCount = 0;
+  this.currentExpandedLength = 0;
+
+  const docTypeReader = new DocTypeReader(this.options.processEntities);
+  for (let i = 0; i < xmlData.length; i++) {//for each char in XML data
+    const ch = xmlData[i];
+    if (ch === '<') {
+      // const nextIndex = i+1;
+      // const _2ndChar = xmlData[nextIndex];
+      if (xmlData[i + 1] === '/') {//Closing Tag
+        const closeIndex = findClosingIndex(xmlData, ">", i, "Closing Tag is not closed.")
+        let tagName = xmlData.substring(i + 2, closeIndex).trim();
+
+        if (this.options.removeNSPrefix) {
+          const colonIndex = tagName.indexOf(":");
+          if (colonIndex !== -1) {
+            tagName = tagName.substr(colonIndex + 1);
+          }
+        }
+
+        if (this.options.transformTagName) {
+          tagName = this.options.transformTagName(tagName);
+        }
+
+        if (currentNode) {
+          textData = this.saveTextToParentTag(textData, currentNode, jPath);
+        }
+
+        //check if last tag of nested tag was unpaired tag
+        const lastTagName = jPath.substring(jPath.lastIndexOf(".") + 1);
+        if (tagName && this.options.unpairedTags.indexOf(tagName) !== -1) {
+          throw new Error(`Unpaired tag can not be used as closing tag: </${tagName}>`);
+        }
+        let propIndex = 0
+        if (lastTagName && this.options.unpairedTags.indexOf(lastTagName) !== -1) {
+          propIndex = jPath.lastIndexOf('.', jPath.lastIndexOf('.') - 1)
+          this.tagsNodeStack.pop();
+        } else {
+          propIndex = jPath.lastIndexOf(".");
+        }
+        jPath = jPath.substring(0, propIndex);
+
+        currentNode = this.tagsNodeStack.pop();//avoid recursion, set the parent tag scope
+        textData = "";
+        i = closeIndex;
+      } else if (xmlData[i + 1] === '?') {
+
+        let tagData = readTagExp(xmlData, i, false, "?>");
+        if (!tagData) throw new Error("Pi Tag is not closed.");
+
+        textData = this.saveTextToParentTag(textData, currentNode, jPath);
+        if ((this.options.ignoreDeclaration && tagData.tagName === "?xml") || this.options.ignorePiTags) {
+          //do nothing
+        } else {
+
+          const childNode = new xmlNode(tagData.tagName);
+          childNode.add(this.options.textNodeName, "");
+
+          if (tagData.tagName !== tagData.tagExp && tagData.attrExpPresent) {
+            childNode[":@"] = this.buildAttributesMap(tagData.tagExp, jPath, tagData.tagName);
+          }
+          this.addChild(currentNode, childNode, jPath, i);
+        }
+
+
+        i = tagData.closeIndex + 1;
+      } else if (xmlData.substr(i + 1, 3) === '!--') {
+        const endIndex = findClosingIndex(xmlData, "-->", i + 4, "Comment is not closed.")
+        if (this.options.commentPropName) {
+          const comment = xmlData.substring(i + 4, endIndex - 2);
+
+          textData = this.saveTextToParentTag(textData, currentNode, jPath);
+
+          currentNode.add(this.options.commentPropName, [{ [this.options.textNodeName]: comment }]);
+        }
+        i = endIndex;
+      } else if (xmlData.substr(i + 1, 2) === '!D') {
+        const result = docTypeReader.readDocType(xmlData, i);
+        this.docTypeEntities = result.entities;
+        i = result.i;
+      } else if (xmlData.substr(i + 1, 2) === '![') {
+        const closeIndex = findClosingIndex(xmlData, "]]>", i, "CDATA is not closed.") - 2;
+        const tagExp = xmlData.substring(i + 9, closeIndex);
+
+        textData = this.saveTextToParentTag(textData, currentNode, jPath);
+
+        let val = this.parseTextData(tagExp, currentNode.tagname, jPath, true, false, true, true);
+        if (val == undefined) val = "";
+
+        //cdata should be set even if it is 0 length string
+        if (this.options.cdataPropName) {
+          currentNode.add(this.options.cdataPropName, [{ [this.options.textNodeName]: tagExp }]);
+        } else {
+          currentNode.add(this.options.textNodeName, val);
+        }
+
+        i = closeIndex + 2;
+      } else {//Opening tag
+        let result = readTagExp(xmlData, i, this.options.removeNSPrefix);
+        let tagName = result.tagName;
+        const rawTagName = result.rawTagName;
+        let tagExp = result.tagExp;
+        let attrExpPresent = result.attrExpPresent;
+        let closeIndex = result.closeIndex;
+
+        if (this.options.transformTagName) {
+          //console.log(tagExp, tagName)
+          const newTagName = this.options.transformTagName(tagName);
+          if (tagExp === tagName) {
+            tagExp = newTagName
+          }
+          tagName = newTagName;
+        }
+
+        if (this.options.strictReservedNames &&
+          (tagName === this.options.commentPropName
+            || tagName === this.options.cdataPropName
+            || tagName === this.options.textNodeName
+            || tagName === this.options.attributesGroupName
+          )) {
+          throw new Error(`Invalid tag name: ${tagName}`);
+        }
+
+        //save text as child node
+        if (currentNode && textData) {
+          if (currentNode.tagname !== '!xml') {
+            //when nested tag is found
+            textData = this.saveTextToParentTag(textData, currentNode, jPath, false);
+          }
+        }
+
+        //check if last tag was unpaired tag
+        const lastTag = currentNode;
+        if (lastTag && this.options.unpairedTags.indexOf(lastTag.tagname) !== -1) {
+          currentNode = this.tagsNodeStack.pop();
+          jPath = jPath.substring(0, jPath.lastIndexOf("."));
+        }
+        if (tagName !== xmlObj.tagname) {
+          jPath += jPath ? "." + tagName : tagName;
+        }
+        const startIndex = i;
+        if (this.isItStopNode(this.stopNodesExact, this.stopNodesWildcard, jPath, tagName)) {
+          let tagContent = "";
+          //self-closing tag
+          if (tagExp.length > 0 && tagExp.lastIndexOf("/") === tagExp.length - 1) {
+            if (tagName[tagName.length - 1] === "/") { //remove trailing '/'
+              tagName = tagName.substr(0, tagName.length - 1);
+              jPath = jPath.substr(0, jPath.length - 1);
+              tagExp = tagName;
+            } else {
+              tagExp = tagExp.substr(0, tagExp.length - 1);
+            }
+            i = result.closeIndex;
+          }
+          //unpaired tag
+          else if (this.options.unpairedTags.indexOf(tagName) !== -1) {
+
+            i = result.closeIndex;
+          }
+          //normal tag
+          else {
+            //read until closing tag is found
+            const result = this.readStopNodeData(xmlData, rawTagName, closeIndex + 1);
+            if (!result) throw new Error(`Unexpected end of ${rawTagName}`);
+            i = result.i;
+            tagContent = result.tagContent;
+          }
+
+          const childNode = new xmlNode(tagName);
+          if (tagName !== tagExp && attrExpPresent) {
+            childNode[":@"] = this.buildAttributesMap(tagExp, jPath, tagName);
+          }
+          if (tagContent) {
+            tagContent = this.parseTextData(tagContent, tagName, jPath, true, attrExpPresent, true, true);
+          }
+
+          jPath = jPath.substr(0, jPath.lastIndexOf("."));
+          childNode.add(this.options.textNodeName, tagContent);
+
+          this.addChild(currentNode, childNode, jPath, startIndex);
+        } else {
+          //selfClosing tag
+          if (tagExp.length > 0 && tagExp.lastIndexOf("/") === tagExp.length - 1) {
+            if (tagName[tagName.length - 1] === "/") { //remove trailing '/'
+              tagName = tagName.substr(0, tagName.length - 1);
+              jPath = jPath.substr(0, jPath.length - 1);
+              tagExp = tagName;
+            } else {
+              tagExp = tagExp.substr(0, tagExp.length - 1);
+            }
+
+            if (this.options.transformTagName) {
+              const newTagName = this.options.transformTagName(tagName);
+              if (tagExp === tagName) {
+                tagExp = newTagName
+              }
+              tagName = newTagName;
+            }
+
+            const childNode = new xmlNode(tagName);
+            if (tagName !== tagExp && attrExpPresent) {
+              childNode[":@"] = this.buildAttributesMap(tagExp, jPath, tagName);
+            }
+            this.addChild(currentNode, childNode, jPath, startIndex);
+            jPath = jPath.substr(0, jPath.lastIndexOf("."));
+          }
+          else if (this.options.unpairedTags.indexOf(tagName) !== -1) {//unpaired tag
+            const childNode = new xmlNode(tagName);
+            if (tagName !== tagExp && attrExpPresent) {
+              childNode[":@"] = this.buildAttributesMap(tagExp, jPath);
+            }
+            this.addChild(currentNode, childNode, jPath, startIndex);
+            jPath = jPath.substr(0, jPath.lastIndexOf("."));
+            i = result.closeIndex;
+            // Continue to next iteration without changing currentNode
+            continue;
+          }
+          //opening tag
+          else {
+            const childNode = new xmlNode(tagName);
+            if (this.tagsNodeStack.length > this.options.maxNestedTags) {
+              throw new Error("Maximum nested tags exceeded");
+            }
+            this.tagsNodeStack.push(currentNode);
+
+            if (tagName !== tagExp && attrExpPresent) {
+              childNode[":@"] = this.buildAttributesMap(tagExp, jPath, tagName);
+            }
+            this.addChild(currentNode, childNode, jPath)
+            currentNode = childNode;
+          }
+          textData = "";
+          i = closeIndex;
+        }
+      }
+    } else {
+      textData += xmlData[i];
+    }
+  }
+  return xmlObj.child;
+}
+
+function addChild(currentNode, childNode, jPath, startIndex) {
+  // unset startIndex if not requested
+  if (!this.options.captureMetaData) startIndex = undefined;
+  const result = this.options.updateTag(childNode.tagname, jPath, childNode[":@"])
+  if (result === false) {
+    //do nothing
+  } else if (typeof result === "string") {
+    childNode.tagname = result
+    currentNode.addChild(childNode, startIndex);
+  } else {
+    currentNode.addChild(childNode, startIndex);
+  }
+}
+
+const replaceEntitiesValue = function (val, tagName, jPath) {
+  // Performance optimization: Early return if no entities to replace
+  if (val.indexOf('&') === -1) {
+    return val;
+  }
+
+  const entityConfig = this.options.processEntities;
+
+  if (!entityConfig.enabled) {
+    return val;
+  }
+
+  // Check tag-specific filtering
+  if (entityConfig.allowedTags) {
+    if (!entityConfig.allowedTags.includes(tagName)) {
+      return val; // Skip entity replacement for current tag as not set
+    }
+  }
+
+  if (entityConfig.tagFilter) {
+    if (!entityConfig.tagFilter(tagName, jPath)) {
+      return val; // Skip based on custom filter
+    }
+  }
+
+  // Replace DOCTYPE entities
+  for (let entityName in this.docTypeEntities) {
+    const entity = this.docTypeEntities[entityName];
+    const matches = val.match(entity.regx);
+
+    if (matches) {
+      // Track expansions
+      this.entityExpansionCount += matches.length;
+
+      // Check expansion limit
+      if (entityConfig.maxTotalExpansions &&
+        this.entityExpansionCount > entityConfig.maxTotalExpansions) {
+        throw new Error(
+          `Entity expansion limit exceeded: ${this.entityExpansionCount} > ${entityConfig.maxTotalExpansions}`
+        );
+      }
+
+      // Store length before replacement
+      const lengthBefore = val.length;
+      val = val.replace(entity.regx, entity.val);
+
+      // Check expanded length immediately after replacement
+      if (entityConfig.maxExpandedLength) {
+        this.currentExpandedLength += (val.length - lengthBefore);
+
+        if (this.currentExpandedLength > entityConfig.maxExpandedLength) {
+          throw new Error(
+            `Total expanded content size exceeded: ${this.currentExpandedLength} > ${entityConfig.maxExpandedLength}`
+          );
+        }
+      }
+    }
+  }
+  if (val.indexOf('&') === -1) return val;  // Early exit
+
+  // Replace standard entities
+  for (const entityName of Object.keys(this.lastEntities)) {
+    const entity = this.lastEntities[entityName];
+    const matches = val.match(entity.regex);
+    if (matches) {
+      this.entityExpansionCount += matches.length;
+      if (entityConfig.maxTotalExpansions &&
+        this.entityExpansionCount > entityConfig.maxTotalExpansions) {
+        throw new Error(
+          `Entity expansion limit exceeded: ${this.entityExpansionCount} > ${entityConfig.maxTotalExpansions}`
+        );
+      }
+    }
+    val = val.replace(entity.regex, entity.val);
+  }
+  if (val.indexOf('&') === -1) return val;  // Early exit
+
+  // Replace HTML entities if enabled
+  if (this.options.htmlEntities) {
+    for (const entityName of Object.keys(this.htmlEntities)) {
+      const entity = this.htmlEntities[entityName];
+      const matches = val.match(entity.regex);
+      if (matches) {
+        //console.log(matches);
+        this.entityExpansionCount += matches.length;
+        if (entityConfig.maxTotalExpansions &&
+          this.entityExpansionCount > entityConfig.maxTotalExpansions) {
+          throw new Error(
+            `Entity expansion limit exceeded: ${this.entityExpansionCount} > ${entityConfig.maxTotalExpansions}`
+          );
+        }
+      }
+      val = val.replace(entity.regex, entity.val);
+    }
+  }
+
+  // Replace ampersand entity last
+  val = val.replace(this.ampEntity.regex, this.ampEntity.val);
+
+  return val;
+}
+
+function saveTextToParentTag(textData, parentNode, jPath, isLeafNode) {
+  if (textData) { //store previously collected data as textNode
+    if (isLeafNode === undefined) isLeafNode = parentNode.child.length === 0
+
+    textData = this.parseTextData(textData,
+      parentNode.tagname,
+      jPath,
+      false,
+      parentNode[":@"] ? Object.keys(parentNode[":@"]).length !== 0 : false,
+      isLeafNode);
+
+    if (textData !== undefined && textData !== "")
+      parentNode.add(this.options.textNodeName, textData);
+    textData = "";
+  }
+  return textData;
+}
+
+//TODO: use jPath to simplify the logic
+/**
+ * @param {Set} stopNodesExact
+ * @param {Set} stopNodesWildcard
+ * @param {string} jPath
+ * @param {string} currentTagName
+ */
+function isItStopNode(stopNodesExact, stopNodesWildcard, jPath, currentTagName) {
+  if (stopNodesWildcard && stopNodesWildcard.has(currentTagName)) return true;
+  if (stopNodesExact && stopNodesExact.has(jPath)) return true;
+  return false;
+}
+
+/**
+ * Returns the tag Expression and where it is ending handling single-double quotes situation
+ * @param {string} xmlData 
+ * @param {number} i starting index
+ * @returns 
+ */
+function tagExpWithClosingIndex(xmlData, i, closingChar = ">") {
+  let attrBoundary;
+  let tagExp = "";
+  for (let index = i; index < xmlData.length; index++) {
+    let ch = xmlData[index];
+    if (attrBoundary) {
+      if (ch === attrBoundary) attrBoundary = "";//reset
+    } else if (ch === '"' || ch === "'") {
+      attrBoundary = ch;
+    } else if (ch === closingChar[0]) {
+      if (closingChar[1]) {
+        if (xmlData[index + 1] === closingChar[1]) {
+          return {
+            data: tagExp,
+            index: index
+          }
+        }
+      } else {
+        return {
+          data: tagExp,
+          index: index
+        }
+      }
+    } else if (ch === '\t') {
+      ch = " "
+    }
+    tagExp += ch;
+  }
+}
+
+function findClosingIndex(xmlData, str, i, errMsg) {
+  const closingIndex = xmlData.indexOf(str, i);
+  if (closingIndex === -1) {
+    throw new Error(errMsg)
+  } else {
+    return closingIndex + str.length - 1;
+  }
+}
+
+function readTagExp(xmlData, i, removeNSPrefix, closingChar = ">") {
+  const result = tagExpWithClosingIndex(xmlData, i + 1, closingChar);
+  if (!result) return;
+  let tagExp = result.data;
+  const closeIndex = result.index;
+  const separatorIndex = tagExp.search(/\s/);
+  let tagName = tagExp;
+  let attrExpPresent = true;
+  if (separatorIndex !== -1) {//separate tag name and attributes expression
+    tagName = tagExp.substring(0, separatorIndex);
+    tagExp = tagExp.substring(separatorIndex + 1).trimStart();
+  }
+
+  const rawTagName = tagName;
+  if (removeNSPrefix) {
+    const colonIndex = tagName.indexOf(":");
+    if (colonIndex !== -1) {
+      tagName = tagName.substr(colonIndex + 1);
+      attrExpPresent = tagName !== result.data.substr(colonIndex + 1);
+    }
+  }
+
+  return {
+    tagName: tagName,
+    tagExp: tagExp,
+    closeIndex: closeIndex,
+    attrExpPresent: attrExpPresent,
+    rawTagName: rawTagName,
+  }
+}
+/**
+ * find paired tag for a stop node
+ * @param {string} xmlData 
+ * @param {string} tagName 
+ * @param {number} i 
+ */
+function readStopNodeData(xmlData, tagName, i) {
+  const startIndex = i;
+  // Starting at 1 since we already have an open tag
+  let openTagCount = 1;
+
+  for (; i < xmlData.length; i++) {
+    if (xmlData[i] === "<") {
+      if (xmlData[i + 1] === "/") {//close tag
+        const closeIndex = findClosingIndex(xmlData, ">", i, `${tagName} is not closed`);
+        let closeTagName = xmlData.substring(i + 2, closeIndex).trim();
+        if (closeTagName === tagName) {
+          openTagCount--;
+          if (openTagCount === 0) {
+            return {
+              tagContent: xmlData.substring(startIndex, i),
+              i: closeIndex
+            }
+          }
+        }
+        i = closeIndex;
+      } else if (xmlData[i + 1] === '?') {
+        const closeIndex = findClosingIndex(xmlData, "?>", i + 1, "StopNode is not closed.")
+        i = closeIndex;
+      } else if (xmlData.substr(i + 1, 3) === '!--') {
+        const closeIndex = findClosingIndex(xmlData, "-->", i + 3, "StopNode is not closed.")
+        i = closeIndex;
+      } else if (xmlData.substr(i + 1, 2) === '![') {
+        const closeIndex = findClosingIndex(xmlData, "]]>", i, "StopNode is not closed.") - 2;
+        i = closeIndex;
+      } else {
+        const tagData = readTagExp(xmlData, i, '>')
+
+        if (tagData) {
+          const openTagName = tagData && tagData.tagName;
+          if (openTagName === tagName && tagData.tagExp[tagData.tagExp.length - 1] !== "/") {
+            openTagCount++;
+          }
+          i = tagData.closeIndex;
+        }
+      }
+    }
+  }//end for loop
+}
+
+function parseValue(val, shouldParse, options) {
+  if (shouldParse && typeof val === 'string') {
+    //console.log(options)
+    const newval = val.trim();
+    if (newval === 'true') return true;
+    else if (newval === 'false') return false;
+    else return toNumber(val, options);
+  } else {
+    if (util.isExist(val)) {
+      return val;
+    } else {
+      return '';
+    }
+  }
+}
+
+function fromCodePoint(str, base, prefix) {
+  const codePoint = Number.parseInt(str, base);
+
+  if (codePoint >= 0 && codePoint <= 0x10FFFF) {
+    return String.fromCodePoint(codePoint);
+  } else {
+    return prefix + str + ";";
+  }
+}
+
+function sanitizeName(name, options) {
+  if (util.criticalProperties.includes(name)) {
+    throw new Error(`[SECURITY] Invalid name: "${name}" is a reserved JavaScript keyword that could cause prototype pollution`);
+  } else if (util.DANGEROUS_PROPERTY_NAMES.includes(name)) {
+    return options.onDangerousProperty(name);
+  }
+  return name;
+}
+
+module.exports = OrderedObjParser;
+
+
+
+/***/ }),
+
+/***/ 9844:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { buildOptions} = __nccwpck_require__(4769);
+const OrderedObjParser = __nccwpck_require__(3017);
+const { prettify} = __nccwpck_require__(7594);
+const validator = __nccwpck_require__(9433);
+
+class XMLParser{
+    
+    constructor(options){
+        this.externalEntities = {};
+        this.options = buildOptions(options);
+        
+    }
+    /**
+     * Parse XML dats to JS object 
+     * @param {string|Buffer} xmlData 
+     * @param {boolean|Object} validationOption 
+     */
+    parse(xmlData,validationOption){
+        if(typeof xmlData === "string"){
+        }else if( xmlData.toString){
+            xmlData = xmlData.toString();
+        }else{
+            throw new Error("XML data is accepted in String or Bytes[] form.")
+        }
+        if( validationOption){
+            if(validationOption === true) validationOption = {}; //validate with default options
+            
+            const result = validator.validate(xmlData, validationOption);
+            if (result !== true) {
+              throw Error( `${result.err.msg}:${result.err.line}:${result.err.col}` )
+            }
+          }
+        const orderedObjParser = new OrderedObjParser(this.options);
+        orderedObjParser.addExternalEntities(this.externalEntities);
+        const orderedResult = orderedObjParser.parseXml(xmlData);
+        if(this.options.preserveOrder || orderedResult === undefined) return orderedResult;
+        else return prettify(orderedResult, this.options);
+    }
+
+    /**
+     * Add Entity which is not by default supported by this library
+     * @param {string} key 
+     * @param {string} value 
+     */
+    addEntity(key, value){
+        if(value.indexOf("&") !== -1){
+            throw new Error("Entity value can't have '&'")
+        }else if(key.indexOf("&") !== -1 || key.indexOf(";") !== -1){
+            throw new Error("An entity must be set without '&' and ';'. Eg. use '#xD' for '&#xD;'")
+        }else if(value === "&"){
+            throw new Error("An entity with value '&' is not permitted");
+        }else{
+            this.externalEntities[key] = value;
+        }
+    }
+}
+
+module.exports = XMLParser;
+
+/***/ }),
+
+/***/ 7594:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+
+/**
+ * 
+ * @param {array} node 
+ * @param {any} options 
+ * @returns 
+ */
+function prettify(node, options){
+  return compress( node, options);
+}
+
+/**
+ * 
+ * @param {array} arr 
+ * @param {object} options 
+ * @param {string} jPath 
+ * @returns object
+ */
+function compress(arr, options, jPath){
+  let text;
+  const compressedObj = {};
+  for (let i = 0; i < arr.length; i++) {
+    const tagObj = arr[i];
+    const property = propName(tagObj);
+    let newJpath = "";
+    if(jPath === undefined) newJpath = property;
+    else newJpath = jPath + "." + property;
+
+    if(property === options.textNodeName){
+      if(text === undefined) text = tagObj[property];
+      else text += "" + tagObj[property];
+    }else if(property === undefined){
+      continue;
+    }else if(tagObj[property]){
+      
+      let val = compress(tagObj[property], options, newJpath);
+      const isLeaf = isLeafTag(val, options);
+
+      if(tagObj[":@"]){
+        assignAttributes( val, tagObj[":@"], newJpath, options);
+      }else if(Object.keys(val).length === 1 && val[options.textNodeName] !== undefined && !options.alwaysCreateTextNode){
+        val = val[options.textNodeName];
+      }else if(Object.keys(val).length === 0){
+        if(options.alwaysCreateTextNode) val[options.textNodeName] = "";
+        else val = "";
+      }
+
+      if(compressedObj[property] !== undefined && compressedObj.hasOwnProperty(property)) {
+        if(!Array.isArray(compressedObj[property])) {
+            compressedObj[property] = [ compressedObj[property] ];
+        }
+        compressedObj[property].push(val);
+      }else{
+        //TODO: if a node is not an array, then check if it should be an array
+        //also determine if it is a leaf node
+        if (options.isArray(property, newJpath, isLeaf )) {
+          compressedObj[property] = [val];
+        }else{
+          compressedObj[property] = val;
+        }
+      }
+    }
+    
+  }
+  // if(text && text.length > 0) compressedObj[options.textNodeName] = text;
+  if(typeof text === "string"){
+    if(text.length > 0) compressedObj[options.textNodeName] = text;
+  }else if(text !== undefined) compressedObj[options.textNodeName] = text;
+  return compressedObj;
+}
+
+function propName(obj){
+  const keys = Object.keys(obj);
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    if(key !== ":@") return key;
+  }
+}
+
+function assignAttributes(obj, attrMap, jpath, options){
+  if (attrMap) {
+    const keys = Object.keys(attrMap);
+    const len = keys.length; //don't make it inline
+    for (let i = 0; i < len; i++) {
+      const atrrName = keys[i];
+      if (options.isArray(atrrName, jpath + "." + atrrName, true, true)) {
+        obj[atrrName] = [ attrMap[atrrName] ];
+      } else {
+        obj[atrrName] = attrMap[atrrName];
+      }
+    }
+  }
+}
+
+function isLeafTag(obj, options){
+  const { textNodeName } = options;
+  const propCount = Object.keys(obj).length;
+  
+  if (propCount === 0) {
+    return true;
+  }
+
+  if (
+    propCount === 1 &&
+    (obj[textNodeName] || typeof obj[textNodeName] === "boolean" || obj[textNodeName] === 0)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+exports.prettify = prettify;
+
+
+/***/ }),
+
+/***/ 9307:
+/***/ ((module) => {
+
+"use strict";
+
+
+class XmlNode{
+  constructor(tagname) {
+    this.tagname = tagname;
+    this.child = []; //nested tags, text, cdata, comments in order
+    this[":@"] = {}; //attributes map
+  }
+  add(key,val){
+    // this.child.push( {name : key, val: val, isCdata: isCdata });
+    if(key === "__proto__") key = "#__proto__";
+    this.child.push( {[key]: val });
+  }
+  addChild(node) {
+    if(node.tagname === "__proto__") node.tagname = "#__proto__";
+    if(node[":@"] && Object.keys(node[":@"]).length > 0){
+      this.child.push( { [node.tagname]: node.child, [":@"]: node[":@"] });
+    }else{
+      this.child.push( { [node.tagname]: node.child });
+    }
+  };
+};
+
+
+module.exports = XmlNode;
 
 /***/ }),
 
@@ -11803,6 +29259,2150 @@ module.exports = function (dst, src) {
 
 /***/ }),
 
+/***/ 3783:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+const mkdirpSync = (__nccwpck_require__(1089).mkdirsSync)
+const utimesSync = (__nccwpck_require__(6934).utimesMillisSync)
+const stat = __nccwpck_require__(887)
+
+function copySync (src, dest, opts) {
+  if (typeof opts === 'function') {
+    opts = { filter: opts }
+  }
+
+  opts = opts || {}
+  opts.clobber = 'clobber' in opts ? !!opts.clobber : true // default to true for now
+  opts.overwrite = 'overwrite' in opts ? !!opts.overwrite : opts.clobber // overwrite falls back to clobber
+
+  // Warn about using preserveTimestamps on 32-bit node
+  if (opts.preserveTimestamps && process.arch === 'ia32') {
+    console.warn(`fs-extra: Using the preserveTimestamps option in 32-bit node is not recommended;\n
+    see https://github.com/jprichardson/node-fs-extra/issues/269`)
+  }
+
+  const { srcStat, destStat } = stat.checkPathsSync(src, dest, 'copy')
+  stat.checkParentPathsSync(src, srcStat, dest, 'copy')
+  return handleFilterAndCopy(destStat, src, dest, opts)
+}
+
+function handleFilterAndCopy (destStat, src, dest, opts) {
+  if (opts.filter && !opts.filter(src, dest)) return
+  const destParent = path.dirname(dest)
+  if (!fs.existsSync(destParent)) mkdirpSync(destParent)
+  return startCopy(destStat, src, dest, opts)
+}
+
+function startCopy (destStat, src, dest, opts) {
+  if (opts.filter && !opts.filter(src, dest)) return
+  return getStats(destStat, src, dest, opts)
+}
+
+function getStats (destStat, src, dest, opts) {
+  const statSync = opts.dereference ? fs.statSync : fs.lstatSync
+  const srcStat = statSync(src)
+
+  if (srcStat.isDirectory()) return onDir(srcStat, destStat, src, dest, opts)
+  else if (srcStat.isFile() ||
+           srcStat.isCharacterDevice() ||
+           srcStat.isBlockDevice()) return onFile(srcStat, destStat, src, dest, opts)
+  else if (srcStat.isSymbolicLink()) return onLink(destStat, src, dest, opts)
+}
+
+function onFile (srcStat, destStat, src, dest, opts) {
+  if (!destStat) return copyFile(srcStat, src, dest, opts)
+  return mayCopyFile(srcStat, src, dest, opts)
+}
+
+function mayCopyFile (srcStat, src, dest, opts) {
+  if (opts.overwrite) {
+    fs.unlinkSync(dest)
+    return copyFile(srcStat, src, dest, opts)
+  } else if (opts.errorOnExist) {
+    throw new Error(`'${dest}' already exists`)
+  }
+}
+
+function copyFile (srcStat, src, dest, opts) {
+  if (typeof fs.copyFileSync === 'function') {
+    fs.copyFileSync(src, dest)
+    fs.chmodSync(dest, srcStat.mode)
+    if (opts.preserveTimestamps) {
+      return utimesSync(dest, srcStat.atime, srcStat.mtime)
+    }
+    return
+  }
+  return copyFileFallback(srcStat, src, dest, opts)
+}
+
+function copyFileFallback (srcStat, src, dest, opts) {
+  const BUF_LENGTH = 64 * 1024
+  const _buff = __nccwpck_require__(9635)(BUF_LENGTH)
+
+  const fdr = fs.openSync(src, 'r')
+  const fdw = fs.openSync(dest, 'w', srcStat.mode)
+  let pos = 0
+
+  while (pos < srcStat.size) {
+    const bytesRead = fs.readSync(fdr, _buff, 0, BUF_LENGTH, pos)
+    fs.writeSync(fdw, _buff, 0, bytesRead)
+    pos += bytesRead
+  }
+
+  if (opts.preserveTimestamps) fs.futimesSync(fdw, srcStat.atime, srcStat.mtime)
+
+  fs.closeSync(fdr)
+  fs.closeSync(fdw)
+}
+
+function onDir (srcStat, destStat, src, dest, opts) {
+  if (!destStat) return mkDirAndCopy(srcStat, src, dest, opts)
+  if (destStat && !destStat.isDirectory()) {
+    throw new Error(`Cannot overwrite non-directory '${dest}' with directory '${src}'.`)
+  }
+  return copyDir(src, dest, opts)
+}
+
+function mkDirAndCopy (srcStat, src, dest, opts) {
+  fs.mkdirSync(dest)
+  copyDir(src, dest, opts)
+  return fs.chmodSync(dest, srcStat.mode)
+}
+
+function copyDir (src, dest, opts) {
+  fs.readdirSync(src).forEach(item => copyDirItem(item, src, dest, opts))
+}
+
+function copyDirItem (item, src, dest, opts) {
+  const srcItem = path.join(src, item)
+  const destItem = path.join(dest, item)
+  const { destStat } = stat.checkPathsSync(srcItem, destItem, 'copy')
+  return startCopy(destStat, srcItem, destItem, opts)
+}
+
+function onLink (destStat, src, dest, opts) {
+  let resolvedSrc = fs.readlinkSync(src)
+  if (opts.dereference) {
+    resolvedSrc = path.resolve(process.cwd(), resolvedSrc)
+  }
+
+  if (!destStat) {
+    return fs.symlinkSync(resolvedSrc, dest)
+  } else {
+    let resolvedDest
+    try {
+      resolvedDest = fs.readlinkSync(dest)
+    } catch (err) {
+      // dest exists and is a regular file or directory,
+      // Windows may throw UNKNOWN error. If dest already exists,
+      // fs throws error anyway, so no need to guard against it here.
+      if (err.code === 'EINVAL' || err.code === 'UNKNOWN') return fs.symlinkSync(resolvedSrc, dest)
+      throw err
+    }
+    if (opts.dereference) {
+      resolvedDest = path.resolve(process.cwd(), resolvedDest)
+    }
+    if (stat.isSrcSubdir(resolvedSrc, resolvedDest)) {
+      throw new Error(`Cannot copy '${resolvedSrc}' to a subdirectory of itself, '${resolvedDest}'.`)
+    }
+
+    // prevent copy if src is a subdir of dest since unlinking
+    // dest in this case would result in removing src contents
+    // and therefore a broken symlink would be created.
+    if (fs.statSync(dest).isDirectory() && stat.isSrcSubdir(resolvedDest, resolvedSrc)) {
+      throw new Error(`Cannot overwrite '${resolvedDest}' with '${resolvedSrc}'.`)
+    }
+    return copyLink(resolvedSrc, dest)
+  }
+}
+
+function copyLink (resolvedSrc, dest) {
+  fs.unlinkSync(dest)
+  return fs.symlinkSync(resolvedSrc, dest)
+}
+
+module.exports = copySync
+
+
+/***/ }),
+
+/***/ 1364:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+module.exports = {
+  copySync: __nccwpck_require__(3783)
+}
+
+
+/***/ }),
+
+/***/ 1759:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+const mkdirp = (__nccwpck_require__(1089).mkdirs)
+const pathExists = (__nccwpck_require__(2881).pathExists)
+const utimes = (__nccwpck_require__(6934).utimesMillis)
+const stat = __nccwpck_require__(887)
+
+function copy (src, dest, opts, cb) {
+  if (typeof opts === 'function' && !cb) {
+    cb = opts
+    opts = {}
+  } else if (typeof opts === 'function') {
+    opts = { filter: opts }
+  }
+
+  cb = cb || function () {}
+  opts = opts || {}
+
+  opts.clobber = 'clobber' in opts ? !!opts.clobber : true // default to true for now
+  opts.overwrite = 'overwrite' in opts ? !!opts.overwrite : opts.clobber // overwrite falls back to clobber
+
+  // Warn about using preserveTimestamps on 32-bit node
+  if (opts.preserveTimestamps && process.arch === 'ia32') {
+    console.warn(`fs-extra: Using the preserveTimestamps option in 32-bit node is not recommended;\n
+    see https://github.com/jprichardson/node-fs-extra/issues/269`)
+  }
+
+  stat.checkPaths(src, dest, 'copy', (err, stats) => {
+    if (err) return cb(err)
+    const { srcStat, destStat } = stats
+    stat.checkParentPaths(src, srcStat, dest, 'copy', err => {
+      if (err) return cb(err)
+      if (opts.filter) return handleFilter(checkParentDir, destStat, src, dest, opts, cb)
+      return checkParentDir(destStat, src, dest, opts, cb)
+    })
+  })
+}
+
+function checkParentDir (destStat, src, dest, opts, cb) {
+  const destParent = path.dirname(dest)
+  pathExists(destParent, (err, dirExists) => {
+    if (err) return cb(err)
+    if (dirExists) return startCopy(destStat, src, dest, opts, cb)
+    mkdirp(destParent, err => {
+      if (err) return cb(err)
+      return startCopy(destStat, src, dest, opts, cb)
+    })
+  })
+}
+
+function handleFilter (onInclude, destStat, src, dest, opts, cb) {
+  Promise.resolve(opts.filter(src, dest)).then(include => {
+    if (include) return onInclude(destStat, src, dest, opts, cb)
+    return cb()
+  }, error => cb(error))
+}
+
+function startCopy (destStat, src, dest, opts, cb) {
+  if (opts.filter) return handleFilter(getStats, destStat, src, dest, opts, cb)
+  return getStats(destStat, src, dest, opts, cb)
+}
+
+function getStats (destStat, src, dest, opts, cb) {
+  const stat = opts.dereference ? fs.stat : fs.lstat
+  stat(src, (err, srcStat) => {
+    if (err) return cb(err)
+
+    if (srcStat.isDirectory()) return onDir(srcStat, destStat, src, dest, opts, cb)
+    else if (srcStat.isFile() ||
+             srcStat.isCharacterDevice() ||
+             srcStat.isBlockDevice()) return onFile(srcStat, destStat, src, dest, opts, cb)
+    else if (srcStat.isSymbolicLink()) return onLink(destStat, src, dest, opts, cb)
+  })
+}
+
+function onFile (srcStat, destStat, src, dest, opts, cb) {
+  if (!destStat) return copyFile(srcStat, src, dest, opts, cb)
+  return mayCopyFile(srcStat, src, dest, opts, cb)
+}
+
+function mayCopyFile (srcStat, src, dest, opts, cb) {
+  if (opts.overwrite) {
+    fs.unlink(dest, err => {
+      if (err) return cb(err)
+      return copyFile(srcStat, src, dest, opts, cb)
+    })
+  } else if (opts.errorOnExist) {
+    return cb(new Error(`'${dest}' already exists`))
+  } else return cb()
+}
+
+function copyFile (srcStat, src, dest, opts, cb) {
+  if (typeof fs.copyFile === 'function') {
+    return fs.copyFile(src, dest, err => {
+      if (err) return cb(err)
+      return setDestModeAndTimestamps(srcStat, dest, opts, cb)
+    })
+  }
+  return copyFileFallback(srcStat, src, dest, opts, cb)
+}
+
+function copyFileFallback (srcStat, src, dest, opts, cb) {
+  const rs = fs.createReadStream(src)
+  rs.on('error', err => cb(err)).once('open', () => {
+    const ws = fs.createWriteStream(dest, { mode: srcStat.mode })
+    ws.on('error', err => cb(err))
+      .on('open', () => rs.pipe(ws))
+      .once('close', () => setDestModeAndTimestamps(srcStat, dest, opts, cb))
+  })
+}
+
+function setDestModeAndTimestamps (srcStat, dest, opts, cb) {
+  fs.chmod(dest, srcStat.mode, err => {
+    if (err) return cb(err)
+    if (opts.preserveTimestamps) {
+      return utimes(dest, srcStat.atime, srcStat.mtime, cb)
+    }
+    return cb()
+  })
+}
+
+function onDir (srcStat, destStat, src, dest, opts, cb) {
+  if (!destStat) return mkDirAndCopy(srcStat, src, dest, opts, cb)
+  if (destStat && !destStat.isDirectory()) {
+    return cb(new Error(`Cannot overwrite non-directory '${dest}' with directory '${src}'.`))
+  }
+  return copyDir(src, dest, opts, cb)
+}
+
+function mkDirAndCopy (srcStat, src, dest, opts, cb) {
+  fs.mkdir(dest, err => {
+    if (err) return cb(err)
+    copyDir(src, dest, opts, err => {
+      if (err) return cb(err)
+      return fs.chmod(dest, srcStat.mode, cb)
+    })
+  })
+}
+
+function copyDir (src, dest, opts, cb) {
+  fs.readdir(src, (err, items) => {
+    if (err) return cb(err)
+    return copyDirItems(items, src, dest, opts, cb)
+  })
+}
+
+function copyDirItems (items, src, dest, opts, cb) {
+  const item = items.pop()
+  if (!item) return cb()
+  return copyDirItem(items, item, src, dest, opts, cb)
+}
+
+function copyDirItem (items, item, src, dest, opts, cb) {
+  const srcItem = path.join(src, item)
+  const destItem = path.join(dest, item)
+  stat.checkPaths(srcItem, destItem, 'copy', (err, stats) => {
+    if (err) return cb(err)
+    const { destStat } = stats
+    startCopy(destStat, srcItem, destItem, opts, err => {
+      if (err) return cb(err)
+      return copyDirItems(items, src, dest, opts, cb)
+    })
+  })
+}
+
+function onLink (destStat, src, dest, opts, cb) {
+  fs.readlink(src, (err, resolvedSrc) => {
+    if (err) return cb(err)
+    if (opts.dereference) {
+      resolvedSrc = path.resolve(process.cwd(), resolvedSrc)
+    }
+
+    if (!destStat) {
+      return fs.symlink(resolvedSrc, dest, cb)
+    } else {
+      fs.readlink(dest, (err, resolvedDest) => {
+        if (err) {
+          // dest exists and is a regular file or directory,
+          // Windows may throw UNKNOWN error. If dest already exists,
+          // fs throws error anyway, so no need to guard against it here.
+          if (err.code === 'EINVAL' || err.code === 'UNKNOWN') return fs.symlink(resolvedSrc, dest, cb)
+          return cb(err)
+        }
+        if (opts.dereference) {
+          resolvedDest = path.resolve(process.cwd(), resolvedDest)
+        }
+        if (stat.isSrcSubdir(resolvedSrc, resolvedDest)) {
+          return cb(new Error(`Cannot copy '${resolvedSrc}' to a subdirectory of itself, '${resolvedDest}'.`))
+        }
+
+        // do not copy if src is a subdir of dest since unlinking
+        // dest in this case would result in removing src contents
+        // and therefore a broken symlink would be created.
+        if (destStat.isDirectory() && stat.isSrcSubdir(resolvedDest, resolvedSrc)) {
+          return cb(new Error(`Cannot overwrite '${resolvedDest}' with '${resolvedSrc}'.`))
+        }
+        return copyLink(resolvedSrc, dest, cb)
+      })
+    }
+  })
+}
+
+function copyLink (resolvedSrc, dest, cb) {
+  fs.unlink(dest, err => {
+    if (err) return cb(err)
+    return fs.symlink(resolvedSrc, dest, cb)
+  })
+}
+
+module.exports = copy
+
+
+/***/ }),
+
+/***/ 5796:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+module.exports = {
+  copy: u(__nccwpck_require__(1759))
+}
+
+
+/***/ }),
+
+/***/ 7882:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+const mkdir = __nccwpck_require__(1089)
+const remove = __nccwpck_require__(6205)
+
+const emptyDir = u(function emptyDir (dir, callback) {
+  callback = callback || function () {}
+  fs.readdir(dir, (err, items) => {
+    if (err) return mkdir.mkdirs(dir, callback)
+
+    items = items.map(item => path.join(dir, item))
+
+    deleteItem()
+
+    function deleteItem () {
+      const item = items.pop()
+      if (!item) return callback()
+      remove.remove(item, err => {
+        if (err) return callback(err)
+        deleteItem()
+      })
+    }
+  })
+})
+
+function emptyDirSync (dir) {
+  let items
+  try {
+    items = fs.readdirSync(dir)
+  } catch (err) {
+    return mkdir.mkdirsSync(dir)
+  }
+
+  items.forEach(item => {
+    item = path.join(dir, item)
+    remove.removeSync(item)
+  })
+}
+
+module.exports = {
+  emptyDirSync,
+  emptydirSync: emptyDirSync,
+  emptyDir,
+  emptydir: emptyDir
+}
+
+
+/***/ }),
+
+/***/ 3529:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+const path = __nccwpck_require__(6928)
+const fs = __nccwpck_require__(5744)
+const mkdir = __nccwpck_require__(1089)
+const pathExists = (__nccwpck_require__(2881).pathExists)
+
+function createFile (file, callback) {
+  function makeFile () {
+    fs.writeFile(file, '', err => {
+      if (err) return callback(err)
+      callback()
+    })
+  }
+
+  fs.stat(file, (err, stats) => { // eslint-disable-line handle-callback-err
+    if (!err && stats.isFile()) return callback()
+    const dir = path.dirname(file)
+    pathExists(dir, (err, dirExists) => {
+      if (err) return callback(err)
+      if (dirExists) return makeFile()
+      mkdir.mkdirs(dir, err => {
+        if (err) return callback(err)
+        makeFile()
+      })
+    })
+  })
+}
+
+function createFileSync (file) {
+  let stats
+  try {
+    stats = fs.statSync(file)
+  } catch (e) {}
+  if (stats && stats.isFile()) return
+
+  const dir = path.dirname(file)
+  if (!fs.existsSync(dir)) {
+    mkdir.mkdirsSync(dir)
+  }
+
+  fs.writeFileSync(file, '')
+}
+
+module.exports = {
+  createFile: u(createFile),
+  createFileSync
+}
+
+
+/***/ }),
+
+/***/ 5779:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const file = __nccwpck_require__(3529)
+const link = __nccwpck_require__(8751)
+const symlink = __nccwpck_require__(4896)
+
+module.exports = {
+  // file
+  createFile: file.createFile,
+  createFileSync: file.createFileSync,
+  ensureFile: file.createFile,
+  ensureFileSync: file.createFileSync,
+  // link
+  createLink: link.createLink,
+  createLinkSync: link.createLinkSync,
+  ensureLink: link.createLink,
+  ensureLinkSync: link.createLinkSync,
+  // symlink
+  createSymlink: symlink.createSymlink,
+  createSymlinkSync: symlink.createSymlinkSync,
+  ensureSymlink: symlink.createSymlink,
+  ensureSymlinkSync: symlink.createSymlinkSync
+}
+
+
+/***/ }),
+
+/***/ 8751:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+const path = __nccwpck_require__(6928)
+const fs = __nccwpck_require__(5744)
+const mkdir = __nccwpck_require__(1089)
+const pathExists = (__nccwpck_require__(2881).pathExists)
+
+function createLink (srcpath, dstpath, callback) {
+  function makeLink (srcpath, dstpath) {
+    fs.link(srcpath, dstpath, err => {
+      if (err) return callback(err)
+      callback(null)
+    })
+  }
+
+  pathExists(dstpath, (err, destinationExists) => {
+    if (err) return callback(err)
+    if (destinationExists) return callback(null)
+    fs.lstat(srcpath, (err) => {
+      if (err) {
+        err.message = err.message.replace('lstat', 'ensureLink')
+        return callback(err)
+      }
+
+      const dir = path.dirname(dstpath)
+      pathExists(dir, (err, dirExists) => {
+        if (err) return callback(err)
+        if (dirExists) return makeLink(srcpath, dstpath)
+        mkdir.mkdirs(dir, err => {
+          if (err) return callback(err)
+          makeLink(srcpath, dstpath)
+        })
+      })
+    })
+  })
+}
+
+function createLinkSync (srcpath, dstpath) {
+  const destinationExists = fs.existsSync(dstpath)
+  if (destinationExists) return undefined
+
+  try {
+    fs.lstatSync(srcpath)
+  } catch (err) {
+    err.message = err.message.replace('lstat', 'ensureLink')
+    throw err
+  }
+
+  const dir = path.dirname(dstpath)
+  const dirExists = fs.existsSync(dir)
+  if (dirExists) return fs.linkSync(srcpath, dstpath)
+  mkdir.mkdirsSync(dir)
+
+  return fs.linkSync(srcpath, dstpath)
+}
+
+module.exports = {
+  createLink: u(createLink),
+  createLinkSync
+}
+
+
+/***/ }),
+
+/***/ 3121:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const path = __nccwpck_require__(6928)
+const fs = __nccwpck_require__(5744)
+const pathExists = (__nccwpck_require__(2881).pathExists)
+
+/**
+ * Function that returns two types of paths, one relative to symlink, and one
+ * relative to the current working directory. Checks if path is absolute or
+ * relative. If the path is relative, this function checks if the path is
+ * relative to symlink or relative to current working directory. This is an
+ * initiative to find a smarter `srcpath` to supply when building symlinks.
+ * This allows you to determine which path to use out of one of three possible
+ * types of source paths. The first is an absolute path. This is detected by
+ * `path.isAbsolute()`. When an absolute path is provided, it is checked to
+ * see if it exists. If it does it's used, if not an error is returned
+ * (callback)/ thrown (sync). The other two options for `srcpath` are a
+ * relative url. By default Node's `fs.symlink` works by creating a symlink
+ * using `dstpath` and expects the `srcpath` to be relative to the newly
+ * created symlink. If you provide a `srcpath` that does not exist on the file
+ * system it results in a broken symlink. To minimize this, the function
+ * checks to see if the 'relative to symlink' source file exists, and if it
+ * does it will use it. If it does not, it checks if there's a file that
+ * exists that is relative to the current working directory, if does its used.
+ * This preserves the expectations of the original fs.symlink spec and adds
+ * the ability to pass in `relative to current working direcotry` paths.
+ */
+
+function symlinkPaths (srcpath, dstpath, callback) {
+  if (path.isAbsolute(srcpath)) {
+    return fs.lstat(srcpath, (err) => {
+      if (err) {
+        err.message = err.message.replace('lstat', 'ensureSymlink')
+        return callback(err)
+      }
+      return callback(null, {
+        'toCwd': srcpath,
+        'toDst': srcpath
+      })
+    })
+  } else {
+    const dstdir = path.dirname(dstpath)
+    const relativeToDst = path.join(dstdir, srcpath)
+    return pathExists(relativeToDst, (err, exists) => {
+      if (err) return callback(err)
+      if (exists) {
+        return callback(null, {
+          'toCwd': relativeToDst,
+          'toDst': srcpath
+        })
+      } else {
+        return fs.lstat(srcpath, (err) => {
+          if (err) {
+            err.message = err.message.replace('lstat', 'ensureSymlink')
+            return callback(err)
+          }
+          return callback(null, {
+            'toCwd': srcpath,
+            'toDst': path.relative(dstdir, srcpath)
+          })
+        })
+      }
+    })
+  }
+}
+
+function symlinkPathsSync (srcpath, dstpath) {
+  let exists
+  if (path.isAbsolute(srcpath)) {
+    exists = fs.existsSync(srcpath)
+    if (!exists) throw new Error('absolute srcpath does not exist')
+    return {
+      'toCwd': srcpath,
+      'toDst': srcpath
+    }
+  } else {
+    const dstdir = path.dirname(dstpath)
+    const relativeToDst = path.join(dstdir, srcpath)
+    exists = fs.existsSync(relativeToDst)
+    if (exists) {
+      return {
+        'toCwd': relativeToDst,
+        'toDst': srcpath
+      }
+    } else {
+      exists = fs.existsSync(srcpath)
+      if (!exists) throw new Error('relative srcpath does not exist')
+      return {
+        'toCwd': srcpath,
+        'toDst': path.relative(dstdir, srcpath)
+      }
+    }
+  }
+}
+
+module.exports = {
+  symlinkPaths,
+  symlinkPathsSync
+}
+
+
+/***/ }),
+
+/***/ 7045:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+
+function symlinkType (srcpath, type, callback) {
+  callback = (typeof type === 'function') ? type : callback
+  type = (typeof type === 'function') ? false : type
+  if (type) return callback(null, type)
+  fs.lstat(srcpath, (err, stats) => {
+    if (err) return callback(null, 'file')
+    type = (stats && stats.isDirectory()) ? 'dir' : 'file'
+    callback(null, type)
+  })
+}
+
+function symlinkTypeSync (srcpath, type) {
+  let stats
+
+  if (type) return type
+  try {
+    stats = fs.lstatSync(srcpath)
+  } catch (e) {
+    return 'file'
+  }
+  return (stats && stats.isDirectory()) ? 'dir' : 'file'
+}
+
+module.exports = {
+  symlinkType,
+  symlinkTypeSync
+}
+
+
+/***/ }),
+
+/***/ 4896:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+const path = __nccwpck_require__(6928)
+const fs = __nccwpck_require__(5744)
+const _mkdirs = __nccwpck_require__(1089)
+const mkdirs = _mkdirs.mkdirs
+const mkdirsSync = _mkdirs.mkdirsSync
+
+const _symlinkPaths = __nccwpck_require__(3121)
+const symlinkPaths = _symlinkPaths.symlinkPaths
+const symlinkPathsSync = _symlinkPaths.symlinkPathsSync
+
+const _symlinkType = __nccwpck_require__(7045)
+const symlinkType = _symlinkType.symlinkType
+const symlinkTypeSync = _symlinkType.symlinkTypeSync
+
+const pathExists = (__nccwpck_require__(2881).pathExists)
+
+function createSymlink (srcpath, dstpath, type, callback) {
+  callback = (typeof type === 'function') ? type : callback
+  type = (typeof type === 'function') ? false : type
+
+  pathExists(dstpath, (err, destinationExists) => {
+    if (err) return callback(err)
+    if (destinationExists) return callback(null)
+    symlinkPaths(srcpath, dstpath, (err, relative) => {
+      if (err) return callback(err)
+      srcpath = relative.toDst
+      symlinkType(relative.toCwd, type, (err, type) => {
+        if (err) return callback(err)
+        const dir = path.dirname(dstpath)
+        pathExists(dir, (err, dirExists) => {
+          if (err) return callback(err)
+          if (dirExists) return fs.symlink(srcpath, dstpath, type, callback)
+          mkdirs(dir, err => {
+            if (err) return callback(err)
+            fs.symlink(srcpath, dstpath, type, callback)
+          })
+        })
+      })
+    })
+  })
+}
+
+function createSymlinkSync (srcpath, dstpath, type) {
+  const destinationExists = fs.existsSync(dstpath)
+  if (destinationExists) return undefined
+
+  const relative = symlinkPathsSync(srcpath, dstpath)
+  srcpath = relative.toDst
+  type = symlinkTypeSync(relative.toCwd, type)
+  const dir = path.dirname(dstpath)
+  const exists = fs.existsSync(dir)
+  if (exists) return fs.symlinkSync(srcpath, dstpath, type)
+  mkdirsSync(dir)
+  return fs.symlinkSync(srcpath, dstpath, type)
+}
+
+module.exports = {
+  createSymlink: u(createSymlink),
+  createSymlinkSync
+}
+
+
+/***/ }),
+
+/***/ 3506:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// This is adapted from https://github.com/normalize/mz
+// Copyright (c) 2014-2016 Jonathan Ong me@jongleberry.com and Contributors
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+const fs = __nccwpck_require__(5744)
+
+const api = [
+  'access',
+  'appendFile',
+  'chmod',
+  'chown',
+  'close',
+  'copyFile',
+  'fchmod',
+  'fchown',
+  'fdatasync',
+  'fstat',
+  'fsync',
+  'ftruncate',
+  'futimes',
+  'lchown',
+  'lchmod',
+  'link',
+  'lstat',
+  'mkdir',
+  'mkdtemp',
+  'open',
+  'readFile',
+  'readdir',
+  'readlink',
+  'realpath',
+  'rename',
+  'rmdir',
+  'stat',
+  'symlink',
+  'truncate',
+  'unlink',
+  'utimes',
+  'writeFile'
+].filter(key => {
+  // Some commands are not available on some systems. Ex:
+  // fs.copyFile was added in Node.js v8.5.0
+  // fs.mkdtemp was added in Node.js v5.10.0
+  // fs.lchown is not available on at least some Linux
+  return typeof fs[key] === 'function'
+})
+
+// Export all keys:
+Object.keys(fs).forEach(key => {
+  if (key === 'promises') {
+    // fs.promises is a getter property that triggers ExperimentalWarning
+    // Don't re-export it here, the getter is defined in "lib/index.js"
+    return
+  }
+  exports[key] = fs[key]
+})
+
+// Universalify async methods:
+api.forEach(method => {
+  exports[method] = u(fs[method])
+})
+
+// We differ from mz/fs in that we still ship the old, broken, fs.exists()
+// since we are a drop-in replacement for the native module
+exports.exists = function (filename, callback) {
+  if (typeof callback === 'function') {
+    return fs.exists(filename, callback)
+  }
+  return new Promise(resolve => {
+    return fs.exists(filename, resolve)
+  })
+}
+
+// fs.read() & fs.write need special treatment due to multiple callback args
+
+exports.read = function (fd, buffer, offset, length, position, callback) {
+  if (typeof callback === 'function') {
+    return fs.read(fd, buffer, offset, length, position, callback)
+  }
+  return new Promise((resolve, reject) => {
+    fs.read(fd, buffer, offset, length, position, (err, bytesRead, buffer) => {
+      if (err) return reject(err)
+      resolve({ bytesRead, buffer })
+    })
+  })
+}
+
+// Function signature can be
+// fs.write(fd, buffer[, offset[, length[, position]]], callback)
+// OR
+// fs.write(fd, string[, position[, encoding]], callback)
+// We need to handle both cases, so we use ...args
+exports.write = function (fd, buffer, ...args) {
+  if (typeof args[args.length - 1] === 'function') {
+    return fs.write(fd, buffer, ...args)
+  }
+
+  return new Promise((resolve, reject) => {
+    fs.write(fd, buffer, ...args, (err, bytesWritten, buffer) => {
+      if (err) return reject(err)
+      resolve({ bytesWritten, buffer })
+    })
+  })
+}
+
+// fs.realpath.native only available in Node v9.2+
+if (typeof fs.realpath.native === 'function') {
+  exports.realpath.native = u(fs.realpath.native)
+}
+
+
+/***/ }),
+
+/***/ 2136:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+module.exports = Object.assign(
+  {},
+  // Export promiseified graceful-fs:
+  __nccwpck_require__(3506),
+  // Export extra methods:
+  __nccwpck_require__(1364),
+  __nccwpck_require__(5796),
+  __nccwpck_require__(7882),
+  __nccwpck_require__(5779),
+  __nccwpck_require__(8471),
+  __nccwpck_require__(1089),
+  __nccwpck_require__(4252),
+  __nccwpck_require__(2076),
+  __nccwpck_require__(484),
+  __nccwpck_require__(2881),
+  __nccwpck_require__(6205)
+)
+
+// Export fs.promises as a getter property so that we don't trigger
+// ExperimentalWarning before fs.promises is actually accessed.
+const fs = __nccwpck_require__(9896)
+if (Object.getOwnPropertyDescriptor(fs, 'promises')) {
+  Object.defineProperty(module.exports, "promises", ({
+    get () { return fs.promises }
+  }))
+}
+
+
+/***/ }),
+
+/***/ 8471:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+const jsonFile = __nccwpck_require__(8620)
+
+jsonFile.outputJson = u(__nccwpck_require__(3753))
+jsonFile.outputJsonSync = __nccwpck_require__(425)
+// aliases
+jsonFile.outputJSON = jsonFile.outputJson
+jsonFile.outputJSONSync = jsonFile.outputJsonSync
+jsonFile.writeJSON = jsonFile.writeJson
+jsonFile.writeJSONSync = jsonFile.writeJsonSync
+jsonFile.readJSON = jsonFile.readJson
+jsonFile.readJSONSync = jsonFile.readJsonSync
+
+module.exports = jsonFile
+
+
+/***/ }),
+
+/***/ 8620:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+const jsonFile = __nccwpck_require__(2064)
+
+module.exports = {
+  // jsonfile exports
+  readJson: u(jsonFile.readFile),
+  readJsonSync: jsonFile.readFileSync,
+  writeJson: u(jsonFile.writeFile),
+  writeJsonSync: jsonFile.writeFileSync
+}
+
+
+/***/ }),
+
+/***/ 425:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+const mkdir = __nccwpck_require__(1089)
+const jsonFile = __nccwpck_require__(8620)
+
+function outputJsonSync (file, data, options) {
+  const dir = path.dirname(file)
+
+  if (!fs.existsSync(dir)) {
+    mkdir.mkdirsSync(dir)
+  }
+
+  jsonFile.writeJsonSync(file, data, options)
+}
+
+module.exports = outputJsonSync
+
+
+/***/ }),
+
+/***/ 3753:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const path = __nccwpck_require__(6928)
+const mkdir = __nccwpck_require__(1089)
+const pathExists = (__nccwpck_require__(2881).pathExists)
+const jsonFile = __nccwpck_require__(8620)
+
+function outputJson (file, data, options, callback) {
+  if (typeof options === 'function') {
+    callback = options
+    options = {}
+  }
+
+  const dir = path.dirname(file)
+
+  pathExists(dir, (err, itDoes) => {
+    if (err) return callback(err)
+    if (itDoes) return jsonFile.writeJson(file, data, options, callback)
+
+    mkdir.mkdirs(dir, err => {
+      if (err) return callback(err)
+      jsonFile.writeJson(file, data, options, callback)
+    })
+  })
+}
+
+module.exports = outputJson
+
+
+/***/ }),
+
+/***/ 1089:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+const mkdirs = u(__nccwpck_require__(2009))
+const mkdirsSync = __nccwpck_require__(185)
+
+module.exports = {
+  mkdirs,
+  mkdirsSync,
+  // alias
+  mkdirp: mkdirs,
+  mkdirpSync: mkdirsSync,
+  ensureDir: mkdirs,
+  ensureDirSync: mkdirsSync
+}
+
+
+/***/ }),
+
+/***/ 185:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+const invalidWin32Path = (__nccwpck_require__(4766).invalidWin32Path)
+
+const o777 = parseInt('0777', 8)
+
+function mkdirsSync (p, opts, made) {
+  if (!opts || typeof opts !== 'object') {
+    opts = { mode: opts }
+  }
+
+  let mode = opts.mode
+  const xfs = opts.fs || fs
+
+  if (process.platform === 'win32' && invalidWin32Path(p)) {
+    const errInval = new Error(p + ' contains invalid WIN32 path characters.')
+    errInval.code = 'EINVAL'
+    throw errInval
+  }
+
+  if (mode === undefined) {
+    mode = o777 & (~process.umask())
+  }
+  if (!made) made = null
+
+  p = path.resolve(p)
+
+  try {
+    xfs.mkdirSync(p, mode)
+    made = made || p
+  } catch (err0) {
+    if (err0.code === 'ENOENT') {
+      if (path.dirname(p) === p) throw err0
+      made = mkdirsSync(path.dirname(p), opts, made)
+      mkdirsSync(p, opts, made)
+    } else {
+      // In the case of any other error, just see if there's a dir there
+      // already. If so, then hooray!  If not, then something is borked.
+      let stat
+      try {
+        stat = xfs.statSync(p)
+      } catch (err1) {
+        throw err0
+      }
+      if (!stat.isDirectory()) throw err0
+    }
+  }
+
+  return made
+}
+
+module.exports = mkdirsSync
+
+
+/***/ }),
+
+/***/ 2009:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+const invalidWin32Path = (__nccwpck_require__(4766).invalidWin32Path)
+
+const o777 = parseInt('0777', 8)
+
+function mkdirs (p, opts, callback, made) {
+  if (typeof opts === 'function') {
+    callback = opts
+    opts = {}
+  } else if (!opts || typeof opts !== 'object') {
+    opts = { mode: opts }
+  }
+
+  if (process.platform === 'win32' && invalidWin32Path(p)) {
+    const errInval = new Error(p + ' contains invalid WIN32 path characters.')
+    errInval.code = 'EINVAL'
+    return callback(errInval)
+  }
+
+  let mode = opts.mode
+  const xfs = opts.fs || fs
+
+  if (mode === undefined) {
+    mode = o777 & (~process.umask())
+  }
+  if (!made) made = null
+
+  callback = callback || function () {}
+  p = path.resolve(p)
+
+  xfs.mkdir(p, mode, er => {
+    if (!er) {
+      made = made || p
+      return callback(null, made)
+    }
+    switch (er.code) {
+      case 'ENOENT':
+        if (path.dirname(p) === p) return callback(er)
+        mkdirs(path.dirname(p), opts, (er, made) => {
+          if (er) callback(er, made)
+          else mkdirs(p, opts, callback, made)
+        })
+        break
+
+      // In the case of any other error, just see if there's a dir
+      // there already.  If so, then hooray!  If not, then something
+      // is borked.
+      default:
+        xfs.stat(p, (er2, stat) => {
+          // if the stat fails, then that's super weird.
+          // let the original error be the failure reason.
+          if (er2 || !stat.isDirectory()) callback(er, made)
+          else callback(null, made)
+        })
+        break
+    }
+  })
+}
+
+module.exports = mkdirs
+
+
+/***/ }),
+
+/***/ 4766:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const path = __nccwpck_require__(6928)
+
+// get drive on windows
+function getRootPath (p) {
+  p = path.normalize(path.resolve(p)).split(path.sep)
+  if (p.length > 0) return p[0]
+  return null
+}
+
+// http://stackoverflow.com/a/62888/10333 contains more accurate
+// TODO: expand to include the rest
+const INVALID_PATH_CHARS = /[<>:"|?*]/
+
+function invalidWin32Path (p) {
+  const rp = getRootPath(p)
+  p = p.replace(rp, '')
+  return INVALID_PATH_CHARS.test(p)
+}
+
+module.exports = {
+  getRootPath,
+  invalidWin32Path
+}
+
+
+/***/ }),
+
+/***/ 4252:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+module.exports = {
+  moveSync: __nccwpck_require__(7183)
+}
+
+
+/***/ }),
+
+/***/ 7183:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+const copySync = (__nccwpck_require__(1364).copySync)
+const removeSync = (__nccwpck_require__(6205).removeSync)
+const mkdirpSync = (__nccwpck_require__(1089).mkdirpSync)
+const stat = __nccwpck_require__(887)
+
+function moveSync (src, dest, opts) {
+  opts = opts || {}
+  const overwrite = opts.overwrite || opts.clobber || false
+
+  const { srcStat } = stat.checkPathsSync(src, dest, 'move')
+  stat.checkParentPathsSync(src, srcStat, dest, 'move')
+  mkdirpSync(path.dirname(dest))
+  return doRename(src, dest, overwrite)
+}
+
+function doRename (src, dest, overwrite) {
+  if (overwrite) {
+    removeSync(dest)
+    return rename(src, dest, overwrite)
+  }
+  if (fs.existsSync(dest)) throw new Error('dest already exists.')
+  return rename(src, dest, overwrite)
+}
+
+function rename (src, dest, overwrite) {
+  try {
+    fs.renameSync(src, dest)
+  } catch (err) {
+    if (err.code !== 'EXDEV') throw err
+    return moveAcrossDevice(src, dest, overwrite)
+  }
+}
+
+function moveAcrossDevice (src, dest, overwrite) {
+  const opts = {
+    overwrite,
+    errorOnExist: true
+  }
+  copySync(src, dest, opts)
+  return removeSync(src)
+}
+
+module.exports = moveSync
+
+
+/***/ }),
+
+/***/ 2076:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+module.exports = {
+  move: u(__nccwpck_require__(7751))
+}
+
+
+/***/ }),
+
+/***/ 7751:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+const copy = (__nccwpck_require__(5796).copy)
+const remove = (__nccwpck_require__(6205).remove)
+const mkdirp = (__nccwpck_require__(1089).mkdirp)
+const pathExists = (__nccwpck_require__(2881).pathExists)
+const stat = __nccwpck_require__(887)
+
+function move (src, dest, opts, cb) {
+  if (typeof opts === 'function') {
+    cb = opts
+    opts = {}
+  }
+
+  const overwrite = opts.overwrite || opts.clobber || false
+
+  stat.checkPaths(src, dest, 'move', (err, stats) => {
+    if (err) return cb(err)
+    const { srcStat } = stats
+    stat.checkParentPaths(src, srcStat, dest, 'move', err => {
+      if (err) return cb(err)
+      mkdirp(path.dirname(dest), err => {
+        if (err) return cb(err)
+        return doRename(src, dest, overwrite, cb)
+      })
+    })
+  })
+}
+
+function doRename (src, dest, overwrite, cb) {
+  if (overwrite) {
+    return remove(dest, err => {
+      if (err) return cb(err)
+      return rename(src, dest, overwrite, cb)
+    })
+  }
+  pathExists(dest, (err, destExists) => {
+    if (err) return cb(err)
+    if (destExists) return cb(new Error('dest already exists.'))
+    return rename(src, dest, overwrite, cb)
+  })
+}
+
+function rename (src, dest, overwrite, cb) {
+  fs.rename(src, dest, err => {
+    if (!err) return cb()
+    if (err.code !== 'EXDEV') return cb(err)
+    return moveAcrossDevice(src, dest, overwrite, cb)
+  })
+}
+
+function moveAcrossDevice (src, dest, overwrite, cb) {
+  const opts = {
+    overwrite,
+    errorOnExist: true
+  }
+  copy(src, dest, opts, err => {
+    if (err) return cb(err)
+    return remove(src, cb)
+  })
+}
+
+module.exports = move
+
+
+/***/ }),
+
+/***/ 484:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+const mkdir = __nccwpck_require__(1089)
+const pathExists = (__nccwpck_require__(2881).pathExists)
+
+function outputFile (file, data, encoding, callback) {
+  if (typeof encoding === 'function') {
+    callback = encoding
+    encoding = 'utf8'
+  }
+
+  const dir = path.dirname(file)
+  pathExists(dir, (err, itDoes) => {
+    if (err) return callback(err)
+    if (itDoes) return fs.writeFile(file, data, encoding, callback)
+
+    mkdir.mkdirs(dir, err => {
+      if (err) return callback(err)
+
+      fs.writeFile(file, data, encoding, callback)
+    })
+  })
+}
+
+function outputFileSync (file, ...args) {
+  const dir = path.dirname(file)
+  if (fs.existsSync(dir)) {
+    return fs.writeFileSync(file, ...args)
+  }
+  mkdir.mkdirsSync(dir)
+  fs.writeFileSync(file, ...args)
+}
+
+module.exports = {
+  outputFile: u(outputFile),
+  outputFileSync
+}
+
+
+/***/ }),
+
+/***/ 2881:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const u = (__nccwpck_require__(5077)/* .fromPromise */ .z)
+const fs = __nccwpck_require__(3506)
+
+function pathExists (path) {
+  return fs.access(path).then(() => true).catch(() => false)
+}
+
+module.exports = {
+  pathExists: u(pathExists),
+  pathExistsSync: fs.existsSync
+}
+
+
+/***/ }),
+
+/***/ 6205:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const u = (__nccwpck_require__(5077)/* .fromCallback */ .S)
+const rimraf = __nccwpck_require__(7864)
+
+module.exports = {
+  remove: u(rimraf),
+  removeSync: rimraf.sync
+}
+
+
+/***/ }),
+
+/***/ 7864:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+const assert = __nccwpck_require__(2613)
+
+const isWindows = (process.platform === 'win32')
+
+function defaults (options) {
+  const methods = [
+    'unlink',
+    'chmod',
+    'stat',
+    'lstat',
+    'rmdir',
+    'readdir'
+  ]
+  methods.forEach(m => {
+    options[m] = options[m] || fs[m]
+    m = m + 'Sync'
+    options[m] = options[m] || fs[m]
+  })
+
+  options.maxBusyTries = options.maxBusyTries || 3
+}
+
+function rimraf (p, options, cb) {
+  let busyTries = 0
+
+  if (typeof options === 'function') {
+    cb = options
+    options = {}
+  }
+
+  assert(p, 'rimraf: missing path')
+  assert.strictEqual(typeof p, 'string', 'rimraf: path should be a string')
+  assert.strictEqual(typeof cb, 'function', 'rimraf: callback function required')
+  assert(options, 'rimraf: invalid options argument provided')
+  assert.strictEqual(typeof options, 'object', 'rimraf: options should be object')
+
+  defaults(options)
+
+  rimraf_(p, options, function CB (er) {
+    if (er) {
+      if ((er.code === 'EBUSY' || er.code === 'ENOTEMPTY' || er.code === 'EPERM') &&
+          busyTries < options.maxBusyTries) {
+        busyTries++
+        const time = busyTries * 100
+        // try again, with the same exact callback as this one.
+        return setTimeout(() => rimraf_(p, options, CB), time)
+      }
+
+      // already gone
+      if (er.code === 'ENOENT') er = null
+    }
+
+    cb(er)
+  })
+}
+
+// Two possible strategies.
+// 1. Assume it's a file.  unlink it, then do the dir stuff on EPERM or EISDIR
+// 2. Assume it's a directory.  readdir, then do the file stuff on ENOTDIR
+//
+// Both result in an extra syscall when you guess wrong.  However, there
+// are likely far more normal files in the world than directories.  This
+// is based on the assumption that a the average number of files per
+// directory is >= 1.
+//
+// If anyone ever complains about this, then I guess the strategy could
+// be made configurable somehow.  But until then, YAGNI.
+function rimraf_ (p, options, cb) {
+  assert(p)
+  assert(options)
+  assert(typeof cb === 'function')
+
+  // sunos lets the root user unlink directories, which is... weird.
+  // so we have to lstat here and make sure it's not a dir.
+  options.lstat(p, (er, st) => {
+    if (er && er.code === 'ENOENT') {
+      return cb(null)
+    }
+
+    // Windows can EPERM on stat.  Life is suffering.
+    if (er && er.code === 'EPERM' && isWindows) {
+      return fixWinEPERM(p, options, er, cb)
+    }
+
+    if (st && st.isDirectory()) {
+      return rmdir(p, options, er, cb)
+    }
+
+    options.unlink(p, er => {
+      if (er) {
+        if (er.code === 'ENOENT') {
+          return cb(null)
+        }
+        if (er.code === 'EPERM') {
+          return (isWindows)
+            ? fixWinEPERM(p, options, er, cb)
+            : rmdir(p, options, er, cb)
+        }
+        if (er.code === 'EISDIR') {
+          return rmdir(p, options, er, cb)
+        }
+      }
+      return cb(er)
+    })
+  })
+}
+
+function fixWinEPERM (p, options, er, cb) {
+  assert(p)
+  assert(options)
+  assert(typeof cb === 'function')
+  if (er) {
+    assert(er instanceof Error)
+  }
+
+  options.chmod(p, 0o666, er2 => {
+    if (er2) {
+      cb(er2.code === 'ENOENT' ? null : er)
+    } else {
+      options.stat(p, (er3, stats) => {
+        if (er3) {
+          cb(er3.code === 'ENOENT' ? null : er)
+        } else if (stats.isDirectory()) {
+          rmdir(p, options, er, cb)
+        } else {
+          options.unlink(p, cb)
+        }
+      })
+    }
+  })
+}
+
+function fixWinEPERMSync (p, options, er) {
+  let stats
+
+  assert(p)
+  assert(options)
+  if (er) {
+    assert(er instanceof Error)
+  }
+
+  try {
+    options.chmodSync(p, 0o666)
+  } catch (er2) {
+    if (er2.code === 'ENOENT') {
+      return
+    } else {
+      throw er
+    }
+  }
+
+  try {
+    stats = options.statSync(p)
+  } catch (er3) {
+    if (er3.code === 'ENOENT') {
+      return
+    } else {
+      throw er
+    }
+  }
+
+  if (stats.isDirectory()) {
+    rmdirSync(p, options, er)
+  } else {
+    options.unlinkSync(p)
+  }
+}
+
+function rmdir (p, options, originalEr, cb) {
+  assert(p)
+  assert(options)
+  if (originalEr) {
+    assert(originalEr instanceof Error)
+  }
+  assert(typeof cb === 'function')
+
+  // try to rmdir first, and only readdir on ENOTEMPTY or EEXIST (SunOS)
+  // if we guessed wrong, and it's not a directory, then
+  // raise the original error.
+  options.rmdir(p, er => {
+    if (er && (er.code === 'ENOTEMPTY' || er.code === 'EEXIST' || er.code === 'EPERM')) {
+      rmkids(p, options, cb)
+    } else if (er && er.code === 'ENOTDIR') {
+      cb(originalEr)
+    } else {
+      cb(er)
+    }
+  })
+}
+
+function rmkids (p, options, cb) {
+  assert(p)
+  assert(options)
+  assert(typeof cb === 'function')
+
+  options.readdir(p, (er, files) => {
+    if (er) return cb(er)
+
+    let n = files.length
+    let errState
+
+    if (n === 0) return options.rmdir(p, cb)
+
+    files.forEach(f => {
+      rimraf(path.join(p, f), options, er => {
+        if (errState) {
+          return
+        }
+        if (er) return cb(errState = er)
+        if (--n === 0) {
+          options.rmdir(p, cb)
+        }
+      })
+    })
+  })
+}
+
+// this looks simpler, and is strictly *faster*, but will
+// tie up the JavaScript thread and fail on excessively
+// deep directory trees.
+function rimrafSync (p, options) {
+  let st
+
+  options = options || {}
+  defaults(options)
+
+  assert(p, 'rimraf: missing path')
+  assert.strictEqual(typeof p, 'string', 'rimraf: path should be a string')
+  assert(options, 'rimraf: missing options')
+  assert.strictEqual(typeof options, 'object', 'rimraf: options should be object')
+
+  try {
+    st = options.lstatSync(p)
+  } catch (er) {
+    if (er.code === 'ENOENT') {
+      return
+    }
+
+    // Windows can EPERM on stat.  Life is suffering.
+    if (er.code === 'EPERM' && isWindows) {
+      fixWinEPERMSync(p, options, er)
+    }
+  }
+
+  try {
+    // sunos lets the root user unlink directories, which is... weird.
+    if (st && st.isDirectory()) {
+      rmdirSync(p, options, null)
+    } else {
+      options.unlinkSync(p)
+    }
+  } catch (er) {
+    if (er.code === 'ENOENT') {
+      return
+    } else if (er.code === 'EPERM') {
+      return isWindows ? fixWinEPERMSync(p, options, er) : rmdirSync(p, options, er)
+    } else if (er.code !== 'EISDIR') {
+      throw er
+    }
+    rmdirSync(p, options, er)
+  }
+}
+
+function rmdirSync (p, options, originalEr) {
+  assert(p)
+  assert(options)
+  if (originalEr) {
+    assert(originalEr instanceof Error)
+  }
+
+  try {
+    options.rmdirSync(p)
+  } catch (er) {
+    if (er.code === 'ENOTDIR') {
+      throw originalEr
+    } else if (er.code === 'ENOTEMPTY' || er.code === 'EEXIST' || er.code === 'EPERM') {
+      rmkidsSync(p, options)
+    } else if (er.code !== 'ENOENT') {
+      throw er
+    }
+  }
+}
+
+function rmkidsSync (p, options) {
+  assert(p)
+  assert(options)
+  options.readdirSync(p).forEach(f => rimrafSync(path.join(p, f), options))
+
+  if (isWindows) {
+    // We only end up here once we got ENOTEMPTY at least once, and
+    // at this point, we are guaranteed to have removed all the kids.
+    // So, we know that it won't be ENOENT or ENOTDIR or anything else.
+    // try really hard to delete stuff on windows, because it has a
+    // PROFOUNDLY annoying habit of not closing handles promptly when
+    // files are deleted, resulting in spurious ENOTEMPTY errors.
+    const startTime = Date.now()
+    do {
+      try {
+        const ret = options.rmdirSync(p, options)
+        return ret
+      } catch (er) { }
+    } while (Date.now() - startTime < 500) // give up after 500ms
+  } else {
+    const ret = options.rmdirSync(p, options)
+    return ret
+  }
+}
+
+module.exports = rimraf
+rimraf.sync = rimrafSync
+
+
+/***/ }),
+
+/***/ 9635:
+/***/ ((module) => {
+
+"use strict";
+
+/* eslint-disable node/no-deprecated-api */
+module.exports = function (size) {
+  if (typeof Buffer.allocUnsafe === 'function') {
+    try {
+      return Buffer.allocUnsafe(size)
+    } catch (e) {
+      return new Buffer(size)
+    }
+  }
+  return new Buffer(size)
+}
+
+
+/***/ }),
+
+/***/ 887:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+const path = __nccwpck_require__(6928)
+
+const NODE_VERSION_MAJOR_WITH_BIGINT = 10
+const NODE_VERSION_MINOR_WITH_BIGINT = 5
+const NODE_VERSION_PATCH_WITH_BIGINT = 0
+const nodeVersion = process.versions.node.split('.')
+const nodeVersionMajor = Number.parseInt(nodeVersion[0], 10)
+const nodeVersionMinor = Number.parseInt(nodeVersion[1], 10)
+const nodeVersionPatch = Number.parseInt(nodeVersion[2], 10)
+
+function nodeSupportsBigInt () {
+  if (nodeVersionMajor > NODE_VERSION_MAJOR_WITH_BIGINT) {
+    return true
+  } else if (nodeVersionMajor === NODE_VERSION_MAJOR_WITH_BIGINT) {
+    if (nodeVersionMinor > NODE_VERSION_MINOR_WITH_BIGINT) {
+      return true
+    } else if (nodeVersionMinor === NODE_VERSION_MINOR_WITH_BIGINT) {
+      if (nodeVersionPatch >= NODE_VERSION_PATCH_WITH_BIGINT) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function getStats (src, dest, cb) {
+  if (nodeSupportsBigInt()) {
+    fs.stat(src, { bigint: true }, (err, srcStat) => {
+      if (err) return cb(err)
+      fs.stat(dest, { bigint: true }, (err, destStat) => {
+        if (err) {
+          if (err.code === 'ENOENT') return cb(null, { srcStat, destStat: null })
+          return cb(err)
+        }
+        return cb(null, { srcStat, destStat })
+      })
+    })
+  } else {
+    fs.stat(src, (err, srcStat) => {
+      if (err) return cb(err)
+      fs.stat(dest, (err, destStat) => {
+        if (err) {
+          if (err.code === 'ENOENT') return cb(null, { srcStat, destStat: null })
+          return cb(err)
+        }
+        return cb(null, { srcStat, destStat })
+      })
+    })
+  }
+}
+
+function getStatsSync (src, dest) {
+  let srcStat, destStat
+  if (nodeSupportsBigInt()) {
+    srcStat = fs.statSync(src, { bigint: true })
+  } else {
+    srcStat = fs.statSync(src)
+  }
+  try {
+    if (nodeSupportsBigInt()) {
+      destStat = fs.statSync(dest, { bigint: true })
+    } else {
+      destStat = fs.statSync(dest)
+    }
+  } catch (err) {
+    if (err.code === 'ENOENT') return { srcStat, destStat: null }
+    throw err
+  }
+  return { srcStat, destStat }
+}
+
+function checkPaths (src, dest, funcName, cb) {
+  getStats(src, dest, (err, stats) => {
+    if (err) return cb(err)
+    const { srcStat, destStat } = stats
+    if (destStat && destStat.ino && destStat.dev && destStat.ino === srcStat.ino && destStat.dev === srcStat.dev) {
+      return cb(new Error('Source and destination must not be the same.'))
+    }
+    if (srcStat.isDirectory() && isSrcSubdir(src, dest)) {
+      return cb(new Error(errMsg(src, dest, funcName)))
+    }
+    return cb(null, { srcStat, destStat })
+  })
+}
+
+function checkPathsSync (src, dest, funcName) {
+  const { srcStat, destStat } = getStatsSync(src, dest)
+  if (destStat && destStat.ino && destStat.dev && destStat.ino === srcStat.ino && destStat.dev === srcStat.dev) {
+    throw new Error('Source and destination must not be the same.')
+  }
+  if (srcStat.isDirectory() && isSrcSubdir(src, dest)) {
+    throw new Error(errMsg(src, dest, funcName))
+  }
+  return { srcStat, destStat }
+}
+
+// recursively check if dest parent is a subdirectory of src.
+// It works for all file types including symlinks since it
+// checks the src and dest inodes. It starts from the deepest
+// parent and stops once it reaches the src parent or the root path.
+function checkParentPaths (src, srcStat, dest, funcName, cb) {
+  const srcParent = path.resolve(path.dirname(src))
+  const destParent = path.resolve(path.dirname(dest))
+  if (destParent === srcParent || destParent === path.parse(destParent).root) return cb()
+  if (nodeSupportsBigInt()) {
+    fs.stat(destParent, { bigint: true }, (err, destStat) => {
+      if (err) {
+        if (err.code === 'ENOENT') return cb()
+        return cb(err)
+      }
+      if (destStat.ino && destStat.dev && destStat.ino === srcStat.ino && destStat.dev === srcStat.dev) {
+        return cb(new Error(errMsg(src, dest, funcName)))
+      }
+      return checkParentPaths(src, srcStat, destParent, funcName, cb)
+    })
+  } else {
+    fs.stat(destParent, (err, destStat) => {
+      if (err) {
+        if (err.code === 'ENOENT') return cb()
+        return cb(err)
+      }
+      if (destStat.ino && destStat.dev && destStat.ino === srcStat.ino && destStat.dev === srcStat.dev) {
+        return cb(new Error(errMsg(src, dest, funcName)))
+      }
+      return checkParentPaths(src, srcStat, destParent, funcName, cb)
+    })
+  }
+}
+
+function checkParentPathsSync (src, srcStat, dest, funcName) {
+  const srcParent = path.resolve(path.dirname(src))
+  const destParent = path.resolve(path.dirname(dest))
+  if (destParent === srcParent || destParent === path.parse(destParent).root) return
+  let destStat
+  try {
+    if (nodeSupportsBigInt()) {
+      destStat = fs.statSync(destParent, { bigint: true })
+    } else {
+      destStat = fs.statSync(destParent)
+    }
+  } catch (err) {
+    if (err.code === 'ENOENT') return
+    throw err
+  }
+  if (destStat.ino && destStat.dev && destStat.ino === srcStat.ino && destStat.dev === srcStat.dev) {
+    throw new Error(errMsg(src, dest, funcName))
+  }
+  return checkParentPathsSync(src, srcStat, destParent, funcName)
+}
+
+// return true if dest is a subdir of src, otherwise false.
+// It only checks the path strings.
+function isSrcSubdir (src, dest) {
+  const srcArr = path.resolve(src).split(path.sep).filter(i => i)
+  const destArr = path.resolve(dest).split(path.sep).filter(i => i)
+  return srcArr.reduce((acc, cur, i) => acc && destArr[i] === cur, true)
+}
+
+function errMsg (src, dest, funcName) {
+  return `Cannot ${funcName} '${src}' to a subdirectory of itself, '${dest}'.`
+}
+
+module.exports = {
+  checkPaths,
+  checkPathsSync,
+  checkParentPaths,
+  checkParentPathsSync,
+  isSrcSubdir
+}
+
+
+/***/ }),
+
+/***/ 6934:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const fs = __nccwpck_require__(5744)
+const os = __nccwpck_require__(857)
+const path = __nccwpck_require__(6928)
+
+// HFS, ext{2,3}, FAT do not, Node.js v0.10 does not
+function hasMillisResSync () {
+  let tmpfile = path.join('millis-test-sync' + Date.now().toString() + Math.random().toString().slice(2))
+  tmpfile = path.join(os.tmpdir(), tmpfile)
+
+  // 550 millis past UNIX epoch
+  const d = new Date(1435410243862)
+  fs.writeFileSync(tmpfile, 'https://github.com/jprichardson/node-fs-extra/pull/141')
+  const fd = fs.openSync(tmpfile, 'r+')
+  fs.futimesSync(fd, d, d)
+  fs.closeSync(fd)
+  return fs.statSync(tmpfile).mtime > 1435410243000
+}
+
+function hasMillisRes (callback) {
+  let tmpfile = path.join('millis-test' + Date.now().toString() + Math.random().toString().slice(2))
+  tmpfile = path.join(os.tmpdir(), tmpfile)
+
+  // 550 millis past UNIX epoch
+  const d = new Date(1435410243862)
+  fs.writeFile(tmpfile, 'https://github.com/jprichardson/node-fs-extra/pull/141', err => {
+    if (err) return callback(err)
+    fs.open(tmpfile, 'r+', (err, fd) => {
+      if (err) return callback(err)
+      fs.futimes(fd, d, d, err => {
+        if (err) return callback(err)
+        fs.close(fd, err => {
+          if (err) return callback(err)
+          fs.stat(tmpfile, (err, stats) => {
+            if (err) return callback(err)
+            callback(null, stats.mtime > 1435410243000)
+          })
+        })
+      })
+    })
+  })
+}
+
+function timeRemoveMillis (timestamp) {
+  if (typeof timestamp === 'number') {
+    return Math.floor(timestamp / 1000) * 1000
+  } else if (timestamp instanceof Date) {
+    return new Date(Math.floor(timestamp.getTime() / 1000) * 1000)
+  } else {
+    throw new Error('fs-extra: timeRemoveMillis() unknown parameter type')
+  }
+}
+
+function utimesMillis (path, atime, mtime, callback) {
+  // if (!HAS_MILLIS_RES) return fs.utimes(path, atime, mtime, callback)
+  fs.open(path, 'r+', (err, fd) => {
+    if (err) return callback(err)
+    fs.futimes(fd, atime, mtime, futimesErr => {
+      fs.close(fd, closeErr => {
+        if (callback) callback(futimesErr || closeErr)
+      })
+    })
+  })
+}
+
+function utimesMillisSync (path, atime, mtime) {
+  const fd = fs.openSync(path, 'r+')
+  fs.futimesSync(fd, atime, mtime)
+  return fs.closeSync(fd)
+}
+
+module.exports = {
+  hasMillisRes,
+  hasMillisResSync,
+  timeRemoveMillis,
+  utimesMillis,
+  utimesMillisSync
+}
+
+
+/***/ }),
+
 /***/ 9808:
 /***/ ((module) => {
 
@@ -12386,6 +31986,979 @@ if ($gOPD) {
 }
 
 module.exports = $gOPD;
+
+
+/***/ }),
+
+/***/ 3964:
+/***/ ((module) => {
+
+"use strict";
+
+
+module.exports = clone
+
+var getPrototypeOf = Object.getPrototypeOf || function (obj) {
+  return obj.__proto__
+}
+
+function clone (obj) {
+  if (obj === null || typeof obj !== 'object')
+    return obj
+
+  if (obj instanceof Object)
+    var copy = { __proto__: getPrototypeOf(obj) }
+  else
+    var copy = Object.create(null)
+
+  Object.getOwnPropertyNames(obj).forEach(function (key) {
+    Object.defineProperty(copy, key, Object.getOwnPropertyDescriptor(obj, key))
+  })
+
+  return copy
+}
+
+
+/***/ }),
+
+/***/ 5744:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+var fs = __nccwpck_require__(9896)
+var polyfills = __nccwpck_require__(3501)
+var legacy = __nccwpck_require__(2270)
+var clone = __nccwpck_require__(3964)
+
+var util = __nccwpck_require__(9023)
+
+/* istanbul ignore next - node 0.x polyfill */
+var gracefulQueue
+var previousSymbol
+
+/* istanbul ignore else - node 0.x polyfill */
+if (typeof Symbol === 'function' && typeof Symbol.for === 'function') {
+  gracefulQueue = Symbol.for('graceful-fs.queue')
+  // This is used in testing by future versions
+  previousSymbol = Symbol.for('graceful-fs.previous')
+} else {
+  gracefulQueue = '___graceful-fs.queue'
+  previousSymbol = '___graceful-fs.previous'
+}
+
+function noop () {}
+
+function publishQueue(context, queue) {
+  Object.defineProperty(context, gracefulQueue, {
+    get: function() {
+      return queue
+    }
+  })
+}
+
+var debug = noop
+if (util.debuglog)
+  debug = util.debuglog('gfs4')
+else if (/\bgfs4\b/i.test(process.env.NODE_DEBUG || ''))
+  debug = function() {
+    var m = util.format.apply(util, arguments)
+    m = 'GFS4: ' + m.split(/\n/).join('\nGFS4: ')
+    console.error(m)
+  }
+
+// Once time initialization
+if (!fs[gracefulQueue]) {
+  // This queue can be shared by multiple loaded instances
+  var queue = global[gracefulQueue] || []
+  publishQueue(fs, queue)
+
+  // Patch fs.close/closeSync to shared queue version, because we need
+  // to retry() whenever a close happens *anywhere* in the program.
+  // This is essential when multiple graceful-fs instances are
+  // in play at the same time.
+  fs.close = (function (fs$close) {
+    function close (fd, cb) {
+      return fs$close.call(fs, fd, function (err) {
+        // This function uses the graceful-fs shared queue
+        if (!err) {
+          resetQueue()
+        }
+
+        if (typeof cb === 'function')
+          cb.apply(this, arguments)
+      })
+    }
+
+    Object.defineProperty(close, previousSymbol, {
+      value: fs$close
+    })
+    return close
+  })(fs.close)
+
+  fs.closeSync = (function (fs$closeSync) {
+    function closeSync (fd) {
+      // This function uses the graceful-fs shared queue
+      fs$closeSync.apply(fs, arguments)
+      resetQueue()
+    }
+
+    Object.defineProperty(closeSync, previousSymbol, {
+      value: fs$closeSync
+    })
+    return closeSync
+  })(fs.closeSync)
+
+  if (/\bgfs4\b/i.test(process.env.NODE_DEBUG || '')) {
+    process.on('exit', function() {
+      debug(fs[gracefulQueue])
+      __nccwpck_require__(2613).equal(fs[gracefulQueue].length, 0)
+    })
+  }
+}
+
+if (!global[gracefulQueue]) {
+  publishQueue(global, fs[gracefulQueue]);
+}
+
+module.exports = patch(clone(fs))
+if (process.env.TEST_GRACEFUL_FS_GLOBAL_PATCH && !fs.__patched) {
+    module.exports = patch(fs)
+    fs.__patched = true;
+}
+
+function patch (fs) {
+  // Everything that references the open() function needs to be in here
+  polyfills(fs)
+  fs.gracefulify = patch
+
+  fs.createReadStream = createReadStream
+  fs.createWriteStream = createWriteStream
+  var fs$readFile = fs.readFile
+  fs.readFile = readFile
+  function readFile (path, options, cb) {
+    if (typeof options === 'function')
+      cb = options, options = null
+
+    return go$readFile(path, options, cb)
+
+    function go$readFile (path, options, cb, startTime) {
+      return fs$readFile(path, options, function (err) {
+        if (err && (err.code === 'EMFILE' || err.code === 'ENFILE'))
+          enqueue([go$readFile, [path, options, cb], err, startTime || Date.now(), Date.now()])
+        else {
+          if (typeof cb === 'function')
+            cb.apply(this, arguments)
+        }
+      })
+    }
+  }
+
+  var fs$writeFile = fs.writeFile
+  fs.writeFile = writeFile
+  function writeFile (path, data, options, cb) {
+    if (typeof options === 'function')
+      cb = options, options = null
+
+    return go$writeFile(path, data, options, cb)
+
+    function go$writeFile (path, data, options, cb, startTime) {
+      return fs$writeFile(path, data, options, function (err) {
+        if (err && (err.code === 'EMFILE' || err.code === 'ENFILE'))
+          enqueue([go$writeFile, [path, data, options, cb], err, startTime || Date.now(), Date.now()])
+        else {
+          if (typeof cb === 'function')
+            cb.apply(this, arguments)
+        }
+      })
+    }
+  }
+
+  var fs$appendFile = fs.appendFile
+  if (fs$appendFile)
+    fs.appendFile = appendFile
+  function appendFile (path, data, options, cb) {
+    if (typeof options === 'function')
+      cb = options, options = null
+
+    return go$appendFile(path, data, options, cb)
+
+    function go$appendFile (path, data, options, cb, startTime) {
+      return fs$appendFile(path, data, options, function (err) {
+        if (err && (err.code === 'EMFILE' || err.code === 'ENFILE'))
+          enqueue([go$appendFile, [path, data, options, cb], err, startTime || Date.now(), Date.now()])
+        else {
+          if (typeof cb === 'function')
+            cb.apply(this, arguments)
+        }
+      })
+    }
+  }
+
+  var fs$copyFile = fs.copyFile
+  if (fs$copyFile)
+    fs.copyFile = copyFile
+  function copyFile (src, dest, flags, cb) {
+    if (typeof flags === 'function') {
+      cb = flags
+      flags = 0
+    }
+    return go$copyFile(src, dest, flags, cb)
+
+    function go$copyFile (src, dest, flags, cb, startTime) {
+      return fs$copyFile(src, dest, flags, function (err) {
+        if (err && (err.code === 'EMFILE' || err.code === 'ENFILE'))
+          enqueue([go$copyFile, [src, dest, flags, cb], err, startTime || Date.now(), Date.now()])
+        else {
+          if (typeof cb === 'function')
+            cb.apply(this, arguments)
+        }
+      })
+    }
+  }
+
+  var fs$readdir = fs.readdir
+  fs.readdir = readdir
+  var noReaddirOptionVersions = /^v[0-5]\./
+  function readdir (path, options, cb) {
+    if (typeof options === 'function')
+      cb = options, options = null
+
+    var go$readdir = noReaddirOptionVersions.test(process.version)
+      ? function go$readdir (path, options, cb, startTime) {
+        return fs$readdir(path, fs$readdirCallback(
+          path, options, cb, startTime
+        ))
+      }
+      : function go$readdir (path, options, cb, startTime) {
+        return fs$readdir(path, options, fs$readdirCallback(
+          path, options, cb, startTime
+        ))
+      }
+
+    return go$readdir(path, options, cb)
+
+    function fs$readdirCallback (path, options, cb, startTime) {
+      return function (err, files) {
+        if (err && (err.code === 'EMFILE' || err.code === 'ENFILE'))
+          enqueue([
+            go$readdir,
+            [path, options, cb],
+            err,
+            startTime || Date.now(),
+            Date.now()
+          ])
+        else {
+          if (files && files.sort)
+            files.sort()
+
+          if (typeof cb === 'function')
+            cb.call(this, err, files)
+        }
+      }
+    }
+  }
+
+  if (process.version.substr(0, 4) === 'v0.8') {
+    var legStreams = legacy(fs)
+    ReadStream = legStreams.ReadStream
+    WriteStream = legStreams.WriteStream
+  }
+
+  var fs$ReadStream = fs.ReadStream
+  if (fs$ReadStream) {
+    ReadStream.prototype = Object.create(fs$ReadStream.prototype)
+    ReadStream.prototype.open = ReadStream$open
+  }
+
+  var fs$WriteStream = fs.WriteStream
+  if (fs$WriteStream) {
+    WriteStream.prototype = Object.create(fs$WriteStream.prototype)
+    WriteStream.prototype.open = WriteStream$open
+  }
+
+  Object.defineProperty(fs, 'ReadStream', {
+    get: function () {
+      return ReadStream
+    },
+    set: function (val) {
+      ReadStream = val
+    },
+    enumerable: true,
+    configurable: true
+  })
+  Object.defineProperty(fs, 'WriteStream', {
+    get: function () {
+      return WriteStream
+    },
+    set: function (val) {
+      WriteStream = val
+    },
+    enumerable: true,
+    configurable: true
+  })
+
+  // legacy names
+  var FileReadStream = ReadStream
+  Object.defineProperty(fs, 'FileReadStream', {
+    get: function () {
+      return FileReadStream
+    },
+    set: function (val) {
+      FileReadStream = val
+    },
+    enumerable: true,
+    configurable: true
+  })
+  var FileWriteStream = WriteStream
+  Object.defineProperty(fs, 'FileWriteStream', {
+    get: function () {
+      return FileWriteStream
+    },
+    set: function (val) {
+      FileWriteStream = val
+    },
+    enumerable: true,
+    configurable: true
+  })
+
+  function ReadStream (path, options) {
+    if (this instanceof ReadStream)
+      return fs$ReadStream.apply(this, arguments), this
+    else
+      return ReadStream.apply(Object.create(ReadStream.prototype), arguments)
+  }
+
+  function ReadStream$open () {
+    var that = this
+    open(that.path, that.flags, that.mode, function (err, fd) {
+      if (err) {
+        if (that.autoClose)
+          that.destroy()
+
+        that.emit('error', err)
+      } else {
+        that.fd = fd
+        that.emit('open', fd)
+        that.read()
+      }
+    })
+  }
+
+  function WriteStream (path, options) {
+    if (this instanceof WriteStream)
+      return fs$WriteStream.apply(this, arguments), this
+    else
+      return WriteStream.apply(Object.create(WriteStream.prototype), arguments)
+  }
+
+  function WriteStream$open () {
+    var that = this
+    open(that.path, that.flags, that.mode, function (err, fd) {
+      if (err) {
+        that.destroy()
+        that.emit('error', err)
+      } else {
+        that.fd = fd
+        that.emit('open', fd)
+      }
+    })
+  }
+
+  function createReadStream (path, options) {
+    return new fs.ReadStream(path, options)
+  }
+
+  function createWriteStream (path, options) {
+    return new fs.WriteStream(path, options)
+  }
+
+  var fs$open = fs.open
+  fs.open = open
+  function open (path, flags, mode, cb) {
+    if (typeof mode === 'function')
+      cb = mode, mode = null
+
+    return go$open(path, flags, mode, cb)
+
+    function go$open (path, flags, mode, cb, startTime) {
+      return fs$open(path, flags, mode, function (err, fd) {
+        if (err && (err.code === 'EMFILE' || err.code === 'ENFILE'))
+          enqueue([go$open, [path, flags, mode, cb], err, startTime || Date.now(), Date.now()])
+        else {
+          if (typeof cb === 'function')
+            cb.apply(this, arguments)
+        }
+      })
+    }
+  }
+
+  return fs
+}
+
+function enqueue (elem) {
+  debug('ENQUEUE', elem[0].name, elem[1])
+  fs[gracefulQueue].push(elem)
+  retry()
+}
+
+// keep track of the timeout between retry() calls
+var retryTimer
+
+// reset the startTime and lastTime to now
+// this resets the start of the 60 second overall timeout as well as the
+// delay between attempts so that we'll retry these jobs sooner
+function resetQueue () {
+  var now = Date.now()
+  for (var i = 0; i < fs[gracefulQueue].length; ++i) {
+    // entries that are only a length of 2 are from an older version, don't
+    // bother modifying those since they'll be retried anyway.
+    if (fs[gracefulQueue][i].length > 2) {
+      fs[gracefulQueue][i][3] = now // startTime
+      fs[gracefulQueue][i][4] = now // lastTime
+    }
+  }
+  // call retry to make sure we're actively processing the queue
+  retry()
+}
+
+function retry () {
+  // clear the timer and remove it to help prevent unintended concurrency
+  clearTimeout(retryTimer)
+  retryTimer = undefined
+
+  if (fs[gracefulQueue].length === 0)
+    return
+
+  var elem = fs[gracefulQueue].shift()
+  var fn = elem[0]
+  var args = elem[1]
+  // these items may be unset if they were added by an older graceful-fs
+  var err = elem[2]
+  var startTime = elem[3]
+  var lastTime = elem[4]
+
+  // if we don't have a startTime we have no way of knowing if we've waited
+  // long enough, so go ahead and retry this item now
+  if (startTime === undefined) {
+    debug('RETRY', fn.name, args)
+    fn.apply(null, args)
+  } else if (Date.now() - startTime >= 60000) {
+    // it's been more than 60 seconds total, bail now
+    debug('TIMEOUT', fn.name, args)
+    var cb = args.pop()
+    if (typeof cb === 'function')
+      cb.call(null, err)
+  } else {
+    // the amount of time between the last attempt and right now
+    var sinceAttempt = Date.now() - lastTime
+    // the amount of time between when we first tried, and when we last tried
+    // rounded up to at least 1
+    var sinceStart = Math.max(lastTime - startTime, 1)
+    // backoff. wait longer than the total time we've been retrying, but only
+    // up to a maximum of 100ms
+    var desiredDelay = Math.min(sinceStart * 1.2, 100)
+    // it's been long enough since the last retry, do it again
+    if (sinceAttempt >= desiredDelay) {
+      debug('RETRY', fn.name, args)
+      fn.apply(null, args.concat([startTime]))
+    } else {
+      // if we can't do this job yet, push it to the end of the queue
+      // and let the next iteration check again
+      fs[gracefulQueue].push(elem)
+    }
+  }
+
+  // schedule our next run if one isn't already scheduled
+  if (retryTimer === undefined) {
+    retryTimer = setTimeout(retry, 0)
+  }
+}
+
+
+/***/ }),
+
+/***/ 2270:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+var Stream = (__nccwpck_require__(2203).Stream)
+
+module.exports = legacy
+
+function legacy (fs) {
+  return {
+    ReadStream: ReadStream,
+    WriteStream: WriteStream
+  }
+
+  function ReadStream (path, options) {
+    if (!(this instanceof ReadStream)) return new ReadStream(path, options);
+
+    Stream.call(this);
+
+    var self = this;
+
+    this.path = path;
+    this.fd = null;
+    this.readable = true;
+    this.paused = false;
+
+    this.flags = 'r';
+    this.mode = 438; /*=0666*/
+    this.bufferSize = 64 * 1024;
+
+    options = options || {};
+
+    // Mixin options into this
+    var keys = Object.keys(options);
+    for (var index = 0, length = keys.length; index < length; index++) {
+      var key = keys[index];
+      this[key] = options[key];
+    }
+
+    if (this.encoding) this.setEncoding(this.encoding);
+
+    if (this.start !== undefined) {
+      if ('number' !== typeof this.start) {
+        throw TypeError('start must be a Number');
+      }
+      if (this.end === undefined) {
+        this.end = Infinity;
+      } else if ('number' !== typeof this.end) {
+        throw TypeError('end must be a Number');
+      }
+
+      if (this.start > this.end) {
+        throw new Error('start must be <= end');
+      }
+
+      this.pos = this.start;
+    }
+
+    if (this.fd !== null) {
+      process.nextTick(function() {
+        self._read();
+      });
+      return;
+    }
+
+    fs.open(this.path, this.flags, this.mode, function (err, fd) {
+      if (err) {
+        self.emit('error', err);
+        self.readable = false;
+        return;
+      }
+
+      self.fd = fd;
+      self.emit('open', fd);
+      self._read();
+    })
+  }
+
+  function WriteStream (path, options) {
+    if (!(this instanceof WriteStream)) return new WriteStream(path, options);
+
+    Stream.call(this);
+
+    this.path = path;
+    this.fd = null;
+    this.writable = true;
+
+    this.flags = 'w';
+    this.encoding = 'binary';
+    this.mode = 438; /*=0666*/
+    this.bytesWritten = 0;
+
+    options = options || {};
+
+    // Mixin options into this
+    var keys = Object.keys(options);
+    for (var index = 0, length = keys.length; index < length; index++) {
+      var key = keys[index];
+      this[key] = options[key];
+    }
+
+    if (this.start !== undefined) {
+      if ('number' !== typeof this.start) {
+        throw TypeError('start must be a Number');
+      }
+      if (this.start < 0) {
+        throw new Error('start must be >= zero');
+      }
+
+      this.pos = this.start;
+    }
+
+    this.busy = false;
+    this._queue = [];
+
+    if (this.fd === null) {
+      this._open = fs.open;
+      this._queue.push([this._open, this.path, this.flags, this.mode, undefined]);
+      this.flush();
+    }
+  }
+}
+
+
+/***/ }),
+
+/***/ 3501:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+var constants = __nccwpck_require__(9140)
+
+var origCwd = process.cwd
+var cwd = null
+
+var platform = process.env.GRACEFUL_FS_PLATFORM || process.platform
+
+process.cwd = function() {
+  if (!cwd)
+    cwd = origCwd.call(process)
+  return cwd
+}
+try {
+  process.cwd()
+} catch (er) {}
+
+// This check is needed until node.js 12 is required
+if (typeof process.chdir === 'function') {
+  var chdir = process.chdir
+  process.chdir = function (d) {
+    cwd = null
+    chdir.call(process, d)
+  }
+  if (Object.setPrototypeOf) Object.setPrototypeOf(process.chdir, chdir)
+}
+
+module.exports = patch
+
+function patch (fs) {
+  // (re-)implement some things that are known busted or missing.
+
+  // lchmod, broken prior to 0.6.2
+  // back-port the fix here.
+  if (constants.hasOwnProperty('O_SYMLINK') &&
+      process.version.match(/^v0\.6\.[0-2]|^v0\.5\./)) {
+    patchLchmod(fs)
+  }
+
+  // lutimes implementation, or no-op
+  if (!fs.lutimes) {
+    patchLutimes(fs)
+  }
+
+  // https://github.com/isaacs/node-graceful-fs/issues/4
+  // Chown should not fail on einval or eperm if non-root.
+  // It should not fail on enosys ever, as this just indicates
+  // that a fs doesn't support the intended operation.
+
+  fs.chown = chownFix(fs.chown)
+  fs.fchown = chownFix(fs.fchown)
+  fs.lchown = chownFix(fs.lchown)
+
+  fs.chmod = chmodFix(fs.chmod)
+  fs.fchmod = chmodFix(fs.fchmod)
+  fs.lchmod = chmodFix(fs.lchmod)
+
+  fs.chownSync = chownFixSync(fs.chownSync)
+  fs.fchownSync = chownFixSync(fs.fchownSync)
+  fs.lchownSync = chownFixSync(fs.lchownSync)
+
+  fs.chmodSync = chmodFixSync(fs.chmodSync)
+  fs.fchmodSync = chmodFixSync(fs.fchmodSync)
+  fs.lchmodSync = chmodFixSync(fs.lchmodSync)
+
+  fs.stat = statFix(fs.stat)
+  fs.fstat = statFix(fs.fstat)
+  fs.lstat = statFix(fs.lstat)
+
+  fs.statSync = statFixSync(fs.statSync)
+  fs.fstatSync = statFixSync(fs.fstatSync)
+  fs.lstatSync = statFixSync(fs.lstatSync)
+
+  // if lchmod/lchown do not exist, then make them no-ops
+  if (fs.chmod && !fs.lchmod) {
+    fs.lchmod = function (path, mode, cb) {
+      if (cb) process.nextTick(cb)
+    }
+    fs.lchmodSync = function () {}
+  }
+  if (fs.chown && !fs.lchown) {
+    fs.lchown = function (path, uid, gid, cb) {
+      if (cb) process.nextTick(cb)
+    }
+    fs.lchownSync = function () {}
+  }
+
+  // on Windows, A/V software can lock the directory, causing this
+  // to fail with an EACCES or EPERM if the directory contains newly
+  // created files.  Try again on failure, for up to 60 seconds.
+
+  // Set the timeout this long because some Windows Anti-Virus, such as Parity
+  // bit9, may lock files for up to a minute, causing npm package install
+  // failures. Also, take care to yield the scheduler. Windows scheduling gives
+  // CPU to a busy looping process, which can cause the program causing the lock
+  // contention to be starved of CPU by node, so the contention doesn't resolve.
+  if (platform === "win32") {
+    fs.rename = typeof fs.rename !== 'function' ? fs.rename
+    : (function (fs$rename) {
+      function rename (from, to, cb) {
+        var start = Date.now()
+        var backoff = 0;
+        fs$rename(from, to, function CB (er) {
+          if (er
+              && (er.code === "EACCES" || er.code === "EPERM" || er.code === "EBUSY")
+              && Date.now() - start < 60000) {
+            setTimeout(function() {
+              fs.stat(to, function (stater, st) {
+                if (stater && stater.code === "ENOENT")
+                  fs$rename(from, to, CB);
+                else
+                  cb(er)
+              })
+            }, backoff)
+            if (backoff < 100)
+              backoff += 10;
+            return;
+          }
+          if (cb) cb(er)
+        })
+      }
+      if (Object.setPrototypeOf) Object.setPrototypeOf(rename, fs$rename)
+      return rename
+    })(fs.rename)
+  }
+
+  // if read() returns EAGAIN, then just try it again.
+  fs.read = typeof fs.read !== 'function' ? fs.read
+  : (function (fs$read) {
+    function read (fd, buffer, offset, length, position, callback_) {
+      var callback
+      if (callback_ && typeof callback_ === 'function') {
+        var eagCounter = 0
+        callback = function (er, _, __) {
+          if (er && er.code === 'EAGAIN' && eagCounter < 10) {
+            eagCounter ++
+            return fs$read.call(fs, fd, buffer, offset, length, position, callback)
+          }
+          callback_.apply(this, arguments)
+        }
+      }
+      return fs$read.call(fs, fd, buffer, offset, length, position, callback)
+    }
+
+    // This ensures `util.promisify` works as it does for native `fs.read`.
+    if (Object.setPrototypeOf) Object.setPrototypeOf(read, fs$read)
+    return read
+  })(fs.read)
+
+  fs.readSync = typeof fs.readSync !== 'function' ? fs.readSync
+  : (function (fs$readSync) { return function (fd, buffer, offset, length, position) {
+    var eagCounter = 0
+    while (true) {
+      try {
+        return fs$readSync.call(fs, fd, buffer, offset, length, position)
+      } catch (er) {
+        if (er.code === 'EAGAIN' && eagCounter < 10) {
+          eagCounter ++
+          continue
+        }
+        throw er
+      }
+    }
+  }})(fs.readSync)
+
+  function patchLchmod (fs) {
+    fs.lchmod = function (path, mode, callback) {
+      fs.open( path
+             , constants.O_WRONLY | constants.O_SYMLINK
+             , mode
+             , function (err, fd) {
+        if (err) {
+          if (callback) callback(err)
+          return
+        }
+        // prefer to return the chmod error, if one occurs,
+        // but still try to close, and report closing errors if they occur.
+        fs.fchmod(fd, mode, function (err) {
+          fs.close(fd, function(err2) {
+            if (callback) callback(err || err2)
+          })
+        })
+      })
+    }
+
+    fs.lchmodSync = function (path, mode) {
+      var fd = fs.openSync(path, constants.O_WRONLY | constants.O_SYMLINK, mode)
+
+      // prefer to return the chmod error, if one occurs,
+      // but still try to close, and report closing errors if they occur.
+      var threw = true
+      var ret
+      try {
+        ret = fs.fchmodSync(fd, mode)
+        threw = false
+      } finally {
+        if (threw) {
+          try {
+            fs.closeSync(fd)
+          } catch (er) {}
+        } else {
+          fs.closeSync(fd)
+        }
+      }
+      return ret
+    }
+  }
+
+  function patchLutimes (fs) {
+    if (constants.hasOwnProperty("O_SYMLINK") && fs.futimes) {
+      fs.lutimes = function (path, at, mt, cb) {
+        fs.open(path, constants.O_SYMLINK, function (er, fd) {
+          if (er) {
+            if (cb) cb(er)
+            return
+          }
+          fs.futimes(fd, at, mt, function (er) {
+            fs.close(fd, function (er2) {
+              if (cb) cb(er || er2)
+            })
+          })
+        })
+      }
+
+      fs.lutimesSync = function (path, at, mt) {
+        var fd = fs.openSync(path, constants.O_SYMLINK)
+        var ret
+        var threw = true
+        try {
+          ret = fs.futimesSync(fd, at, mt)
+          threw = false
+        } finally {
+          if (threw) {
+            try {
+              fs.closeSync(fd)
+            } catch (er) {}
+          } else {
+            fs.closeSync(fd)
+          }
+        }
+        return ret
+      }
+
+    } else if (fs.futimes) {
+      fs.lutimes = function (_a, _b, _c, cb) { if (cb) process.nextTick(cb) }
+      fs.lutimesSync = function () {}
+    }
+  }
+
+  function chmodFix (orig) {
+    if (!orig) return orig
+    return function (target, mode, cb) {
+      return orig.call(fs, target, mode, function (er) {
+        if (chownErOk(er)) er = null
+        if (cb) cb.apply(this, arguments)
+      })
+    }
+  }
+
+  function chmodFixSync (orig) {
+    if (!orig) return orig
+    return function (target, mode) {
+      try {
+        return orig.call(fs, target, mode)
+      } catch (er) {
+        if (!chownErOk(er)) throw er
+      }
+    }
+  }
+
+
+  function chownFix (orig) {
+    if (!orig) return orig
+    return function (target, uid, gid, cb) {
+      return orig.call(fs, target, uid, gid, function (er) {
+        if (chownErOk(er)) er = null
+        if (cb) cb.apply(this, arguments)
+      })
+    }
+  }
+
+  function chownFixSync (orig) {
+    if (!orig) return orig
+    return function (target, uid, gid) {
+      try {
+        return orig.call(fs, target, uid, gid)
+      } catch (er) {
+        if (!chownErOk(er)) throw er
+      }
+    }
+  }
+
+  function statFix (orig) {
+    if (!orig) return orig
+    // Older versions of Node erroneously returned signed integers for
+    // uid + gid.
+    return function (target, options, cb) {
+      if (typeof options === 'function') {
+        cb = options
+        options = null
+      }
+      function callback (er, stats) {
+        if (stats) {
+          if (stats.uid < 0) stats.uid += 0x100000000
+          if (stats.gid < 0) stats.gid += 0x100000000
+        }
+        if (cb) cb.apply(this, arguments)
+      }
+      return options ? orig.call(fs, target, options, callback)
+        : orig.call(fs, target, callback)
+    }
+  }
+
+  function statFixSync (orig) {
+    if (!orig) return orig
+    // Older versions of Node erroneously returned signed integers for
+    // uid + gid.
+    return function (target, options) {
+      var stats = options ? orig.call(fs, target, options)
+        : orig.call(fs, target)
+      if (stats) {
+        if (stats.uid < 0) stats.uid += 0x100000000
+        if (stats.gid < 0) stats.gid += 0x100000000
+      }
+      return stats;
+    }
+  }
+
+  // ENOSYS means that the fs doesn't support the op. Just ignore
+  // that, because it doesn't matter.
+  //
+  // if there's no getuid, or if getuid() is something other
+  // than 0, and the error is EINVAL or EPERM, then just ignore
+  // it.
+  //
+  // This specific case is a silent failure in cp, install, tar,
+  // and most other unix tools that manage permissions.
+  //
+  // When running as root, or if other types of errors are
+  // encountered, then it's strict.
+  function chownErOk (er) {
+    if (!er)
+      return true
+
+    if (er.code === "ENOSYS")
+      return true
+
+    var nonroot = !process.getuid || process.getuid() !== 0
+    if (nonroot) {
+      if (er.code === "EINVAL" || er.code === "EPERM")
+        return true
+    }
+
+    return false
+  }
+}
 
 
 /***/ }),
@@ -16974,6 +37547,147 @@ module.exports = new Type('tag:yaml.org,2002:timestamp', {
 
 /***/ }),
 
+/***/ 2064:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+var _fs
+try {
+  _fs = __nccwpck_require__(5744)
+} catch (_) {
+  _fs = __nccwpck_require__(9896)
+}
+
+function readFile (file, options, callback) {
+  if (callback == null) {
+    callback = options
+    options = {}
+  }
+
+  if (typeof options === 'string') {
+    options = {encoding: options}
+  }
+
+  options = options || {}
+  var fs = options.fs || _fs
+
+  var shouldThrow = true
+  if ('throws' in options) {
+    shouldThrow = options.throws
+  }
+
+  fs.readFile(file, options, function (err, data) {
+    if (err) return callback(err)
+
+    data = stripBom(data)
+
+    var obj
+    try {
+      obj = JSON.parse(data, options ? options.reviver : null)
+    } catch (err2) {
+      if (shouldThrow) {
+        err2.message = file + ': ' + err2.message
+        return callback(err2)
+      } else {
+        return callback(null, null)
+      }
+    }
+
+    callback(null, obj)
+  })
+}
+
+function readFileSync (file, options) {
+  options = options || {}
+  if (typeof options === 'string') {
+    options = {encoding: options}
+  }
+
+  var fs = options.fs || _fs
+
+  var shouldThrow = true
+  if ('throws' in options) {
+    shouldThrow = options.throws
+  }
+
+  try {
+    var content = fs.readFileSync(file, options)
+    content = stripBom(content)
+    return JSON.parse(content, options.reviver)
+  } catch (err) {
+    if (shouldThrow) {
+      err.message = file + ': ' + err.message
+      throw err
+    } else {
+      return null
+    }
+  }
+}
+
+function stringify (obj, options) {
+  var spaces
+  var EOL = '\n'
+  if (typeof options === 'object' && options !== null) {
+    if (options.spaces) {
+      spaces = options.spaces
+    }
+    if (options.EOL) {
+      EOL = options.EOL
+    }
+  }
+
+  var str = JSON.stringify(obj, options ? options.replacer : null, spaces)
+
+  return str.replace(/\n/g, EOL) + EOL
+}
+
+function writeFile (file, obj, options, callback) {
+  if (callback == null) {
+    callback = options
+    options = {}
+  }
+  options = options || {}
+  var fs = options.fs || _fs
+
+  var str = ''
+  try {
+    str = stringify(obj, options)
+  } catch (err) {
+    // Need to return whether a callback was passed or not
+    if (callback) callback(err, null)
+    return
+  }
+
+  fs.writeFile(file, str, options, callback)
+}
+
+function writeFileSync (file, obj, options) {
+  options = options || {}
+  var fs = options.fs || _fs
+
+  var str = stringify(obj, options)
+  // not sure if fs.writeFileSync returns anything, but just in case
+  return fs.writeFileSync(file, str, options)
+}
+
+function stripBom (content) {
+  // we do this because JSON.parse would convert it to a utf8 string if encoding wasn't specified
+  if (Buffer.isBuffer(content)) content = content.toString('utf8')
+  content = content.replace(/^\uFEFF/, '')
+  return content
+}
+
+var jsonfile = {
+  readFile: readFile,
+  readFileSync: readFileSync,
+  writeFile: writeFile,
+  writeFileSync: writeFileSync
+}
+
+module.exports = jsonfile
+
+
+/***/ }),
+
 /***/ 9703:
 /***/ ((module) => {
 
@@ -17096,6 +37810,3067 @@ Kuler.prototype.style = function style(color) {
 // Expose the actual interface.
 //
 module.exports = Kuler;
+
+
+/***/ }),
+
+/***/ 2838:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/* eslint max-classes-per-file: ["error", 2] */
+/* eslint no-underscore-dangle: ["error", { "allow": ["_getLocationKeys"] }] */
+
+const flatted = __nccwpck_require__(8686);
+const levels = __nccwpck_require__(1630);
+
+class SerDe {
+  constructor() {
+    const deserialise = {
+      __LOG4JS_undefined__: undefined,
+      __LOG4JS_NaN__: Number('abc'),
+      __LOG4JS_Infinity__: 1 / 0,
+      '__LOG4JS_-Infinity__': -1 / 0,
+    };
+    this.deMap = deserialise;
+    this.serMap = {};
+    Object.keys(this.deMap).forEach((key) => {
+      const value = this.deMap[key];
+      this.serMap[value] = key;
+    });
+  }
+
+  canSerialise(key) {
+    if (typeof key === 'string') return false;
+    return key in this.serMap;
+  }
+
+  serialise(key) {
+    if (this.canSerialise(key)) return this.serMap[key];
+    return key;
+  }
+
+  canDeserialise(key) {
+    return key in this.deMap;
+  }
+
+  deserialise(key) {
+    if (this.canDeserialise(key)) return this.deMap[key];
+    return key;
+  }
+}
+const serde = new SerDe();
+
+/**
+ * @name LoggingEvent
+ * @namespace Log4js
+ */
+class LoggingEvent {
+  /**
+   * Models a logging event.
+   * @constructor
+   * @param {string} categoryName name of category
+   * @param {Log4js.Level} level level of message
+   * @param {Array} data objects to log
+   * @param {Error} [error]
+   * @author Seth Chisamore
+   */
+  constructor(categoryName, level, data, context, location, error) {
+    this.startTime = new Date();
+    this.categoryName = categoryName;
+    this.data = data;
+    this.level = level;
+    this.context = Object.assign({}, context); // eslint-disable-line prefer-object-spread
+    this.pid = process.pid;
+    this.error = error;
+
+    if (typeof location !== 'undefined') {
+      if (!location || typeof location !== 'object' || Array.isArray(location))
+        throw new TypeError(
+          'Invalid location type passed to LoggingEvent constructor'
+        );
+
+      this.constructor._getLocationKeys().forEach((key) => {
+        if (typeof location[key] !== 'undefined') this[key] = location[key];
+      });
+    }
+  }
+
+  /** @private */
+  static _getLocationKeys() {
+    return [
+      'fileName',
+      'lineNumber',
+      'columnNumber',
+      'callStack',
+      'className',
+      'functionName',
+      'functionAlias',
+      'callerName',
+    ];
+  }
+
+  serialise() {
+    return flatted.stringify(this, (key, value) => {
+      // JSON.stringify(new Error('test')) returns {}, which is not really useful for us.
+      // The following allows us to serialize errors (semi) correctly.
+      if (value instanceof Error) {
+        // eslint-disable-next-line prefer-object-spread
+        value = Object.assign(
+          { message: value.message, stack: value.stack },
+          value
+        );
+      }
+      // JSON.stringify({a: Number('abc'), b: 1/0, c: -1/0}) returns {a: null, b: null, c: null}.
+      // The following allows us to serialize to NaN, Infinity and -Infinity correctly.
+      // JSON.stringify([undefined]) returns [null].
+      // The following allows us to serialize to undefined correctly.
+      return serde.serialise(value);
+    });
+  }
+
+  static deserialise(serialised) {
+    let event;
+    try {
+      const rehydratedEvent = flatted.parse(serialised, (key, value) => {
+        if (value && value.message && value.stack) {
+          const fakeError = new Error(value);
+          Object.keys(value).forEach((k) => {
+            fakeError[k] = value[k];
+          });
+          value = fakeError;
+        }
+        return serde.deserialise(value);
+      });
+      this._getLocationKeys().forEach((key) => {
+        if (typeof rehydratedEvent[key] !== 'undefined') {
+          if (!rehydratedEvent.location) rehydratedEvent.location = {};
+          rehydratedEvent.location[key] = rehydratedEvent[key];
+        }
+      });
+      event = new LoggingEvent(
+        rehydratedEvent.categoryName,
+        levels.getLevel(rehydratedEvent.level.levelStr),
+        rehydratedEvent.data,
+        rehydratedEvent.context,
+        rehydratedEvent.location,
+        rehydratedEvent.error
+      );
+      event.startTime = new Date(rehydratedEvent.startTime);
+      event.pid = rehydratedEvent.pid;
+      if (rehydratedEvent.cluster) {
+        event.cluster = rehydratedEvent.cluster;
+      }
+    } catch (e) {
+      event = new LoggingEvent('log4js', levels.ERROR, [
+        'Unable to parse log:',
+        serialised,
+        'because: ',
+        e,
+      ]);
+    }
+
+    return event;
+  }
+}
+
+module.exports = LoggingEvent;
+
+
+/***/ }),
+
+/***/ 3556:
+/***/ ((module) => {
+
+function maxFileSizeUnitTransform(maxLogSize) {
+  if (typeof maxLogSize === 'number' && Number.isInteger(maxLogSize)) {
+    return maxLogSize;
+  }
+
+  const units = {
+    K: 1024,
+    M: 1024 * 1024,
+    G: 1024 * 1024 * 1024,
+  };
+  const validUnit = Object.keys(units);
+  const unit = maxLogSize.slice(-1).toLocaleUpperCase();
+  const value = maxLogSize.slice(0, -1).trim();
+
+  if (validUnit.indexOf(unit) < 0 || !Number.isInteger(Number(value))) {
+    throw Error(`maxLogSize: "${maxLogSize}" is invalid`);
+  } else {
+    return value * units[unit];
+  }
+}
+
+function adapter(configAdapter, config) {
+  const newConfig = Object.assign({}, config); // eslint-disable-line prefer-object-spread
+  Object.keys(configAdapter).forEach((key) => {
+    if (newConfig[key]) {
+      newConfig[key] = configAdapter[key](config[key]);
+    }
+  });
+  return newConfig;
+}
+
+function fileAppenderAdapter(config) {
+  const configAdapter = {
+    maxLogSize: maxFileSizeUnitTransform,
+  };
+  return adapter(configAdapter, config);
+}
+
+const adapters = {
+  dateFile: fileAppenderAdapter,
+  file: fileAppenderAdapter,
+  fileSync: fileAppenderAdapter,
+};
+
+module.exports.modifyConfig = (config) =>
+  adapters[config.type] ? adapters[config.type](config) : config;
+
+
+/***/ }),
+
+/***/ 8494:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)('log4js:categoryFilter');
+
+function categoryFilter(excludes, appender) {
+  if (typeof excludes === 'string') excludes = [excludes];
+  return (logEvent) => {
+    debug(`Checking ${logEvent.categoryName} against ${excludes}`);
+    if (excludes.indexOf(logEvent.categoryName) === -1) {
+      debug('Not excluded, sending to appender');
+      appender(logEvent);
+    }
+  };
+}
+
+function configure(config, layouts, findAppender) {
+  const appender = findAppender(config.appender);
+  return categoryFilter(config.exclude, appender);
+}
+
+module.exports.configure = configure;
+
+
+/***/ }),
+
+/***/ 6571:
+/***/ ((module) => {
+
+// eslint-disable-next-line no-console
+const consoleLog = console.log.bind(console);
+
+function consoleAppender(layout, timezoneOffset) {
+  return (loggingEvent) => {
+    consoleLog(layout(loggingEvent, timezoneOffset));
+  };
+}
+
+function configure(config, layouts) {
+  let layout = layouts.colouredLayout;
+  if (config.layout) {
+    layout = layouts.layout(config.layout.type, config.layout);
+  }
+  return consoleAppender(layout, config.timezoneOffset);
+}
+
+module.exports.configure = configure;
+
+
+/***/ }),
+
+/***/ 6614:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const streams = __nccwpck_require__(248);
+const os = __nccwpck_require__(857);
+
+const eol = os.EOL;
+
+function openTheStream(filename, pattern, options) {
+  const stream = new streams.DateRollingFileStream(filename, pattern, options);
+  stream.on('error', (err) => {
+    // eslint-disable-next-line no-console
+    console.error(
+      'log4js.dateFileAppender - Writing to file %s, error happened ',
+      filename,
+      err
+    );
+  });
+  stream.on('drain', () => {
+    process.emit('log4js:pause', false);
+  });
+  return stream;
+}
+
+/**
+ * File appender that rolls files according to a date pattern.
+ * @param filename base filename.
+ * @param pattern the format that will be added to the end of filename when rolling,
+ *          also used to check when to roll files - defaults to '.yyyy-MM-dd'
+ * @param layout layout function for log messages - defaults to basicLayout
+ * @param options - options to be passed to the underlying stream
+ * @param timezoneOffset - optional timezone offset in minutes (default system local)
+ */
+function appender(filename, pattern, layout, options, timezoneOffset) {
+  // the options for file appender use maxLogSize, but the docs say any file appender
+  // options should work for dateFile as well.
+  options.maxSize = options.maxLogSize;
+
+  const writer = openTheStream(filename, pattern, options);
+
+  const app = function (logEvent) {
+    if (!writer.writable) {
+      return;
+    }
+    if (!writer.write(layout(logEvent, timezoneOffset) + eol, 'utf8')) {
+      process.emit('log4js:pause', true);
+    }
+  };
+
+  app.shutdown = function (complete) {
+    writer.end('', 'utf-8', complete);
+  };
+
+  return app;
+}
+
+function configure(config, layouts) {
+  let layout = layouts.basicLayout;
+  if (config.layout) {
+    layout = layouts.layout(config.layout.type, config.layout);
+  }
+
+  if (!config.alwaysIncludePattern) {
+    config.alwaysIncludePattern = false;
+  }
+
+  // security default (instead of relying on streamroller default)
+  config.mode = config.mode || 0o600;
+
+  return appender(
+    config.filename,
+    config.pattern,
+    layout,
+    config,
+    config.timezoneOffset
+  );
+}
+
+module.exports.configure = configure;
+
+
+/***/ }),
+
+/***/ 7602:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)('log4js:file');
+const path = __nccwpck_require__(6928);
+const streams = __nccwpck_require__(248);
+const os = __nccwpck_require__(857);
+
+const eol = os.EOL;
+
+let mainSighupListenerStarted = false;
+const sighupListeners = new Set();
+function mainSighupHandler() {
+  sighupListeners.forEach((app) => {
+    app.sighupHandler();
+  });
+}
+
+/**
+ * File Appender writing the logs to a text file. Supports rolling of logs by size.
+ *
+ * @param file the file log messages will be written to
+ * @param layout a function that takes a logEvent and returns a string
+ *   (defaults to basicLayout).
+ * @param logSize - the maximum size (in bytes) for a log file,
+ *   if not provided then logs won't be rotated.
+ * @param numBackups - the number of log files to keep after logSize
+ *   has been reached (default 5)
+ * @param options - options to be passed to the underlying stream
+ * @param timezoneOffset - optional timezone offset in minutes (default system local)
+ */
+function fileAppender(
+  file,
+  layout,
+  logSize,
+  numBackups,
+  options,
+  timezoneOffset
+) {
+  if (typeof file !== 'string' || file.length === 0) {
+    throw new Error(`Invalid filename: ${file}`);
+  } else if (file.endsWith(path.sep)) {
+    throw new Error(`Filename is a directory: ${file}`);
+  } else if (file.indexOf(`~${path.sep}`) === 0) {
+    // handle ~ expansion: https://github.com/nodejs/node/issues/684
+    // exclude ~ and ~filename as these can be valid files
+    file = file.replace('~', os.homedir());
+  }
+  file = path.normalize(file);
+  numBackups = !numBackups && numBackups !== 0 ? 5 : numBackups;
+
+  debug(
+    'Creating file appender (',
+    file,
+    ', ',
+    logSize,
+    ', ',
+    numBackups,
+    ', ',
+    options,
+    ', ',
+    timezoneOffset,
+    ')'
+  );
+
+  function openTheStream(filePath, fileSize, numFiles, opt) {
+    const stream = new streams.RollingFileStream(
+      filePath,
+      fileSize,
+      numFiles,
+      opt
+    );
+    stream.on('error', (err) => {
+      // eslint-disable-next-line no-console
+      console.error(
+        'log4js.fileAppender - Writing to file %s, error happened ',
+        filePath,
+        err
+      );
+    });
+    stream.on('drain', () => {
+      process.emit('log4js:pause', false);
+    });
+    return stream;
+  }
+
+  let writer = openTheStream(file, logSize, numBackups, options);
+
+  const app = function (loggingEvent) {
+    if (!writer.writable) {
+      return;
+    }
+    if (options.removeColor === true) {
+      // eslint-disable-next-line no-control-regex
+      const regex = /\x1b[[0-9;]*m/g;
+      loggingEvent.data = loggingEvent.data.map((d) => {
+        if (typeof d === 'string') return d.replace(regex, '');
+        return d;
+      });
+    }
+    if (!writer.write(layout(loggingEvent, timezoneOffset) + eol, 'utf8')) {
+      process.emit('log4js:pause', true);
+    }
+  };
+
+  app.reopen = function () {
+    writer.end(() => {
+      writer = openTheStream(file, logSize, numBackups, options);
+    });
+  };
+
+  app.sighupHandler = function () {
+    debug('SIGHUP handler called.');
+    app.reopen();
+  };
+
+  app.shutdown = function (complete) {
+    sighupListeners.delete(app);
+    if (sighupListeners.size === 0 && mainSighupListenerStarted) {
+      process.removeListener('SIGHUP', mainSighupHandler);
+      mainSighupListenerStarted = false;
+    }
+    writer.end('', 'utf-8', complete);
+  };
+
+  // On SIGHUP, close and reopen all files. This allows this appender to work with
+  // logrotate. Note that if you are using logrotate, you should not set
+  // `logSize`.
+  sighupListeners.add(app);
+  if (!mainSighupListenerStarted) {
+    process.on('SIGHUP', mainSighupHandler);
+    mainSighupListenerStarted = true;
+  }
+
+  return app;
+}
+
+function configure(config, layouts) {
+  let layout = layouts.basicLayout;
+  if (config.layout) {
+    layout = layouts.layout(config.layout.type, config.layout);
+  }
+
+  // security default (instead of relying on streamroller default)
+  config.mode = config.mode || 0o600;
+
+  return fileAppender(
+    config.filename,
+    layout,
+    config.maxLogSize,
+    config.backups,
+    config,
+    config.timezoneOffset
+  );
+}
+
+module.exports.configure = configure;
+
+
+/***/ }),
+
+/***/ 7673:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)('log4js:fileSync');
+const path = __nccwpck_require__(6928);
+const fs = __nccwpck_require__(9896);
+const os = __nccwpck_require__(857);
+
+const eol = os.EOL;
+
+function touchFile(file, options) {
+  // attempt to create the directory
+  const mkdir = (dir) => {
+    try {
+      return fs.mkdirSync(dir, { recursive: true });
+    } catch (e) {
+      // backward-compatible fs.mkdirSync for nodejs pre-10.12.0 (without recursive option)
+      // recursive creation of parent first
+      if (e.code === 'ENOENT') {
+        mkdir(path.dirname(dir));
+        return mkdir(dir);
+      }
+
+      // throw error for all except EEXIST and EROFS (read-only filesystem)
+      if (e.code !== 'EEXIST' && e.code !== 'EROFS') {
+        throw e;
+      }
+
+      // EEXIST: throw if file and not directory
+      // EROFS : throw if directory not found
+      else {
+        try {
+          if (fs.statSync(dir).isDirectory()) {
+            return dir;
+          }
+          throw e;
+        } catch (err) {
+          throw e;
+        }
+      }
+    }
+  };
+  mkdir(path.dirname(file));
+
+  // try to throw EISDIR, EROFS, EACCES
+  fs.appendFileSync(file, '', { mode: options.mode, flag: options.flags });
+}
+
+class RollingFileSync {
+  constructor(filename, maxLogSize, backups, options) {
+    debug('In RollingFileStream');
+
+    if (maxLogSize < 0) {
+      throw new Error(`maxLogSize (${maxLogSize}) should be > 0`);
+    }
+
+    this.filename = filename;
+    this.size = maxLogSize;
+    this.backups = backups;
+    this.options = options;
+    this.currentSize = 0;
+
+    function currentFileSize(file) {
+      let fileSize = 0;
+
+      try {
+        fileSize = fs.statSync(file).size;
+      } catch (e) {
+        // file does not exist
+        touchFile(file, options);
+      }
+      return fileSize;
+    }
+
+    this.currentSize = currentFileSize(this.filename);
+  }
+
+  shouldRoll() {
+    debug(
+      'should roll with current size %d, and max size %d',
+      this.currentSize,
+      this.size
+    );
+    return this.currentSize >= this.size;
+  }
+
+  roll(filename) {
+    const that = this;
+    const nameMatcher = new RegExp(`^${path.basename(filename)}`);
+
+    function justTheseFiles(item) {
+      return nameMatcher.test(item);
+    }
+
+    function index(filename_) {
+      return (
+        parseInt(filename_.slice(`${path.basename(filename)}.`.length), 10) || 0
+      );
+    }
+
+    function byIndex(a, b) {
+      return index(a) - index(b);
+    }
+
+    function increaseFileIndex(fileToRename) {
+      const idx = index(fileToRename);
+      debug(`Index of ${fileToRename} is ${idx}`);
+      if (that.backups === 0) {
+        fs.truncateSync(filename, 0);
+      } else if (idx < that.backups) {
+        // on windows, you can get a EEXIST error if you rename a file to an existing file
+        // so, we'll try to delete the file we're renaming to first
+        try {
+          fs.unlinkSync(`${filename}.${idx + 1}`);
+        } catch (e) {
+          // ignore err: if we could not delete, it's most likely that it doesn't exist
+        }
+
+        debug(`Renaming ${fileToRename} -> ${filename}.${idx + 1}`);
+        fs.renameSync(
+          path.join(path.dirname(filename), fileToRename),
+          `${filename}.${idx + 1}`
+        );
+      }
+    }
+
+    function renameTheFiles() {
+      // roll the backups (rename file.n to file.n+1, where n <= numBackups)
+      debug('Renaming the old files');
+
+      const files = fs.readdirSync(path.dirname(filename));
+      files
+        .filter(justTheseFiles)
+        .sort(byIndex)
+        .reverse()
+        .forEach(increaseFileIndex);
+    }
+
+    debug('Rolling, rolling, rolling');
+    renameTheFiles();
+  }
+
+  // eslint-disable-next-line no-unused-vars
+  write(chunk, encoding) {
+    const that = this;
+
+    function writeTheChunk() {
+      debug('writing the chunk to the file');
+      that.currentSize += chunk.length;
+      fs.appendFileSync(that.filename, chunk);
+    }
+
+    debug('in write');
+
+    if (this.shouldRoll()) {
+      this.currentSize = 0;
+      this.roll(this.filename);
+    }
+
+    writeTheChunk();
+  }
+}
+
+/**
+ * File Appender writing the logs to a text file. Supports rolling of logs by size.
+ *
+ * @param file the file log messages will be written to
+ * @param layout a function that takes a logevent and returns a string
+ *   (defaults to basicLayout).
+ * @param logSize - the maximum size (in bytes) for a log file,
+ *   if not provided then logs won't be rotated.
+ * @param numBackups - the number of log files to keep after logSize
+ *   has been reached (default 5)
+ * @param options - options to be passed to the underlying stream
+ * @param timezoneOffset - optional timezone offset in minutes (default system local)
+ */
+function fileAppender(
+  file,
+  layout,
+  logSize,
+  numBackups,
+  options,
+  timezoneOffset
+) {
+  if (typeof file !== 'string' || file.length === 0) {
+    throw new Error(`Invalid filename: ${file}`);
+  } else if (file.endsWith(path.sep)) {
+    throw new Error(`Filename is a directory: ${file}`);
+  } else if (file.indexOf(`~${path.sep}`) === 0) {
+    // handle ~ expansion: https://github.com/nodejs/node/issues/684
+    // exclude ~ and ~filename as these can be valid files
+    file = file.replace('~', os.homedir());
+  }
+  file = path.normalize(file);
+  numBackups = !numBackups && numBackups !== 0 ? 5 : numBackups;
+
+  debug(
+    'Creating fileSync appender (',
+    file,
+    ', ',
+    logSize,
+    ', ',
+    numBackups,
+    ', ',
+    options,
+    ', ',
+    timezoneOffset,
+    ')'
+  );
+
+  function openTheStream(filePath, fileSize, numFiles) {
+    let stream;
+
+    if (fileSize) {
+      stream = new RollingFileSync(filePath, fileSize, numFiles, options);
+    } else {
+      stream = ((f) => {
+        // touch the file to apply flags (like w to truncate the file)
+        touchFile(f, options);
+
+        return {
+          write(data) {
+            fs.appendFileSync(f, data);
+          },
+        };
+      })(filePath);
+    }
+
+    return stream;
+  }
+
+  const logFile = openTheStream(file, logSize, numBackups);
+
+  return (loggingEvent) => {
+    logFile.write(layout(loggingEvent, timezoneOffset) + eol);
+  };
+}
+
+function configure(config, layouts) {
+  let layout = layouts.basicLayout;
+  if (config.layout) {
+    layout = layouts.layout(config.layout.type, config.layout);
+  }
+
+  const options = {
+    flags: config.flags || 'a',
+    encoding: config.encoding || 'utf8',
+    mode: config.mode || 0o600,
+  };
+
+  return fileAppender(
+    config.filename,
+    layout,
+    config.maxLogSize,
+    config.backups,
+    options,
+    config.timezoneOffset
+  );
+}
+
+module.exports.configure = configure;
+
+
+/***/ }),
+
+/***/ 3718:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const path = __nccwpck_require__(6928);
+const debug = __nccwpck_require__(2830)('log4js:appenders');
+const configuration = __nccwpck_require__(8507);
+const clustering = __nccwpck_require__(455);
+const levels = __nccwpck_require__(1630);
+const layouts = __nccwpck_require__(6794);
+const adapters = __nccwpck_require__(3556);
+
+// pre-load the core appenders so that webpack can find them
+const coreAppenders = new Map();
+coreAppenders.set('console', __nccwpck_require__(6571));
+coreAppenders.set('stdout', __nccwpck_require__(9303));
+coreAppenders.set('stderr', __nccwpck_require__(8680));
+coreAppenders.set('logLevelFilter', __nccwpck_require__(2722));
+coreAppenders.set('categoryFilter', __nccwpck_require__(8494));
+coreAppenders.set('noLogFilter', __nccwpck_require__(8799));
+coreAppenders.set('file', __nccwpck_require__(7602));
+coreAppenders.set('dateFile', __nccwpck_require__(6614));
+coreAppenders.set('fileSync', __nccwpck_require__(7673));
+coreAppenders.set('tcp', __nccwpck_require__(1477));
+
+const appenders = new Map();
+
+const tryLoading = (modulePath, config) => {
+  let resolvedPath;
+  try {
+    const modulePathCJS = `${modulePath}.cjs`;
+    resolvedPath = require.resolve(modulePathCJS);
+    debug('Loading module from ', modulePathCJS);
+  } catch (e) {
+    resolvedPath = modulePath;
+    debug('Loading module from ', modulePath);
+  }
+  try {
+    // eslint-disable-next-line global-require, import/no-dynamic-require
+    return require(resolvedPath);
+  } catch (e) {
+    // if the module was found, and we still got an error, then raise it
+    configuration.throwExceptionIf(
+      config,
+      e.code !== 'MODULE_NOT_FOUND',
+      `appender "${modulePath}" could not be loaded (error was: ${e})`
+    );
+    return undefined;
+  }
+};
+
+const loadAppenderModule = (type, config) =>
+  coreAppenders.get(type) ||
+  tryLoading(`./${type}`, config) ||
+  tryLoading(type, config) ||
+  (require.main &&
+    require.main.filename &&
+    tryLoading(path.join(path.dirname(require.main.filename), type), config)) ||
+  tryLoading(path.join(process.cwd(), type), config);
+
+const appendersLoading = new Set();
+
+const getAppender = (name, config) => {
+  if (appenders.has(name)) return appenders.get(name);
+  if (!config.appenders[name]) return false;
+  if (appendersLoading.has(name))
+    throw new Error(`Dependency loop detected for appender ${name}.`);
+  appendersLoading.add(name);
+
+  debug(`Creating appender ${name}`);
+  // eslint-disable-next-line no-use-before-define
+  const appender = createAppender(name, config);
+  appendersLoading.delete(name);
+  appenders.set(name, appender);
+  return appender;
+};
+
+const createAppender = (name, config) => {
+  const appenderConfig = config.appenders[name];
+  const appenderModule = appenderConfig.type.configure
+    ? appenderConfig.type
+    : loadAppenderModule(appenderConfig.type, config);
+  configuration.throwExceptionIf(
+    config,
+    configuration.not(appenderModule),
+    `appender "${name}" is not valid (type "${appenderConfig.type}" could not be found)`
+  );
+  if (appenderModule.appender) {
+    process.emitWarning(
+      `Appender ${appenderConfig.type} exports an appender function.`,
+      'DeprecationWarning',
+      'log4js-node-DEP0001'
+    );
+    debug(
+      '[log4js-node-DEP0001]',
+      `DEPRECATION: Appender ${appenderConfig.type} exports an appender function.`
+    );
+  }
+  if (appenderModule.shutdown) {
+    process.emitWarning(
+      `Appender ${appenderConfig.type} exports a shutdown function.`,
+      'DeprecationWarning',
+      'log4js-node-DEP0002'
+    );
+    debug(
+      '[log4js-node-DEP0002]',
+      `DEPRECATION: Appender ${appenderConfig.type} exports a shutdown function.`
+    );
+  }
+
+  debug(`${name}: clustering.isMaster ? ${clustering.isMaster()}`);
+  debug(
+    // eslint-disable-next-line global-require
+    `${name}: appenderModule is ${(__nccwpck_require__(9023).inspect)(appenderModule)}`
+  );
+  return clustering.onlyOnMaster(
+    () => {
+      debug(
+        `calling appenderModule.configure for ${name} / ${appenderConfig.type}`
+      );
+      return appenderModule.configure(
+        adapters.modifyConfig(appenderConfig),
+        layouts,
+        (appender) => getAppender(appender, config),
+        levels
+      );
+    },
+    /* istanbul ignore next: fn never gets called by non-master yet needed to pass config validation */ () => {}
+  );
+};
+
+const setup = (config) => {
+  appenders.clear();
+  appendersLoading.clear();
+  if (!config) {
+    return;
+  }
+
+  const usedAppenders = [];
+  Object.values(config.categories).forEach((category) => {
+    usedAppenders.push(...category.appenders);
+  });
+  Object.keys(config.appenders).forEach((name) => {
+    // dodgy hard-coding of special case for tcp-server and multiprocess which may not have
+    // any categories associated with it, but needs to be started up anyway
+    if (
+      usedAppenders.includes(name) ||
+      config.appenders[name].type === 'tcp-server' ||
+      config.appenders[name].type === 'multiprocess'
+    ) {
+      getAppender(name, config);
+    }
+  });
+};
+
+const init = () => {
+  setup();
+};
+init();
+
+configuration.addListener((config) => {
+  configuration.throwExceptionIf(
+    config,
+    configuration.not(configuration.anObject(config.appenders)),
+    'must have a property "appenders" of type object.'
+  );
+  const appenderNames = Object.keys(config.appenders);
+  configuration.throwExceptionIf(
+    config,
+    configuration.not(appenderNames.length),
+    'must define at least one appender.'
+  );
+
+  appenderNames.forEach((name) => {
+    configuration.throwExceptionIf(
+      config,
+      configuration.not(config.appenders[name].type),
+      `appender "${name}" is not valid (must be an object with property "type")`
+    );
+  });
+});
+
+configuration.addListener(setup);
+
+module.exports = appenders;
+module.exports.init = init;
+
+
+/***/ }),
+
+/***/ 2722:
+/***/ ((module) => {
+
+function logLevelFilter(minLevelString, maxLevelString, appender, levels) {
+  const minLevel = levels.getLevel(minLevelString);
+  const maxLevel = levels.getLevel(maxLevelString, levels.FATAL);
+  return (logEvent) => {
+    const eventLevel = logEvent.level;
+    if (
+      minLevel.isLessThanOrEqualTo(eventLevel) &&
+      maxLevel.isGreaterThanOrEqualTo(eventLevel)
+    ) {
+      appender(logEvent);
+    }
+  };
+}
+
+function configure(config, layouts, findAppender, levels) {
+  const appender = findAppender(config.appender);
+  return logLevelFilter(config.level, config.maxLevel, appender, levels);
+}
+
+module.exports.configure = configure;
+
+
+/***/ }),
+
+/***/ 8799:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)('log4js:noLogFilter');
+
+/**
+ * The function removes empty or null regexp from the array
+ * @param {string[]} regexp
+ * @returns {string[]} a filtered string array with not empty or null regexp
+ */
+function removeNullOrEmptyRegexp(regexp) {
+  const filtered = regexp.filter((el) => el != null && el !== '');
+  return filtered;
+}
+
+/**
+ * Returns a function that will exclude the events in case they match
+ * with the regular expressions provided
+ * @param {(string|string[])} filters contains the regexp that will be used for the evaluation
+ * @param {*} appender
+ * @returns {function}
+ */
+function noLogFilter(filters, appender) {
+  return (logEvent) => {
+    debug(`Checking data: ${logEvent.data} against filters: ${filters}`);
+    if (typeof filters === 'string') {
+      filters = [filters];
+    }
+    filters = removeNullOrEmptyRegexp(filters);
+    const regex = new RegExp(filters.join('|'), 'i');
+    if (
+      filters.length === 0 ||
+      logEvent.data.findIndex((value) => regex.test(value)) < 0
+    ) {
+      debug('Not excluded, sending to appender');
+      appender(logEvent);
+    }
+  };
+}
+
+function configure(config, layouts, findAppender) {
+  const appender = findAppender(config.appender);
+  return noLogFilter(config.exclude, appender);
+}
+
+module.exports.configure = configure;
+
+
+/***/ }),
+
+/***/ 1149:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)('log4js:recording');
+
+const recordedEvents = [];
+
+function configure() {
+  return function (logEvent) {
+    debug(
+      `received logEvent, number of events now ${recordedEvents.length + 1}`
+    );
+    debug('log event was ', logEvent);
+    recordedEvents.push(logEvent);
+  };
+}
+
+function replay() {
+  return recordedEvents.slice();
+}
+
+function reset() {
+  recordedEvents.length = 0;
+}
+
+module.exports = {
+  configure,
+  replay,
+  playback: replay,
+  reset,
+  erase: reset,
+};
+
+
+/***/ }),
+
+/***/ 8680:
+/***/ ((module) => {
+
+function stderrAppender(layout, timezoneOffset) {
+  return (loggingEvent) => {
+    process.stderr.write(`${layout(loggingEvent, timezoneOffset)}\n`);
+  };
+}
+
+function configure(config, layouts) {
+  let layout = layouts.colouredLayout;
+  if (config.layout) {
+    layout = layouts.layout(config.layout.type, config.layout);
+  }
+  return stderrAppender(layout, config.timezoneOffset);
+}
+
+module.exports.configure = configure;
+
+
+/***/ }),
+
+/***/ 9303:
+/***/ ((__unused_webpack_module, exports) => {
+
+function stdoutAppender(layout, timezoneOffset) {
+  return (loggingEvent) => {
+    process.stdout.write(`${layout(loggingEvent, timezoneOffset)}\n`);
+  };
+}
+
+function configure(config, layouts) {
+  let layout = layouts.colouredLayout;
+  if (config.layout) {
+    layout = layouts.layout(config.layout.type, config.layout);
+  }
+  return stdoutAppender(layout, config.timezoneOffset);
+}
+
+exports.configure = configure;
+
+
+/***/ }),
+
+/***/ 1477:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)('log4js:tcp');
+const net = __nccwpck_require__(9278);
+
+function appender(config, layout) {
+  let canWrite = false;
+  const buffer = [];
+  let socket;
+  let shutdownAttempts = 3;
+  let endMsg = '__LOG4JS__';
+
+  function write(loggingEvent) {
+    debug('Writing log event to socket');
+    canWrite = socket.write(`${layout(loggingEvent)}${endMsg}`, 'utf8');
+  }
+
+  function emptyBuffer() {
+    let evt;
+    debug('emptying buffer');
+    while ((evt = buffer.shift())) {
+      write(evt);
+    }
+  }
+
+  function createSocket() {
+    debug(
+      `appender creating socket to ${config.host || 'localhost'}:${
+        config.port || 5000
+      }`
+    );
+    endMsg = `${config.endMsg || '__LOG4JS__'}`;
+    socket = net.createConnection(
+      config.port || 5000,
+      config.host || 'localhost'
+    );
+    socket.on('connect', () => {
+      debug('socket connected');
+      emptyBuffer();
+      canWrite = true;
+    });
+    socket.on('drain', () => {
+      debug('drain event received, emptying buffer');
+      canWrite = true;
+      emptyBuffer();
+    });
+    socket.on('timeout', socket.end.bind(socket));
+    socket.on('error', (e) => {
+      debug('connection error', e);
+      canWrite = false;
+      emptyBuffer();
+    });
+    socket.on('close', createSocket);
+  }
+
+  createSocket();
+
+  function log(loggingEvent) {
+    if (canWrite) {
+      write(loggingEvent);
+    } else {
+      debug('buffering log event because it cannot write at the moment');
+      buffer.push(loggingEvent);
+    }
+  }
+
+  log.shutdown = function (cb) {
+    debug('shutdown called');
+    if (buffer.length && shutdownAttempts) {
+      debug('buffer has items, waiting 100ms to empty');
+      shutdownAttempts -= 1;
+      setTimeout(() => {
+        log.shutdown(cb);
+      }, 100);
+    } else {
+      socket.removeAllListeners('close');
+      socket.end(cb);
+    }
+  };
+  return log;
+}
+
+function configure(config, layouts) {
+  debug(`configure with config = ${config}`);
+  let layout = function (loggingEvent) {
+    return loggingEvent.serialise();
+  };
+  if (config.layout) {
+    layout = layouts.layout(config.layout.type, config.layout);
+  }
+  return appender(config, layout);
+}
+
+module.exports.configure = configure;
+
+
+/***/ }),
+
+/***/ 8185:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)('log4js:categories');
+const configuration = __nccwpck_require__(8507);
+const levels = __nccwpck_require__(1630);
+const appenders = __nccwpck_require__(3718);
+
+const categories = new Map();
+
+/**
+ * Add inherited config to this category.  That includes extra appenders from parent,
+ * and level, if none is set on this category.
+ * This is recursive, so each parent also gets loaded with inherited appenders.
+ * Inheritance is blocked if a category has inherit=false
+ * @param  {*} config
+ * @param  {*} category the child category
+ * @param  {string} categoryName dotted path to category
+ * @return {void}
+ */
+function inheritFromParent(config, category, categoryName) {
+  if (category.inherit === false) return;
+  const lastDotIndex = categoryName.lastIndexOf('.');
+  if (lastDotIndex < 0) return; // category is not a child
+  const parentCategoryName = categoryName.slice(0, lastDotIndex);
+  let parentCategory = config.categories[parentCategoryName];
+
+  if (!parentCategory) {
+    // parent is missing, so implicitly create it, so that it can inherit from its parents
+    parentCategory = { inherit: true, appenders: [] };
+  }
+
+  // make sure parent has had its inheritance taken care of before pulling its properties to this child
+  inheritFromParent(config, parentCategory, parentCategoryName);
+
+  // if the parent is not in the config (because we just created it above),
+  // and it inherited a valid configuration, add it to config.categories
+  if (
+    !config.categories[parentCategoryName] &&
+    parentCategory.appenders &&
+    parentCategory.appenders.length &&
+    parentCategory.level
+  ) {
+    config.categories[parentCategoryName] = parentCategory;
+  }
+
+  category.appenders = category.appenders || [];
+  category.level = category.level || parentCategory.level;
+
+  // merge in appenders from parent (parent is already holding its inherited appenders)
+  parentCategory.appenders.forEach((ap) => {
+    if (!category.appenders.includes(ap)) {
+      category.appenders.push(ap);
+    }
+  });
+  category.parent = parentCategory;
+}
+
+/**
+ * Walk all categories in the config, and pull down any configuration from parent to child.
+ * This includes inherited appenders, and level, where level is not set.
+ * Inheritance is skipped where a category has inherit=false.
+ * @param  {*} config
+ */
+function addCategoryInheritance(config) {
+  if (!config.categories) return;
+  const categoryNames = Object.keys(config.categories);
+  categoryNames.forEach((name) => {
+    const category = config.categories[name];
+    // add inherited appenders and level to this category
+    inheritFromParent(config, category, name);
+  });
+}
+
+configuration.addPreProcessingListener((config) =>
+  addCategoryInheritance(config)
+);
+
+configuration.addListener((config) => {
+  configuration.throwExceptionIf(
+    config,
+    configuration.not(configuration.anObject(config.categories)),
+    'must have a property "categories" of type object.'
+  );
+
+  const categoryNames = Object.keys(config.categories);
+  configuration.throwExceptionIf(
+    config,
+    configuration.not(categoryNames.length),
+    'must define at least one category.'
+  );
+
+  categoryNames.forEach((name) => {
+    const category = config.categories[name];
+    configuration.throwExceptionIf(
+      config,
+      [
+        configuration.not(category.appenders),
+        configuration.not(category.level),
+      ],
+      `category "${name}" is not valid (must be an object with properties "appenders" and "level")`
+    );
+
+    configuration.throwExceptionIf(
+      config,
+      configuration.not(Array.isArray(category.appenders)),
+      `category "${name}" is not valid (appenders must be an array of appender names)`
+    );
+
+    configuration.throwExceptionIf(
+      config,
+      configuration.not(category.appenders.length),
+      `category "${name}" is not valid (appenders must contain at least one appender name)`
+    );
+
+    if (Object.prototype.hasOwnProperty.call(category, 'enableCallStack')) {
+      configuration.throwExceptionIf(
+        config,
+        typeof category.enableCallStack !== 'boolean',
+        `category "${name}" is not valid (enableCallStack must be boolean type)`
+      );
+    }
+
+    category.appenders.forEach((appender) => {
+      configuration.throwExceptionIf(
+        config,
+        configuration.not(appenders.get(appender)),
+        `category "${name}" is not valid (appender "${appender}" is not defined)`
+      );
+    });
+
+    configuration.throwExceptionIf(
+      config,
+      configuration.not(levels.getLevel(category.level)),
+      `category "${name}" is not valid (level "${category.level}" not recognised;` +
+        ` valid levels are ${levels.levels.join(', ')})`
+    );
+  });
+
+  configuration.throwExceptionIf(
+    config,
+    configuration.not(config.categories.default),
+    'must define a "default" category.'
+  );
+});
+
+const setup = (config) => {
+  categories.clear();
+  if (!config) {
+    return;
+  }
+
+  const categoryNames = Object.keys(config.categories);
+  categoryNames.forEach((name) => {
+    const category = config.categories[name];
+    const categoryAppenders = [];
+    category.appenders.forEach((appender) => {
+      categoryAppenders.push(appenders.get(appender));
+      debug(`Creating category ${name}`);
+      categories.set(name, {
+        appenders: categoryAppenders,
+        level: levels.getLevel(category.level),
+        enableCallStack: category.enableCallStack || false,
+      });
+    });
+  });
+};
+
+const init = () => {
+  setup();
+};
+init();
+
+configuration.addListener(setup);
+
+const configForCategory = (category) => {
+  debug(`configForCategory: searching for config for ${category}`);
+  if (categories.has(category)) {
+    debug(`configForCategory: ${category} exists in config, returning it`);
+    return categories.get(category);
+  }
+
+  let sourceCategoryConfig;
+  if (category.indexOf('.') > 0) {
+    debug(`configForCategory: ${category} has hierarchy, cloning from parents`);
+    sourceCategoryConfig = {
+      ...configForCategory(category.slice(0, category.lastIndexOf('.'))),
+    };
+  } else {
+    if (!categories.has('default')) {
+      setup({ categories: { default: { appenders: ['out'], level: 'OFF' } } });
+    }
+    debug('configForCategory: cloning default category');
+    sourceCategoryConfig = { ...categories.get('default') };
+  }
+  categories.set(category, sourceCategoryConfig);
+  return sourceCategoryConfig;
+};
+
+const appendersForCategory = (category) =>
+  configForCategory(category).appenders;
+
+const getLevelForCategory = (category) => configForCategory(category).level;
+const setLevelForCategory = (category, level) => {
+  configForCategory(category).level = level;
+};
+
+const getEnableCallStackForCategory = (category) =>
+  configForCategory(category).enableCallStack === true;
+const setEnableCallStackForCategory = (category, useCallStack) => {
+  configForCategory(category).enableCallStack = useCallStack;
+};
+
+module.exports = categories;
+module.exports = Object.assign(module.exports, {
+  appendersForCategory,
+  getLevelForCategory,
+  setLevelForCategory,
+  getEnableCallStackForCategory,
+  setEnableCallStackForCategory,
+  init,
+});
+
+
+/***/ }),
+
+/***/ 455:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)('log4js:clustering');
+const LoggingEvent = __nccwpck_require__(2838);
+const configuration = __nccwpck_require__(8507);
+
+let disabled = false;
+let cluster = null;
+try {
+  // eslint-disable-next-line global-require
+  cluster = __nccwpck_require__(9907);
+} catch (e) {
+  debug('cluster module not present');
+  disabled = true;
+}
+
+const listeners = [];
+
+let pm2 = false;
+let pm2InstanceVar = 'NODE_APP_INSTANCE';
+
+const isPM2Master = () => pm2 && process.env[pm2InstanceVar] === '0';
+const isMaster = () =>
+  disabled || (cluster && cluster.isMaster) || isPM2Master();
+
+const sendToListeners = (logEvent) => {
+  listeners.forEach((l) => l(logEvent));
+};
+
+// in a multi-process node environment, worker loggers will use
+// process.send
+const receiver = (worker, message) => {
+  // prior to node v6, the worker parameter was not passed (args were message, handle)
+  debug('cluster message received from worker ', worker, ': ', message);
+  if (worker.topic && worker.data) {
+    message = worker;
+    worker = undefined;
+  }
+  if (message && message.topic && message.topic === 'log4js:message') {
+    debug('received message: ', message.data);
+    const logEvent = LoggingEvent.deserialise(message.data);
+    sendToListeners(logEvent);
+  }
+};
+
+if (!disabled) {
+  configuration.addListener((config) => {
+    // clear out the listeners, because configure has been called.
+    listeners.length = 0;
+
+    ({
+      pm2,
+      disableClustering: disabled,
+      pm2InstanceVar = 'NODE_APP_INSTANCE',
+    } = config);
+
+    debug(`clustering disabled ? ${disabled}`);
+    debug(`cluster.isMaster ? ${cluster && cluster.isMaster}`);
+    debug(`pm2 enabled ? ${pm2}`);
+    debug(`pm2InstanceVar = ${pm2InstanceVar}`);
+    debug(`process.env[${pm2InstanceVar}] = ${process.env[pm2InstanceVar]}`);
+
+    // just in case configure is called after shutdown
+    if (pm2) {
+      process.removeListener('message', receiver);
+    }
+    if (cluster && cluster.removeListener) {
+      cluster.removeListener('message', receiver);
+    }
+
+    if (disabled || config.disableClustering) {
+      debug('Not listening for cluster messages, because clustering disabled.');
+    } else if (isPM2Master()) {
+      // PM2 cluster support
+      // PM2 runs everything as workers - install pm2-intercom for this to work.
+      // we only want one of the app instances to write logs
+      debug('listening for PM2 broadcast messages');
+      process.on('message', receiver);
+    } else if (cluster && cluster.isMaster) {
+      debug('listening for cluster messages');
+      cluster.on('message', receiver);
+    } else {
+      debug('not listening for messages, because we are not a master process');
+    }
+  });
+}
+
+module.exports = {
+  onlyOnMaster: (fn, notMaster) => (isMaster() ? fn() : notMaster),
+  isMaster,
+  send: (msg) => {
+    if (isMaster()) {
+      sendToListeners(msg);
+    } else {
+      if (!pm2) {
+        msg.cluster = {
+          workerId: cluster.worker.id,
+          worker: process.pid,
+        };
+      }
+      process.send({ topic: 'log4js:message', data: msg.serialise() });
+    }
+  },
+  onMessage: (listener) => {
+    listeners.push(listener);
+  },
+};
+
+
+/***/ }),
+
+/***/ 8507:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const util = __nccwpck_require__(9023);
+const debug = __nccwpck_require__(2830)('log4js:configuration');
+
+const preProcessingListeners = [];
+const listeners = [];
+
+const not = (thing) => !thing;
+
+const anObject = (thing) =>
+  thing && typeof thing === 'object' && !Array.isArray(thing);
+
+const validIdentifier = (thing) => /^[A-Za-z][A-Za-z0-9_]*$/g.test(thing);
+
+const anInteger = (thing) =>
+  thing && typeof thing === 'number' && Number.isInteger(thing);
+
+const addListener = (fn) => {
+  listeners.push(fn);
+  debug(`Added listener, now ${listeners.length} listeners`);
+};
+
+const addPreProcessingListener = (fn) => {
+  preProcessingListeners.push(fn);
+  debug(
+    `Added pre-processing listener, now ${preProcessingListeners.length} listeners`
+  );
+};
+
+const throwExceptionIf = (config, checks, message) => {
+  const tests = Array.isArray(checks) ? checks : [checks];
+  tests.forEach((test) => {
+    if (test) {
+      throw new Error(
+        `Problem with log4js configuration: (${util.inspect(config, {
+          depth: 5,
+        })}) - ${message}`
+      );
+    }
+  });
+};
+
+const configure = (candidate) => {
+  debug('New configuration to be validated: ', candidate);
+  throwExceptionIf(candidate, not(anObject(candidate)), 'must be an object.');
+
+  debug(`Calling pre-processing listeners (${preProcessingListeners.length})`);
+  preProcessingListeners.forEach((listener) => listener(candidate));
+  debug('Configuration pre-processing finished.');
+
+  debug(`Calling configuration listeners (${listeners.length})`);
+  listeners.forEach((listener) => listener(candidate));
+  debug('Configuration finished.');
+};
+
+module.exports = {
+  configure,
+  addListener,
+  addPreProcessingListener,
+  throwExceptionIf,
+  anObject,
+  anInteger,
+  validIdentifier,
+  not,
+};
+
+
+/***/ }),
+
+/***/ 8256:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/* eslint no-underscore-dangle: ["error", { "allow": ["__statusCode", "_remoteAddress", "__headers", "_logging"] }] */
+
+const levels = __nccwpck_require__(1630);
+
+const DEFAULT_FORMAT =
+  ':remote-addr - -' +
+  ' ":method :url HTTP/:http-version"' +
+  ' :status :content-length ":referrer"' +
+  ' ":user-agent"';
+
+/**
+ * Return request url path,
+ * adding this function prevents the Cyclomatic Complexity,
+ * for the assemble_tokens function at low, to pass the tests.
+ *
+ * @param  {IncomingMessage} req
+ * @return {string}
+ * @api private
+ */
+function getUrl(req) {
+  return req.originalUrl || req.url;
+}
+
+/**
+ * Adds custom {token, replacement} objects to defaults,
+ * overwriting the defaults if any tokens clash
+ *
+ * @param  {IncomingMessage} req
+ * @param  {ServerResponse} res
+ * @param  {Array} customTokens
+ *    [{ token: string-or-regexp, replacement: string-or-replace-function }]
+ * @return {Array}
+ */
+function assembleTokens(req, res, customTokens) {
+  const arrayUniqueTokens = (array) => {
+    const a = array.concat();
+    for (let i = 0; i < a.length; ++i) {
+      for (let j = i + 1; j < a.length; ++j) {
+        // not === because token can be regexp object
+        // eslint-disable-next-line eqeqeq
+        if (a[i].token == a[j].token) {
+          a.splice(j--, 1); // eslint-disable-line no-plusplus
+        }
+      }
+    }
+    return a;
+  };
+
+  const defaultTokens = [];
+  defaultTokens.push({ token: ':url', replacement: getUrl(req) });
+  defaultTokens.push({ token: ':protocol', replacement: req.protocol });
+  defaultTokens.push({ token: ':hostname', replacement: req.hostname });
+  defaultTokens.push({ token: ':method', replacement: req.method });
+  defaultTokens.push({
+    token: ':status',
+    replacement: res.__statusCode || res.statusCode,
+  });
+  defaultTokens.push({
+    token: ':response-time',
+    replacement: res.responseTime,
+  });
+  defaultTokens.push({ token: ':date', replacement: new Date().toUTCString() });
+  defaultTokens.push({
+    token: ':referrer',
+    replacement: req.headers.referer || req.headers.referrer || '',
+  });
+  defaultTokens.push({
+    token: ':http-version',
+    replacement: `${req.httpVersionMajor}.${req.httpVersionMinor}`,
+  });
+  defaultTokens.push({
+    token: ':remote-addr',
+    replacement:
+      req.headers['x-forwarded-for'] ||
+      req.ip ||
+      req._remoteAddress ||
+      (req.socket &&
+        (req.socket.remoteAddress ||
+          (req.socket.socket && req.socket.socket.remoteAddress))),
+  });
+  defaultTokens.push({
+    token: ':user-agent',
+    replacement: req.headers['user-agent'],
+  });
+  defaultTokens.push({
+    token: ':content-length',
+    replacement:
+      res.getHeader('content-length') ||
+      (res.__headers && res.__headers['Content-Length']) ||
+      '-',
+  });
+  defaultTokens.push({
+    token: /:req\[([^\]]+)]/g,
+    replacement(_, field) {
+      return req.headers[field.toLowerCase()];
+    },
+  });
+  defaultTokens.push({
+    token: /:res\[([^\]]+)]/g,
+    replacement(_, field) {
+      return (
+        res.getHeader(field.toLowerCase()) ||
+        (res.__headers && res.__headers[field])
+      );
+    },
+  });
+
+  return arrayUniqueTokens(customTokens.concat(defaultTokens));
+}
+
+/**
+ * Return formatted log line.
+ *
+ * @param  {string} str
+ * @param {Array} tokens
+ * @return {string}
+ * @api private
+ */
+function format(str, tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    str = str.replace(tokens[i].token, tokens[i].replacement);
+  }
+  return str;
+}
+
+/**
+ * Return RegExp Object about nolog
+ *
+ * @param  {(string|Array)} nolog
+ * @return {RegExp}
+ * @api private
+ *
+ * syntax
+ *  1. String
+ *   1.1 "\\.gif"
+ *         NOT LOGGING http://example.com/hoge.gif and http://example.com/hoge.gif?fuga
+ *         LOGGING http://example.com/hoge.agif
+ *   1.2 in "\\.gif|\\.jpg$"
+ *         NOT LOGGING http://example.com/hoge.gif and
+ *           http://example.com/hoge.gif?fuga and http://example.com/hoge.jpg?fuga
+ *         LOGGING http://example.com/hoge.agif,
+ *           http://example.com/hoge.ajpg and http://example.com/hoge.jpg?hoge
+ *   1.3 in "\\.(gif|jpe?g|png)$"
+ *         NOT LOGGING http://example.com/hoge.gif and http://example.com/hoge.jpeg
+ *         LOGGING http://example.com/hoge.gif?uid=2 and http://example.com/hoge.jpg?pid=3
+ *  2. RegExp
+ *   2.1 in /\.(gif|jpe?g|png)$/
+ *         SAME AS 1.3
+ *  3. Array
+ *   3.1 ["\\.jpg$", "\\.png", "\\.gif"]
+ *         SAME AS "\\.jpg|\\.png|\\.gif"
+ */
+function createNoLogCondition(nolog) {
+  let regexp = null;
+
+  if (nolog instanceof RegExp) {
+    regexp = nolog;
+  }
+
+  if (typeof nolog === 'string') {
+    regexp = new RegExp(nolog);
+  }
+
+  if (Array.isArray(nolog)) {
+    // convert to strings
+    const regexpsAsStrings = nolog.map((reg) =>
+      reg.source ? reg.source : reg
+    );
+    regexp = new RegExp(regexpsAsStrings.join('|'));
+  }
+
+  return regexp;
+}
+
+/**
+ * Allows users to define rules around status codes to assign them to a specific
+ * logging level.
+ * There are two types of rules:
+ *   - RANGE: matches a code within a certain range
+ *     E.g. { 'from': 200, 'to': 299, 'level': 'info' }
+ *   - CONTAINS: matches a code to a set of expected codes
+ *     E.g. { 'codes': [200, 203], 'level': 'debug' }
+ * Note*: Rules are respected only in order of prescendence.
+ *
+ * @param {Number} statusCode
+ * @param {Level} currentLevel
+ * @param {Object} ruleSet
+ * @return {Level}
+ * @api private
+ */
+function matchRules(statusCode, currentLevel, ruleSet) {
+  let level = currentLevel;
+
+  if (ruleSet) {
+    const matchedRule = ruleSet.find((rule) => {
+      let ruleMatched = false;
+      if (rule.from && rule.to) {
+        ruleMatched = statusCode >= rule.from && statusCode <= rule.to;
+      } else {
+        ruleMatched = rule.codes.indexOf(statusCode) !== -1;
+      }
+      return ruleMatched;
+    });
+    if (matchedRule) {
+      level = levels.getLevel(matchedRule.level, level);
+    }
+  }
+  return level;
+}
+
+/**
+ * Log requests with the given `options` or a `format` string.
+ *
+ * Options:
+ *
+ *   - `format`        Format string, see below for tokens
+ *   - `level`         A log4js levels instance. Supports also 'auto'
+ *   - `nolog`         A string or RegExp to exclude target logs or function(req, res): boolean
+ *   - `statusRules`   A array of rules for setting specific logging levels base on status codes
+ *   - `context`       Whether to add a response of express to the context
+ *
+ * Tokens:
+ *
+ *   - `:req[header]` ex: `:req[Accept]`
+ *   - `:res[header]` ex: `:res[Content-Length]`
+ *   - `:http-version`
+ *   - `:response-time`
+ *   - `:remote-addr`
+ *   - `:date`
+ *   - `:method`
+ *   - `:url`
+ *   - `:referrer`
+ *   - `:user-agent`
+ *   - `:status`
+ *
+ * @return {Function}
+ * @param logger4js
+ * @param options
+ * @api public
+ */
+module.exports = function getLogger(logger4js, options) {
+  if (typeof options === 'string' || typeof options === 'function') {
+    options = { format: options };
+  } else {
+    options = options || {};
+  }
+
+  const thisLogger = logger4js;
+  let level = levels.getLevel(options.level, levels.INFO);
+  const fmt = options.format || DEFAULT_FORMAT;
+
+  return (req, res, next) => {
+    // mount safety
+    if (typeof req._logging !== 'undefined') return next();
+
+    // nologs
+    if (typeof options.nolog !== 'function') {
+      const nolog = createNoLogCondition(options.nolog);
+      if (nolog && nolog.test(req.originalUrl)) return next();
+    }
+
+    if (thisLogger.isLevelEnabled(level) || options.level === 'auto') {
+      const start = new Date();
+      const { writeHead } = res;
+
+      // flag as logging
+      req._logging = true;
+
+      // proxy for statusCode.
+      res.writeHead = (code, headers) => {
+        res.writeHead = writeHead;
+        res.writeHead(code, headers);
+
+        res.__statusCode = code;
+        res.__headers = headers || {};
+      };
+
+      // hook on end request to emit the log entry of the HTTP request.
+      let finished = false;
+      const handler = () => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+
+        // nologs
+        if (typeof options.nolog === 'function') {
+          if (options.nolog(req, res) === true) {
+            req._logging = false;
+            return;
+          }
+        }
+
+        res.responseTime = new Date() - start;
+        // status code response level handling
+        if (res.statusCode && options.level === 'auto') {
+          level = levels.INFO;
+          if (res.statusCode >= 300) level = levels.WARN;
+          if (res.statusCode >= 400) level = levels.ERROR;
+        }
+        level = matchRules(res.statusCode, level, options.statusRules);
+
+        const combinedTokens = assembleTokens(req, res, options.tokens || []);
+
+        if (options.context) thisLogger.addContext('res', res);
+        if (typeof fmt === 'function') {
+          const line = fmt(req, res, (str) => format(str, combinedTokens));
+          if (line) thisLogger.log(level, line);
+        } else {
+          thisLogger.log(level, format(fmt, combinedTokens));
+        }
+        if (options.context) thisLogger.removeContext('res');
+      };
+      res.on('end', handler);
+      res.on('finish', handler);
+      res.on('error', handler);
+      res.on('close', handler);
+    }
+
+    // ensure next gets always called
+    return next();
+  };
+};
+
+
+/***/ }),
+
+/***/ 6794:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const dateFormat = __nccwpck_require__(876);
+const os = __nccwpck_require__(857);
+const util = __nccwpck_require__(9023);
+const path = __nccwpck_require__(6928);
+const url = __nccwpck_require__(7016);
+const debug = __nccwpck_require__(2830)('log4js:layouts');
+
+const styles = {
+  // styles
+  bold: [1, 22],
+  italic: [3, 23],
+  underline: [4, 24],
+  inverse: [7, 27],
+  // grayscale
+  white: [37, 39],
+  grey: [90, 39],
+  black: [90, 39],
+  // colors
+  blue: [34, 39],
+  cyan: [36, 39],
+  green: [32, 39],
+  magenta: [35, 39],
+  red: [91, 39],
+  yellow: [33, 39],
+};
+
+function colorizeStart(style) {
+  return style ? `\x1B[${styles[style][0]}m` : '';
+}
+
+function colorizeEnd(style) {
+  return style ? `\x1B[${styles[style][1]}m` : '';
+}
+
+/**
+ * Taken from masylum's fork (https://github.com/masylum/log4js-node)
+ */
+function colorize(str, style) {
+  return colorizeStart(style) + str + colorizeEnd(style);
+}
+
+function timestampLevelAndCategory(loggingEvent, colour) {
+  return colorize(
+    util.format(
+      '[%s] [%s] %s - ',
+      dateFormat.asString(loggingEvent.startTime),
+      loggingEvent.level.toString(),
+      loggingEvent.categoryName
+    ),
+    colour
+  );
+}
+
+/**
+ * BasicLayout is a simple layout for storing the logs. The logs are stored
+ * in following format:
+ * <pre>
+ * [startTime] [logLevel] categoryName - message\n
+ * </pre>
+ *
+ * @author Stephan Strittmatter
+ */
+function basicLayout(loggingEvent) {
+  return (
+    timestampLevelAndCategory(loggingEvent) + util.format(...loggingEvent.data)
+  );
+}
+
+/**
+ * colouredLayout - taken from masylum's fork.
+ * same as basicLayout, but with colours.
+ */
+function colouredLayout(loggingEvent) {
+  return (
+    timestampLevelAndCategory(loggingEvent, loggingEvent.level.colour) +
+    util.format(...loggingEvent.data)
+  );
+}
+
+function messagePassThroughLayout(loggingEvent) {
+  return util.format(...loggingEvent.data);
+}
+
+function dummyLayout(loggingEvent) {
+  return loggingEvent.data[0];
+}
+
+/**
+ * PatternLayout
+ * Format for specifiers is %[padding].[truncation][field]{[format]}
+ * e.g. %5.10p - left pad the log level by 5 characters, up to a max of 10
+ * both padding and truncation can be negative.
+ * Negative truncation = trunc from end of string
+ * Positive truncation = trunc from start of string
+ * Negative padding = pad right
+ * Positive padding = pad left
+ *
+ * Fields can be any of:
+ *  - %r time in toLocaleTimeString format
+ *  - %p log level
+ *  - %c log category
+ *  - %h hostname
+ *  - %m log data
+ *  - %m{l} where l is an integer, log data.slice(l)
+ *  - %m{l,u} where l and u are integers, log data.slice(l, u)
+ *  - %d date in constious formats
+ *  - %% %
+ *  - %n newline
+ *  - %z pid
+ *  - %f filename
+ *  - %l line number
+ *  - %o column postion
+ *  - %s call stack
+ *  - %C class name [#1316](https://github.com/log4js-node/log4js-node/pull/1316)
+ *  - %M method or function name [#1316](https://github.com/log4js-node/log4js-node/pull/1316)
+ *  - %A method or function alias [#1316](https://github.com/log4js-node/log4js-node/pull/1316)
+ *  - %F fully qualified caller name [#1316](https://github.com/log4js-node/log4js-node/pull/1316)
+ *  - %x{<tokenname>} add dynamic tokens to your log. Tokens are specified in the tokens parameter
+ *  - %X{<tokenname>} add dynamic tokens to your log. Tokens are specified in logger context
+ * You can use %[ and %] to define a colored block.
+ *
+ * Tokens are specified as simple key:value objects.
+ * The key represents the token name whereas the value can be a string or function
+ * which is called to extract the value to put in the log message. If token is not
+ * found, it doesn't replace the field.
+ *
+ * A sample token would be: { 'pid' : function() { return process.pid; } }
+ *
+ * Takes a pattern string, array of tokens and returns a layout function.
+ * @return {Function}
+ * @param pattern
+ * @param tokens
+ * @param timezoneOffset
+ *
+ * @authors ['Stephan Strittmatter', 'Jan Schmidle']
+ */
+function patternLayout(pattern, tokens) {
+  const TTCC_CONVERSION_PATTERN = '%r %p %c - %m%n';
+  const regex =
+    /%(-?[0-9]+)?(\.?-?[0-9]+)?([[\]cdhmnprzxXyflosCMAF%])(\{([^}]+)\})?|([^%]+)/;
+
+  pattern = pattern || TTCC_CONVERSION_PATTERN;
+
+  function categoryName(loggingEvent, specifier) {
+    let loggerName = loggingEvent.categoryName;
+    if (specifier) {
+      const precision = parseInt(specifier, 10);
+      const loggerNameBits = loggerName.split('.');
+      if (precision < loggerNameBits.length) {
+        loggerName = loggerNameBits
+          .slice(loggerNameBits.length - precision)
+          .join('.');
+      }
+    }
+    return loggerName;
+  }
+
+  function formatAsDate(loggingEvent, specifier) {
+    let format = dateFormat.ISO8601_FORMAT;
+    if (specifier) {
+      format = specifier;
+      // Pick up special cases
+      switch (format) {
+        case 'ISO8601':
+        case 'ISO8601_FORMAT':
+          format = dateFormat.ISO8601_FORMAT;
+          break;
+        case 'ISO8601_WITH_TZ_OFFSET':
+        case 'ISO8601_WITH_TZ_OFFSET_FORMAT':
+          format = dateFormat.ISO8601_WITH_TZ_OFFSET_FORMAT;
+          break;
+        case 'ABSOLUTE':
+          process.emitWarning(
+            'Pattern %d{ABSOLUTE} is deprecated in favor of %d{ABSOLUTETIME}. ' +
+              'Please use %d{ABSOLUTETIME} instead.',
+            'DeprecationWarning',
+            'log4js-node-DEP0003'
+          );
+          debug(
+            '[log4js-node-DEP0003]',
+            'DEPRECATION: Pattern %d{ABSOLUTE} is deprecated and replaced by %d{ABSOLUTETIME}.'
+          );
+        // falls through
+        case 'ABSOLUTETIME':
+        case 'ABSOLUTETIME_FORMAT':
+          format = dateFormat.ABSOLUTETIME_FORMAT;
+          break;
+        case 'DATE':
+          process.emitWarning(
+            'Pattern %d{DATE} is deprecated due to the confusion it causes when used. ' +
+              'Please use %d{DATETIME} instead.',
+            'DeprecationWarning',
+            'log4js-node-DEP0004'
+          );
+          debug(
+            '[log4js-node-DEP0004]',
+            'DEPRECATION: Pattern %d{DATE} is deprecated and replaced by %d{DATETIME}.'
+          );
+        // falls through
+        case 'DATETIME':
+        case 'DATETIME_FORMAT':
+          format = dateFormat.DATETIME_FORMAT;
+          break;
+        // no default
+      }
+    }
+    // Format the date
+    return dateFormat.asString(format, loggingEvent.startTime);
+  }
+
+  function hostname() {
+    return os.hostname().toString();
+  }
+
+  function formatMessage(loggingEvent, specifier) {
+    let dataSlice = loggingEvent.data;
+    if (specifier) {
+      const [lowerBound, upperBound] = specifier.split(',');
+      dataSlice = dataSlice.slice(lowerBound, upperBound);
+    }
+    return util.format(...dataSlice);
+  }
+
+  function endOfLine() {
+    return os.EOL;
+  }
+
+  function logLevel(loggingEvent) {
+    return loggingEvent.level.toString();
+  }
+
+  function startTime(loggingEvent) {
+    return dateFormat.asString('hh:mm:ss', loggingEvent.startTime);
+  }
+
+  function startColour(loggingEvent) {
+    return colorizeStart(loggingEvent.level.colour);
+  }
+
+  function endColour(loggingEvent) {
+    return colorizeEnd(loggingEvent.level.colour);
+  }
+
+  function percent() {
+    return '%';
+  }
+
+  function pid(loggingEvent) {
+    return loggingEvent && loggingEvent.pid
+      ? loggingEvent.pid.toString()
+      : process.pid.toString();
+  }
+
+  function clusterInfo() {
+    // this used to try to return the master and worker pids,
+    // but it would never have worked because master pid is not available to workers
+    // leaving this here to maintain compatibility for patterns
+    return pid();
+  }
+
+  function userDefined(loggingEvent, specifier) {
+    if (typeof tokens[specifier] !== 'undefined') {
+      return typeof tokens[specifier] === 'function'
+        ? tokens[specifier](loggingEvent)
+        : tokens[specifier];
+    }
+
+    return null;
+  }
+
+  function contextDefined(loggingEvent, specifier) {
+    const resolver = loggingEvent.context[specifier];
+
+    if (typeof resolver !== 'undefined') {
+      return typeof resolver === 'function' ? resolver(loggingEvent) : resolver;
+    }
+
+    return null;
+  }
+
+  function fileName(loggingEvent, specifier) {
+    let filename = loggingEvent.fileName || '';
+
+    // support for ESM as it uses url instead of path for file
+    /* istanbul ignore next: unsure how to simulate ESM for test coverage */
+    const convertFileURLToPath = function (filepath) {
+      const urlPrefix = 'file://';
+      if (filepath.startsWith(urlPrefix)) {
+        // https://nodejs.org/api/url.html#urlfileurltopathurl
+        if (typeof url.fileURLToPath === 'function') {
+          filepath = url.fileURLToPath(filepath);
+        }
+        // backward-compatible for nodejs pre-10.12.0 (without url.fileURLToPath method)
+        else {
+          // posix: file:///hello/world/foo.txt -> /hello/world/foo.txt -> /hello/world/foo.txt
+          // win32: file:///C:/path/foo.txt     -> /C:/path/foo.txt     -> \C:\path\foo.txt     -> C:\path\foo.txt
+          // win32: file://nas/foo.txt          -> //nas/foo.txt        -> nas\foo.txt          -> \\nas\foo.txt
+          filepath = path.normalize(
+            filepath.replace(new RegExp(`^${urlPrefix}`), '')
+          );
+          if (process.platform === 'win32') {
+            if (filepath.startsWith('\\')) {
+              filepath = filepath.slice(1);
+            } else {
+              filepath = path.sep + path.sep + filepath;
+            }
+          }
+        }
+      }
+      return filepath;
+    };
+    filename = convertFileURLToPath(filename);
+
+    if (specifier) {
+      const fileDepth = parseInt(specifier, 10);
+      const fileList = filename.split(path.sep);
+      if (fileList.length > fileDepth) {
+        filename = fileList.slice(-fileDepth).join(path.sep);
+      }
+    }
+
+    return filename;
+  }
+
+  function lineNumber(loggingEvent) {
+    return loggingEvent.lineNumber ? `${loggingEvent.lineNumber}` : '';
+  }
+
+  function columnNumber(loggingEvent) {
+    return loggingEvent.columnNumber ? `${loggingEvent.columnNumber}` : '';
+  }
+
+  function callStack(loggingEvent) {
+    return loggingEvent.callStack || '';
+  }
+
+  function className(loggingEvent) {
+    return loggingEvent.className || '';
+  }
+
+  function functionName(loggingEvent) {
+    return loggingEvent.functionName || '';
+  }
+
+  function functionAlias(loggingEvent) {
+    return loggingEvent.functionAlias || '';
+  }
+
+  function callerName(loggingEvent) {
+    return loggingEvent.callerName || '';
+  }
+
+  const replacers = {
+    c: categoryName,
+    d: formatAsDate,
+    h: hostname,
+    m: formatMessage,
+    n: endOfLine,
+    p: logLevel,
+    r: startTime,
+    '[': startColour,
+    ']': endColour,
+    y: clusterInfo,
+    z: pid,
+    '%': percent,
+    x: userDefined,
+    X: contextDefined,
+    f: fileName,
+    l: lineNumber,
+    o: columnNumber,
+    s: callStack,
+    C: className,
+    M: functionName,
+    A: functionAlias,
+    F: callerName,
+  };
+
+  function replaceToken(conversionCharacter, loggingEvent, specifier) {
+    return replacers[conversionCharacter](loggingEvent, specifier);
+  }
+
+  function truncate(truncation, toTruncate) {
+    let len;
+    if (truncation) {
+      len = parseInt(truncation.slice(1), 10);
+      // negative truncate length means truncate from end of string
+      return len > 0 ? toTruncate.slice(0, len) : toTruncate.slice(len);
+    }
+
+    return toTruncate;
+  }
+
+  function pad(padding, toPad) {
+    let len;
+    if (padding) {
+      if (padding.charAt(0) === '-') {
+        len = parseInt(padding.slice(1), 10);
+        // Right pad with spaces
+        while (toPad.length < len) {
+          toPad += ' ';
+        }
+      } else {
+        len = parseInt(padding, 10);
+        // Left pad with spaces
+        while (toPad.length < len) {
+          toPad = ` ${toPad}`;
+        }
+      }
+    }
+    return toPad;
+  }
+
+  function truncateAndPad(toTruncAndPad, truncation, padding) {
+    let replacement = toTruncAndPad;
+    replacement = truncate(truncation, replacement);
+    replacement = pad(padding, replacement);
+    return replacement;
+  }
+
+  return function (loggingEvent) {
+    let formattedString = '';
+    let result;
+    let searchString = pattern;
+
+    while ((result = regex.exec(searchString)) !== null) {
+      // const matchedString = result[0];
+      const padding = result[1];
+      const truncation = result[2];
+      const conversionCharacter = result[3];
+      const specifier = result[5];
+      const text = result[6];
+
+      // Check if the pattern matched was just normal text
+      if (text) {
+        formattedString += text.toString();
+      } else {
+        // Create a raw replacement string based on the conversion
+        // character and specifier
+        const replacement = replaceToken(
+          conversionCharacter,
+          loggingEvent,
+          specifier
+        );
+        formattedString += truncateAndPad(replacement, truncation, padding);
+      }
+      searchString = searchString.slice(result.index + result[0].length);
+    }
+    return formattedString;
+  };
+}
+
+const layoutMakers = {
+  messagePassThrough() {
+    return messagePassThroughLayout;
+  },
+  basic() {
+    return basicLayout;
+  },
+  colored() {
+    return colouredLayout;
+  },
+  coloured() {
+    return colouredLayout;
+  },
+  pattern(config) {
+    return patternLayout(config && config.pattern, config && config.tokens);
+  },
+  dummy() {
+    return dummyLayout;
+  },
+};
+
+module.exports = {
+  basicLayout,
+  messagePassThroughLayout,
+  patternLayout,
+  colouredLayout,
+  coloredLayout: colouredLayout,
+  dummyLayout,
+  addLayout(name, serializerGenerator) {
+    layoutMakers[name] = serializerGenerator;
+  },
+  layout(name, config) {
+    return layoutMakers[name] && layoutMakers[name](config);
+  },
+};
+
+
+/***/ }),
+
+/***/ 1630:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const configuration = __nccwpck_require__(8507);
+
+const validColours = [
+  'white',
+  'grey',
+  'black',
+  'blue',
+  'cyan',
+  'green',
+  'magenta',
+  'red',
+  'yellow',
+];
+
+class Level {
+  constructor(level, levelStr, colour) {
+    this.level = level;
+    this.levelStr = levelStr;
+    this.colour = colour;
+  }
+
+  toString() {
+    return this.levelStr;
+  }
+
+  /**
+   * converts given String to corresponding Level
+   * @param {(Level|string)} sArg -- String value of Level OR Log4js.Level
+   * @param {Level} [defaultLevel] -- default Level, if no String representation
+   * @return {Level}
+   */
+  static getLevel(sArg, defaultLevel) {
+    if (!sArg) {
+      return defaultLevel;
+    }
+
+    if (sArg instanceof Level) {
+      return sArg;
+    }
+
+    // a json-serialised level won't be an instance of Level (see issue #768)
+    if (sArg instanceof Object && sArg.levelStr) {
+      sArg = sArg.levelStr;
+    }
+
+    return Level[sArg.toString().toUpperCase()] || defaultLevel;
+  }
+
+  static addLevels(customLevels) {
+    if (customLevels) {
+      const levels = Object.keys(customLevels);
+      levels.forEach((l) => {
+        const levelStr = l.toUpperCase();
+        Level[levelStr] = new Level(
+          customLevels[l].value,
+          levelStr,
+          customLevels[l].colour
+        );
+        const existingLevelIndex = Level.levels.findIndex(
+          (lvl) => lvl.levelStr === levelStr
+        );
+        if (existingLevelIndex > -1) {
+          Level.levels[existingLevelIndex] = Level[levelStr];
+        } else {
+          Level.levels.push(Level[levelStr]);
+        }
+      });
+      Level.levels.sort((a, b) => a.level - b.level);
+    }
+  }
+
+  isLessThanOrEqualTo(otherLevel) {
+    if (typeof otherLevel === 'string') {
+      otherLevel = Level.getLevel(otherLevel);
+    }
+    return this.level <= otherLevel.level;
+  }
+
+  isGreaterThanOrEqualTo(otherLevel) {
+    if (typeof otherLevel === 'string') {
+      otherLevel = Level.getLevel(otherLevel);
+    }
+    return this.level >= otherLevel.level;
+  }
+
+  isEqualTo(otherLevel) {
+    if (typeof otherLevel === 'string') {
+      otherLevel = Level.getLevel(otherLevel);
+    }
+    return this.level === otherLevel.level;
+  }
+}
+
+Level.levels = [];
+Level.addLevels({
+  ALL: { value: Number.MIN_VALUE, colour: 'grey' },
+  TRACE: { value: 5000, colour: 'blue' },
+  DEBUG: { value: 10000, colour: 'cyan' },
+  INFO: { value: 20000, colour: 'green' },
+  WARN: { value: 30000, colour: 'yellow' },
+  ERROR: { value: 40000, colour: 'red' },
+  FATAL: { value: 50000, colour: 'magenta' },
+  MARK: { value: 9007199254740992, colour: 'grey' }, // 2^53
+  OFF: { value: Number.MAX_VALUE, colour: 'grey' },
+});
+
+configuration.addListener((config) => {
+  const levelConfig = config.levels;
+  if (levelConfig) {
+    configuration.throwExceptionIf(
+      config,
+      configuration.not(configuration.anObject(levelConfig)),
+      'levels must be an object'
+    );
+    const newLevels = Object.keys(levelConfig);
+    newLevels.forEach((l) => {
+      configuration.throwExceptionIf(
+        config,
+        configuration.not(configuration.validIdentifier(l)),
+        `level name "${l}" is not a valid identifier (must start with a letter, only contain A-Z,a-z,0-9,_)`
+      );
+      configuration.throwExceptionIf(
+        config,
+        configuration.not(configuration.anObject(levelConfig[l])),
+        `level "${l}" must be an object`
+      );
+      configuration.throwExceptionIf(
+        config,
+        configuration.not(levelConfig[l].value),
+        `level "${l}" must have a 'value' property`
+      );
+      configuration.throwExceptionIf(
+        config,
+        configuration.not(configuration.anInteger(levelConfig[l].value)),
+        `level "${l}".value must have an integer value`
+      );
+      configuration.throwExceptionIf(
+        config,
+        configuration.not(levelConfig[l].colour),
+        `level "${l}" must have a 'colour' property`
+      );
+      configuration.throwExceptionIf(
+        config,
+        configuration.not(validColours.indexOf(levelConfig[l].colour) > -1),
+        `level "${l}".colour must be one of ${validColours.join(', ')}`
+      );
+    });
+  }
+});
+
+configuration.addListener((config) => {
+  Level.addLevels(config.levels);
+});
+
+module.exports = Level;
+
+
+/***/ }),
+
+/***/ 892:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/**
+ * @fileoverview log4js is a library to log in JavaScript in similar manner
+ * than in log4j for Java (but not really).
+ *
+ * <h3>Example:</h3>
+ * <pre>
+ *  const logging = require('log4js');
+ *  const log = logging.getLogger('some-category');
+ *
+ *  //call the log
+ *  log.trace('trace me' );
+ * </pre>
+ *
+ * NOTE: the authors below are the original browser-based log4js authors
+ * don't try to contact them about bugs in this version :)
+ * @author Stephan Strittmatter - http://jroller.com/page/stritti
+ * @author Seth Chisamore - http://www.chisamore.com
+ * @since 2005-05-20
+ * Website: http://log4js.berlios.de
+ */
+const debug = __nccwpck_require__(2830)('log4js:main');
+const fs = __nccwpck_require__(9896);
+const deepClone = __nccwpck_require__(8825)({ proto: true });
+const configuration = __nccwpck_require__(8507);
+const layouts = __nccwpck_require__(6794);
+const levels = __nccwpck_require__(1630);
+const appenders = __nccwpck_require__(3718);
+const categories = __nccwpck_require__(8185);
+const Logger = __nccwpck_require__(2949);
+const clustering = __nccwpck_require__(455);
+const connectLogger = __nccwpck_require__(8256);
+const recordingModule = __nccwpck_require__(1149);
+
+let enabled = false;
+
+function sendLogEventToAppender(logEvent) {
+  if (!enabled) return;
+  debug('Received log event ', logEvent);
+  const categoryAppenders = categories.appendersForCategory(
+    logEvent.categoryName
+  );
+  categoryAppenders.forEach((appender) => {
+    appender(logEvent);
+  });
+}
+
+function loadConfigurationFile(filename) {
+  debug(`Loading configuration from ${filename}`);
+  try {
+    return JSON.parse(fs.readFileSync(filename, 'utf8'));
+  } catch (e) {
+    throw new Error(
+      `Problem reading config from file "${filename}". Error was ${e.message}`,
+      e
+    );
+  }
+}
+
+function configure(configurationFileOrObject) {
+  if (enabled) {
+    // eslint-disable-next-line no-use-before-define
+    shutdown();
+  }
+
+  let configObject = configurationFileOrObject;
+
+  if (typeof configObject === 'string') {
+    configObject = loadConfigurationFile(configurationFileOrObject);
+  }
+  debug(`Configuration is ${configObject}`);
+
+  configuration.configure(deepClone(configObject));
+
+  clustering.onMessage(sendLogEventToAppender);
+
+  enabled = true;
+
+  // eslint-disable-next-line no-use-before-define
+  return log4js;
+}
+
+function isConfigured() {
+  return enabled;
+}
+
+function recording() {
+  return recordingModule;
+}
+
+/**
+ * This callback type is called `shutdownCallback` and is displayed as a global symbol.
+ *
+ * @callback shutdownCallback
+ * @param {Error} [error]
+ */
+
+/**
+ * Shutdown all log appenders. This will first disable all writing to appenders
+ * and then call the shutdown function each appender.
+ *
+ * @param {shutdownCallback} [callback] - The callback to be invoked once all appenders have
+ *  shutdown. If an error occurs, the callback will be given the error object
+ *  as the first argument.
+ */
+function shutdown(callback = () => {}) {
+  if (typeof callback !== 'function') {
+    throw new TypeError('Invalid callback passed to shutdown');
+  }
+  debug('Shutdown called. Disabling all log writing.');
+  // First, disable all writing to appenders. This prevents appenders from
+  // not being able to be drained because of run-away log writes.
+  enabled = false;
+
+  // Clone out to maintain a reference
+  const appendersToCheck = Array.from(appenders.values());
+
+  // Reset immediately to prevent leaks
+  appenders.init();
+  categories.init();
+
+  // Count the number of shutdown functions
+  const shutdownFunctions = appendersToCheck.reduce(
+    (accum, next) => (next.shutdown ? accum + 1 : accum),
+    0
+  );
+  if (shutdownFunctions === 0) {
+    debug('No appenders with shutdown functions found.');
+    callback();
+  }
+
+  let completed = 0;
+  let error;
+  debug(`Found ${shutdownFunctions} appenders with shutdown functions.`);
+  function complete(err) {
+    error = error || err;
+    completed += 1;
+    debug(`Appender shutdowns complete: ${completed} / ${shutdownFunctions}`);
+    if (completed >= shutdownFunctions) {
+      debug('All shutdown functions completed.');
+      callback(error);
+    }
+  }
+
+  // Call each of the shutdown functions
+  appendersToCheck
+    .filter((a) => a.shutdown)
+    .forEach((a) => a.shutdown(complete));
+}
+
+/**
+ * Get a logger instance.
+ * @static
+ * @param {string} [category=default]
+ * @return {Logger} instance of logger for the category
+ */
+function getLogger(category) {
+  if (!enabled) {
+    configure(
+      process.env.LOG4JS_CONFIG || {
+        appenders: { out: { type: 'stdout' } },
+        categories: { default: { appenders: ['out'], level: 'OFF' } },
+      }
+    );
+  }
+  return new Logger(category || 'default');
+}
+
+/**
+ * @name log4js
+ * @namespace Log4js
+ * @property getLogger
+ * @property configure
+ * @property shutdown
+ */
+const log4js = {
+  getLogger,
+  configure,
+  isConfigured,
+  shutdown,
+  connectLogger,
+  levels,
+  addLayout: layouts.addLayout,
+  recording,
+};
+
+module.exports = log4js;
+
+
+/***/ }),
+
+/***/ 2949:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/* eslint no-underscore-dangle: ["error", { "allow": ["_log"] }] */
+
+const debug = __nccwpck_require__(2830)('log4js:logger');
+const LoggingEvent = __nccwpck_require__(2838);
+const levels = __nccwpck_require__(1630);
+const clustering = __nccwpck_require__(455);
+const categories = __nccwpck_require__(8185);
+const configuration = __nccwpck_require__(8507);
+
+const stackReg = /^(?:\s*)at (?:(.+) \()?(?:([^(]+?):(\d+):(\d+))\)?$/;
+/**
+ * The top entry is the Error
+ */
+const baseCallStackSkip = 1;
+/**
+ * The _log function is 3 levels deep, we need to skip those to make it to the callSite
+ */
+const defaultErrorCallStackSkip = 3;
+
+/**
+ *
+ * @param {Error} data
+ * @param {number} skipIdx
+ * @returns {import('../types/log4js').CallStack | null}
+ */
+function defaultParseCallStack(
+  data,
+  skipIdx = defaultErrorCallStackSkip + baseCallStackSkip
+) {
+  try {
+    const stacklines = data.stack.split('\n').slice(skipIdx);
+    if (!stacklines.length) {
+      // There's no stack in this stack
+      // Should we try a previous index if skipIdx was set?
+      return null;
+    }
+    const lineMatch = stackReg.exec(stacklines[0]);
+    /* istanbul ignore else: failsafe */
+    if (lineMatch && lineMatch.length === 5) {
+      // extract class, function and alias names
+      let className = '';
+      let functionName = '';
+      let functionAlias = '';
+      if (lineMatch[1] && lineMatch[1] !== '') {
+        // WARN: this will unset alias if alias is not present.
+        [functionName, functionAlias] = lineMatch[1]
+          .replace(/[[\]]/g, '')
+          .split(' as ');
+        functionAlias = functionAlias || '';
+
+        if (functionName.includes('.'))
+          [className, functionName] = functionName.split('.');
+      }
+
+      return {
+        fileName: lineMatch[2],
+        lineNumber: parseInt(lineMatch[3], 10),
+        columnNumber: parseInt(lineMatch[4], 10),
+        callStack: stacklines.join('\n'),
+        className,
+        functionName,
+        functionAlias,
+        callerName: lineMatch[1] || '',
+      };
+      // eslint-disable-next-line no-else-return
+    } else {
+      // will never get here unless nodejs has changes to Error
+      console.error('log4js.logger - defaultParseCallStack error'); // eslint-disable-line no-console
+    }
+  } catch (err) {
+    // will never get error unless nodejs has breaking changes to Error
+    console.error('log4js.logger - defaultParseCallStack error', err); // eslint-disable-line no-console
+  }
+  return null;
+}
+
+/**
+ * Logger to log messages.
+ * use {@see log4js#getLogger(String)} to get an instance.
+ *
+ * @name Logger
+ * @namespace Log4js
+ * @param name name of category to log to
+ * @param level - the loglevel for the category
+ * @param dispatch - the function which will receive the logevents
+ *
+ * @author Stephan Strittmatter
+ */
+class Logger {
+  constructor(name) {
+    if (!name) {
+      throw new Error('No category provided.');
+    }
+    this.category = name;
+    this.context = {};
+    /** @private */
+    this.callStackSkipIndex = 0;
+    /** @private */
+    this.parseCallStack = defaultParseCallStack;
+    debug(`Logger created (${this.category}, ${this.level})`);
+  }
+
+  get level() {
+    return levels.getLevel(
+      categories.getLevelForCategory(this.category),
+      levels.OFF
+    );
+  }
+
+  set level(level) {
+    categories.setLevelForCategory(
+      this.category,
+      levels.getLevel(level, this.level)
+    );
+  }
+
+  get useCallStack() {
+    return categories.getEnableCallStackForCategory(this.category);
+  }
+
+  set useCallStack(bool) {
+    categories.setEnableCallStackForCategory(this.category, bool === true);
+  }
+
+  get callStackLinesToSkip() {
+    return this.callStackSkipIndex;
+  }
+
+  set callStackLinesToSkip(number) {
+    if (typeof number !== 'number') {
+      throw new TypeError('Must be a number');
+    }
+    if (number < 0) {
+      throw new RangeError('Must be >= 0');
+    }
+    this.callStackSkipIndex = number;
+  }
+
+  log(level, ...args) {
+    const logLevel = levels.getLevel(level);
+    if (!logLevel) {
+      if (configuration.validIdentifier(level) && args.length > 0) {
+        // logLevel not found but of valid signature, WARN before fallback to INFO
+        this.log(
+          levels.WARN,
+          'log4js:logger.log: valid log-level not found as first parameter given:',
+          level
+        );
+        this.log(levels.INFO, `[${level}]`, ...args);
+      } else {
+        // apart from fallback, allow .log(...args) to be synonym with .log("INFO", ...args)
+        this.log(levels.INFO, level, ...args);
+      }
+    } else if (this.isLevelEnabled(logLevel)) {
+      this._log(logLevel, args);
+    }
+  }
+
+  isLevelEnabled(otherLevel) {
+    return this.level.isLessThanOrEqualTo(otherLevel);
+  }
+
+  _log(level, data) {
+    debug(`sending log data (${level}) to appenders`);
+    const error = data.find((item) => item instanceof Error);
+    let callStack;
+    if (this.useCallStack) {
+      try {
+        if (error) {
+          callStack = this.parseCallStack(
+            error,
+            this.callStackSkipIndex + baseCallStackSkip
+          );
+        }
+      } catch (_err) {
+        // Ignore Error and use the original method of creating a new Error.
+      }
+      callStack =
+        callStack ||
+        this.parseCallStack(
+          new Error(),
+          this.callStackSkipIndex +
+            defaultErrorCallStackSkip +
+            baseCallStackSkip
+        );
+    }
+    const loggingEvent = new LoggingEvent(
+      this.category,
+      level,
+      data,
+      this.context,
+      callStack,
+      error
+    );
+    clustering.send(loggingEvent);
+  }
+
+  addContext(key, value) {
+    this.context[key] = value;
+  }
+
+  removeContext(key) {
+    delete this.context[key];
+  }
+
+  clearContext() {
+    this.context = {};
+  }
+
+  setParseCallStackFunction(parseFunction) {
+    if (typeof parseFunction === 'function') {
+      this.parseCallStack = parseFunction;
+    } else if (typeof parseFunction === 'undefined') {
+      this.parseCallStack = defaultParseCallStack;
+    } else {
+      throw new TypeError('Invalid type passed to setParseCallStackFunction');
+    }
+  }
+}
+
+function addLevelMethods(target) {
+  const level = levels.getLevel(target);
+
+  const levelStrLower = level.toString().toLowerCase();
+  const levelMethod = levelStrLower.replace(/_([a-z])/g, (g) =>
+    g[1].toUpperCase()
+  );
+  const isLevelMethod = levelMethod[0].toUpperCase() + levelMethod.slice(1);
+
+  Logger.prototype[`is${isLevelMethod}Enabled`] = function () {
+    return this.isLevelEnabled(level);
+  };
+
+  Logger.prototype[levelMethod] = function (...args) {
+    this.log(level, ...args);
+  };
+}
+
+levels.levels.forEach(addLevelMethods);
+
+configuration.addListener(() => {
+  levels.levels.forEach(addLevelMethods);
+});
+
+module.exports = Logger;
 
 
 /***/ }),
@@ -17539,13 +41314,13 @@ exposeFormat('errors', function () { return __nccwpck_require__(5249); });
 exposeFormat('cli', function () { return __nccwpck_require__(6658); });
 exposeFormat('combine', function () { return __nccwpck_require__(8885); });
 exposeFormat('colorize', function () { return __nccwpck_require__(5085); });
-exposeFormat('json', function () { return __nccwpck_require__(7864); });
+exposeFormat('json', function () { return __nccwpck_require__(5483); });
 exposeFormat('label', function () { return __nccwpck_require__(654); });
 exposeFormat('logstash', function () { return __nccwpck_require__(5574); });
 exposeFormat('metadata', function () { return __nccwpck_require__(7847); });
 exposeFormat('ms', function () { return __nccwpck_require__(2786); });
 exposeFormat('padLevels', function () { return __nccwpck_require__(5925); });
-exposeFormat('prettyPrint', function () { return __nccwpck_require__(1364); });
+exposeFormat('prettyPrint', function () { return __nccwpck_require__(8983); });
 exposeFormat('printf', function () { return __nccwpck_require__(9333); });
 exposeFormat('simple', function () { return __nccwpck_require__(2740); });
 exposeFormat('splat', function () { return __nccwpck_require__(520); });
@@ -17555,7 +41330,7 @@ exposeFormat('uncolorize', function () { return __nccwpck_require__(8054); });
 
 /***/ }),
 
-/***/ 7864:
+/***/ 5483:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -18638,7 +42413,7 @@ module.exports.Padder
 
 /***/ }),
 
-/***/ 1364:
+/***/ 8983:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -22468,6 +46243,212 @@ if (process.env.READABLE_STREAM === 'disable' && Stream) {
 
 /***/ }),
 
+/***/ 8825:
+/***/ ((module) => {
+
+"use strict";
+
+module.exports = rfdc
+
+function copyBuffer (cur) {
+  if (cur instanceof Buffer) {
+    return Buffer.from(cur)
+  }
+
+  return new cur.constructor(cur.buffer.slice(), cur.byteOffset, cur.length)
+}
+
+function rfdc (opts) {
+  opts = opts || {}
+  if (opts.circles) return rfdcCircles(opts)
+
+  const constructorHandlers = new Map()
+  constructorHandlers.set(Date, (o) => new Date(o))
+  constructorHandlers.set(Map, (o, fn) => new Map(cloneArray(Array.from(o), fn)))
+  constructorHandlers.set(Set, (o, fn) => new Set(cloneArray(Array.from(o), fn)))
+  if (opts.constructorHandlers) {
+    for (const handler of opts.constructorHandlers) {
+      constructorHandlers.set(handler[0], handler[1])
+    }
+  }
+
+  let handler = null
+
+  return opts.proto ? cloneProto : clone
+
+  function cloneArray (a, fn) {
+    const keys = Object.keys(a)
+    const a2 = new Array(keys.length)
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i]
+      const cur = a[k]
+      if (typeof cur !== 'object' || cur === null) {
+        a2[k] = cur
+      } else if (cur.constructor !== Object && (handler = constructorHandlers.get(cur.constructor))) {
+        a2[k] = handler(cur, fn)
+      } else if (ArrayBuffer.isView(cur)) {
+        a2[k] = copyBuffer(cur)
+      } else {
+        a2[k] = fn(cur)
+      }
+    }
+    return a2
+  }
+
+  function clone (o) {
+    if (typeof o !== 'object' || o === null) return o
+    if (Array.isArray(o)) return cloneArray(o, clone)
+    if (o.constructor !== Object && (handler = constructorHandlers.get(o.constructor))) {
+      return handler(o, clone)
+    }
+    const o2 = {}
+    for (const k in o) {
+      if (Object.hasOwnProperty.call(o, k) === false) continue
+      const cur = o[k]
+      if (typeof cur !== 'object' || cur === null) {
+        o2[k] = cur
+      } else if (cur.constructor !== Object && (handler = constructorHandlers.get(cur.constructor))) {
+        o2[k] = handler(cur, clone)
+      } else if (ArrayBuffer.isView(cur)) {
+        o2[k] = copyBuffer(cur)
+      } else {
+        o2[k] = clone(cur)
+      }
+    }
+    return o2
+  }
+
+  function cloneProto (o) {
+    if (typeof o !== 'object' || o === null) return o
+    if (Array.isArray(o)) return cloneArray(o, cloneProto)
+    if (o.constructor !== Object && (handler = constructorHandlers.get(o.constructor))) {
+      return handler(o, cloneProto)
+    }
+    const o2 = {}
+    for (const k in o) {
+      const cur = o[k]
+      if (typeof cur !== 'object' || cur === null) {
+        o2[k] = cur
+      } else if (cur.constructor !== Object && (handler = constructorHandlers.get(cur.constructor))) {
+        o2[k] = handler(cur, cloneProto)
+      } else if (ArrayBuffer.isView(cur)) {
+        o2[k] = copyBuffer(cur)
+      } else {
+        o2[k] = cloneProto(cur)
+      }
+    }
+    return o2
+  }
+}
+
+function rfdcCircles (opts) {
+  const refs = []
+  const refsNew = []
+
+  const constructorHandlers = new Map()
+  constructorHandlers.set(Date, (o) => new Date(o))
+  constructorHandlers.set(Map, (o, fn) => new Map(cloneArray(Array.from(o), fn)))
+  constructorHandlers.set(Set, (o, fn) => new Set(cloneArray(Array.from(o), fn)))
+  if (opts.constructorHandlers) {
+    for (const handler of opts.constructorHandlers) {
+      constructorHandlers.set(handler[0], handler[1])
+    }
+  }
+
+  let handler = null
+  return opts.proto ? cloneProto : clone
+
+  function cloneArray (a, fn) {
+    const keys = Object.keys(a)
+    const a2 = new Array(keys.length)
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i]
+      const cur = a[k]
+      if (typeof cur !== 'object' || cur === null) {
+        a2[k] = cur
+      } else if (cur.constructor !== Object && (handler = constructorHandlers.get(cur.constructor))) {
+        a2[k] = handler(cur, fn)
+      } else if (ArrayBuffer.isView(cur)) {
+        a2[k] = copyBuffer(cur)
+      } else {
+        const index = refs.indexOf(cur)
+        if (index !== -1) {
+          a2[k] = refsNew[index]
+        } else {
+          a2[k] = fn(cur)
+        }
+      }
+    }
+    return a2
+  }
+
+  function clone (o) {
+    if (typeof o !== 'object' || o === null) return o
+    if (Array.isArray(o)) return cloneArray(o, clone)
+    if (o.constructor !== Object && (handler = constructorHandlers.get(o.constructor))) {
+      return handler(o, clone)
+    }
+    const o2 = {}
+    refs.push(o)
+    refsNew.push(o2)
+    for (const k in o) {
+      if (Object.hasOwnProperty.call(o, k) === false) continue
+      const cur = o[k]
+      if (typeof cur !== 'object' || cur === null) {
+        o2[k] = cur
+      } else if (cur.constructor !== Object && (handler = constructorHandlers.get(cur.constructor))) {
+        o2[k] = handler(cur, clone)
+      } else if (ArrayBuffer.isView(cur)) {
+        o2[k] = copyBuffer(cur)
+      } else {
+        const i = refs.indexOf(cur)
+        if (i !== -1) {
+          o2[k] = refsNew[i]
+        } else {
+          o2[k] = clone(cur)
+        }
+      }
+    }
+    refs.pop()
+    refsNew.pop()
+    return o2
+  }
+
+  function cloneProto (o) {
+    if (typeof o !== 'object' || o === null) return o
+    if (Array.isArray(o)) return cloneArray(o, cloneProto)
+    if (o.constructor !== Object && (handler = constructorHandlers.get(o.constructor))) {
+      return handler(o, cloneProto)
+    }
+    const o2 = {}
+    refs.push(o)
+    refsNew.push(o2)
+    for (const k in o) {
+      const cur = o[k]
+      if (typeof cur !== 'object' || cur === null) {
+        o2[k] = cur
+      } else if (cur.constructor !== Object && (handler = constructorHandlers.get(cur.constructor))) {
+        o2[k] = handler(cur, cloneProto)
+      } else if (ArrayBuffer.isView(cur)) {
+        o2[k] = copyBuffer(cur)
+      } else {
+        const i = refs.indexOf(cur)
+        if (i !== -1) {
+          o2[k] = refsNew[i]
+        } else {
+          o2[k] = cloneProto(cur)
+        }
+      }
+    }
+    refs.pop()
+    refsNew.pop()
+    return o2
+  }
+}
+
+
+/***/ }),
+
 /***/ 3058:
 /***/ ((module, exports, __nccwpck_require__) => {
 
@@ -23316,6 +47297,718 @@ exports._createParsedCallSite = function(properties) {
 
 /***/ }),
 
+/***/ 4431:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const RollingFileWriteStream = __nccwpck_require__(440);
+
+// just to adapt the previous version
+class DateRollingFileStream extends RollingFileWriteStream {
+  constructor(filename, pattern, options) {
+    if (pattern && typeof(pattern) === 'object') {
+      options = pattern;
+      pattern = null;
+    }
+    if (!options) {
+      options = {};
+    }
+    if (!pattern) {
+      pattern = 'yyyy-MM-dd';
+    }
+    options.pattern = pattern;
+    if (!options.numBackups && options.numBackups !== 0) {
+      if (!options.daysToKeep && options.daysToKeep !== 0) {
+        options.daysToKeep = 1;
+      } else {
+        process.emitWarning(
+          "options.daysToKeep is deprecated due to the confusion it causes when used " + 
+          "together with file size rolling. Please use options.numBackups instead.",
+          "DeprecationWarning", "streamroller-DEP0001"
+        );
+      }
+      options.numBackups = options.daysToKeep;
+    } else {
+      options.daysToKeep = options.numBackups;
+    }
+    super(filename, options);
+    this.mode = this.options.mode;
+  }
+
+  get theStream() {
+    return this.currentFileStream;
+  }
+
+}
+
+module.exports = DateRollingFileStream;
+
+
+/***/ }),
+
+/***/ 1723:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const RollingFileWriteStream = __nccwpck_require__(440);
+
+// just to adapt the previous version
+class RollingFileStream extends RollingFileWriteStream {
+  constructor(filename, size, backups, options) {
+    if (!options) {
+      options = {};
+    }
+    if (size) {
+      options.maxSize = size;
+    }
+    if (!options.numBackups && options.numBackups !== 0) {
+      if (!backups && backups !== 0) {
+        backups = 1;
+      }
+      options.numBackups = backups;
+    }
+    super(filename, options);
+    this.backups = options.numBackups;
+    this.size = this.options.maxSize;
+  }
+
+  get theStream() {
+    return this.currentFileStream;
+  }
+
+}
+
+module.exports = RollingFileStream;
+
+
+/***/ }),
+
+/***/ 440:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)("streamroller:RollingFileWriteStream");
+const fs = __nccwpck_require__(2136);
+const path = __nccwpck_require__(6928);
+const os = __nccwpck_require__(857);
+const newNow = __nccwpck_require__(9548);
+const format = __nccwpck_require__(876);
+const { Writable } = __nccwpck_require__(2203);
+const fileNameFormatter = __nccwpck_require__(4873);
+const fileNameParser = __nccwpck_require__(332);
+const moveAndMaybeCompressFile = __nccwpck_require__(8162);
+
+const deleteFiles = fileNames => {
+  debug(`deleteFiles: files to delete: ${fileNames}`);
+  return Promise.all(fileNames.map(f => fs.unlink(f).catch((e) => {
+    debug(`deleteFiles: error when unlinking ${f}, ignoring. Error was ${e}`);
+  })));
+};
+
+/**
+ * RollingFileWriteStream is mainly used when writing to a file rolling by date or size.
+ * RollingFileWriteStream inherits from stream.Writable
+ */
+class RollingFileWriteStream extends Writable {
+  /**
+   * Create a RollingFileWriteStream
+   * @constructor
+   * @param {string} filePath - The file path to write.
+   * @param {object} options - The extra options
+   * @param {number} options.numToKeep - The max numbers of files to keep.
+   * @param {number} options.maxSize - The maxSize one file can reach. Unit is Byte.
+   *                                   This should be more than 1024. The default is 0.
+   *                                   If not specified or 0, then no log rolling will happen.
+   * @param {string} options.mode - The mode of the files. The default is '0600'. Refer to stream.writable for more.
+   * @param {string} options.flags - The default is 'a'. Refer to stream.flags for more.
+   * @param {boolean} options.compress - Whether to compress backup files.
+   * @param {boolean} options.keepFileExt - Whether to keep the file extension.
+   * @param {string} options.pattern - The date string pattern in the file name.
+   * @param {boolean} options.alwaysIncludePattern - Whether to add date to the name of the first file.
+   */
+  constructor(filePath, options) {
+    debug(`constructor: creating RollingFileWriteStream. path=${filePath}`);
+    if (typeof filePath !== "string" || filePath.length === 0) {
+      throw new Error(`Invalid filename: ${filePath}`);
+    } else if (filePath.endsWith(path.sep)) {
+      throw new Error(`Filename is a directory: ${filePath}`);
+    } else if (filePath.indexOf(`~${path.sep}`) === 0) {
+      // handle ~ expansion: https://github.com/nodejs/node/issues/684
+      // exclude ~ and ~filename as these can be valid files
+      filePath = filePath.replace("~", os.homedir());
+    }
+    super(options);
+    this.options = this._parseOption(options);
+    this.fileObject = path.parse(filePath);
+    if (this.fileObject.dir === "") {
+      this.fileObject = path.parse(path.join(process.cwd(), filePath));
+    }
+    this.fileFormatter = fileNameFormatter({
+      file: this.fileObject,
+      alwaysIncludeDate: this.options.alwaysIncludePattern,
+      needsIndex: this.options.maxSize < Number.MAX_SAFE_INTEGER,
+      compress: this.options.compress,
+      keepFileExt: this.options.keepFileExt,
+      fileNameSep: this.options.fileNameSep
+    });
+
+    this.fileNameParser = fileNameParser({
+      file: this.fileObject,
+      keepFileExt: this.options.keepFileExt,
+      pattern: this.options.pattern,
+      fileNameSep: this.options.fileNameSep
+    });
+
+    this.state = {
+      currentSize: 0
+    };
+
+    if (this.options.pattern) {
+      this.state.currentDate = format(this.options.pattern, newNow());
+    }
+
+    this.filename = this.fileFormatter({
+      index: 0,
+      date: this.state.currentDate
+    });
+    if (["a", "a+", "as", "as+"].includes(this.options.flags)) {
+      this._setExistingSizeAndDate();
+    }
+
+    debug(
+      `constructor: create new file ${this.filename}, state=${JSON.stringify(
+        this.state
+      )}`
+    );
+    this._renewWriteStream();
+  }
+
+  _setExistingSizeAndDate() {
+    try {
+      const stats = fs.statSync(this.filename);
+      this.state.currentSize = stats.size;
+      if (this.options.pattern) {
+        this.state.currentDate = format(this.options.pattern, stats.mtime);
+      }
+    } catch (e) {
+      //file does not exist, that's fine - move along
+      return;
+    }
+  }
+
+  _parseOption(rawOptions) {
+    const defaultOptions = {
+      maxSize: 0,
+      numToKeep: Number.MAX_SAFE_INTEGER,
+      encoding: "utf8",
+      mode: parseInt("0600", 8),
+      flags: "a",
+      compress: false,
+      keepFileExt: false,
+      alwaysIncludePattern: false
+    };
+    const options = Object.assign({}, defaultOptions, rawOptions);
+    if (!options.maxSize) {
+      delete options.maxSize;
+    } else if (options.maxSize <= 0) {
+      throw new Error(`options.maxSize (${options.maxSize}) should be > 0`);
+    }
+    // options.numBackups will supercede options.numToKeep
+    if (options.numBackups || options.numBackups === 0) {
+      if (options.numBackups < 0) {
+        throw new Error(`options.numBackups (${options.numBackups}) should be >= 0`);
+      } else if (options.numBackups >= Number.MAX_SAFE_INTEGER) {
+        // to cater for numToKeep (include the hot file) at Number.MAX_SAFE_INTEGER
+        throw new Error(`options.numBackups (${options.numBackups}) should be < Number.MAX_SAFE_INTEGER`);
+      } else {
+        options.numToKeep = options.numBackups + 1;
+      }
+    } else if (options.numToKeep <= 0) {
+      throw new Error(`options.numToKeep (${options.numToKeep}) should be > 0`);
+    }
+    debug(
+      `_parseOption: creating stream with option=${JSON.stringify(options)}`
+    );
+    return options;
+  }
+
+  _final(callback) {
+    this.currentFileStream.end("", this.options.encoding, callback);
+  }
+
+  _write(chunk, encoding, callback) {
+    this._shouldRoll().then(() => {
+      debug(
+        `_write: writing chunk. ` +
+          `file=${this.currentFileStream.path} ` +
+          `state=${JSON.stringify(this.state)} ` +
+          `chunk=${chunk}`
+      );
+      this.currentFileStream.write(chunk, encoding, e => {
+        this.state.currentSize += chunk.length;
+        callback(e);
+      });
+    });
+  }
+
+  async _shouldRoll() {
+    if (this._dateChanged() || this._tooBig()) {
+      debug(
+        `_shouldRoll: rolling because dateChanged? ${this._dateChanged()} or tooBig? ${this._tooBig()}`
+      );
+      await this._roll();
+    }
+  }
+
+  _dateChanged() {
+    return (
+      this.state.currentDate &&
+      this.state.currentDate !== format(this.options.pattern, newNow())
+    );
+  }
+
+  _tooBig() {
+    return this.state.currentSize >= this.options.maxSize;
+  }
+
+  _roll() {
+    debug(`_roll: closing the current stream`);
+    return new Promise((resolve, reject) => {
+      this.currentFileStream.end("", this.options.encoding, () => {
+        this._moveOldFiles()
+          .then(resolve)
+          .catch(reject);
+      });
+    });
+  }
+
+  async _moveOldFiles() {
+    const files = await this._getExistingFiles();
+    const todaysFiles = this.state.currentDate
+      ? files.filter(f => f.date === this.state.currentDate)
+      : files;
+    for (let i = todaysFiles.length; i >= 0; i--) {
+      debug(`_moveOldFiles: i = ${i}`);
+      const sourceFilePath = this.fileFormatter({
+        date: this.state.currentDate,
+        index: i
+      });
+      const targetFilePath = this.fileFormatter({
+        date: this.state.currentDate,
+        index: i + 1
+      });
+
+      const moveAndCompressOptions = {
+        compress: this.options.compress && i === 0,
+        mode: this.options.mode
+      };
+      await moveAndMaybeCompressFile(
+        sourceFilePath,
+        targetFilePath,
+        moveAndCompressOptions
+      );
+    }
+
+    this.state.currentSize = 0;
+    this.state.currentDate = this.state.currentDate
+      ? format(this.options.pattern, newNow())
+      : null;
+    debug(
+      `_moveOldFiles: finished rolling files. state=${JSON.stringify(
+        this.state
+      )}`
+    );
+    this._renewWriteStream();
+    // wait for the file to be open before cleaning up old ones,
+    // otherwise the daysToKeep calculations can be off
+    await new Promise((resolve, reject) => {
+      this.currentFileStream.write("", "utf8", () => {
+        this._clean()
+          .then(resolve)
+          .catch(reject);
+      });
+    });
+  }
+
+  // Sorted from the oldest to the latest
+  async _getExistingFiles() {
+    const files = await fs.readdir(this.fileObject.dir)
+      .catch( /* istanbul ignore next: will not happen on windows */ () => []);
+
+    debug(`_getExistingFiles: files=${files}`);
+    const existingFileDetails = files
+      .map(n => this.fileNameParser(n))
+      .filter(n => n);
+
+    const getKey = n =>
+      (n.timestamp ? n.timestamp : newNow().getTime()) - n.index;
+    existingFileDetails.sort((a, b) => getKey(a) - getKey(b));
+
+    return existingFileDetails;
+  }
+
+  _renewWriteStream() {
+    const filePath = this.fileFormatter({
+      date: this.state.currentDate,
+      index: 0
+    });
+
+    // attempt to create the directory
+    const mkdir = (dir) => {
+      try {
+        return fs.mkdirSync(dir, { recursive: true });
+      }
+      // backward-compatible fs.mkdirSync for nodejs pre-10.12.0 (without recursive option)
+      catch (e) {
+        // recursive creation of parent first
+        if (e.code === "ENOENT") {
+          mkdir(path.dirname(dir));
+          return mkdir(dir);
+        }
+
+        // throw error for all except EEXIST and EROFS (read-only filesystem)
+        if (e.code !== "EEXIST" && e.code !== "EROFS") {
+          throw e;
+        }
+
+        // EEXIST: throw if file and not directory
+        // EROFS : throw if directory not found
+        else {
+          try {
+            if (fs.statSync(dir).isDirectory()) {
+              return dir;
+            }
+            throw e;
+          } catch (err) {
+            throw e;
+          }
+        }
+      }
+    };
+    mkdir(this.fileObject.dir);
+
+    const ops = {
+      flags: this.options.flags,
+      encoding: this.options.encoding,
+      mode: this.options.mode
+    };
+    const renameKey = function(obj, oldKey, newKey) {
+      obj[newKey] = obj[oldKey];
+      delete obj[oldKey];
+      return obj;
+    };
+    // try to throw EISDIR, EROFS, EACCES
+    fs.appendFileSync(filePath, "", renameKey({ ...ops }, "flags", "flag"));
+    this.currentFileStream = fs.createWriteStream(filePath, ops);
+    this.currentFileStream.on("error", e => {
+      this.emit("error", e);
+    });
+  }
+
+  async _clean() {
+    const existingFileDetails = await this._getExistingFiles();
+    debug(
+      `_clean: numToKeep = ${this.options.numToKeep}, existingFiles = ${existingFileDetails.length}`
+    );
+    debug("_clean: existing files are: ", existingFileDetails);
+    if (this._tooManyFiles(existingFileDetails.length)) {
+      const fileNamesToRemove = existingFileDetails
+        .slice(0, existingFileDetails.length - this.options.numToKeep)
+        .map(f => path.format({ dir: this.fileObject.dir, base: f.filename }));
+      await deleteFiles(fileNamesToRemove);
+    }
+  }
+
+  _tooManyFiles(numFiles) {
+    return this.options.numToKeep > 0 && numFiles > this.options.numToKeep;
+  }
+}
+
+module.exports = RollingFileWriteStream;
+
+
+/***/ }),
+
+/***/ 4873:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)("streamroller:fileNameFormatter");
+const path = __nccwpck_require__(6928);
+const ZIP_EXT = ".gz";
+const DEFAULT_FILENAME_SEP = ".";
+
+module.exports = ({
+  file,
+  keepFileExt,
+  needsIndex,
+  alwaysIncludeDate,
+  compress,
+  fileNameSep
+}) => {
+  let FILENAME_SEP = fileNameSep || DEFAULT_FILENAME_SEP;
+  const dirAndName = path.join(file.dir, file.name);
+
+  const ext = f => f + file.ext;
+
+  const index = (f, i, d) =>
+    (needsIndex || !d) && i ? f + FILENAME_SEP + i : f;
+
+  const date = (f, i, d) => {
+    return (i > 0 || alwaysIncludeDate) && d ? f + FILENAME_SEP + d : f;
+  };
+
+  const gzip = (f, i) => (i && compress ? f + ZIP_EXT : f);
+
+  const parts = keepFileExt
+    ? [date, index, ext, gzip]
+    : [ext, date, index, gzip];
+
+  return ({ date, index }) => {
+    debug(`_formatFileName: date=${date}, index=${index}`);
+    return parts.reduce(
+      (filename, part) => part(filename, index, date),
+      dirAndName
+    );
+  };
+};
+
+
+/***/ }),
+
+/***/ 332:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)("streamroller:fileNameParser");
+const ZIP_EXT = ".gz";
+const format = __nccwpck_require__(876);
+const DEFAULT_FILENAME_SEP = ".";
+
+module.exports = ({ file, keepFileExt, pattern, fileNameSep }) => {
+  let FILENAME_SEP = fileNameSep || DEFAULT_FILENAME_SEP;
+  // All these functions take two arguments: f, the filename, and p, the result placeholder
+  // They return the filename with any matching parts removed.
+  // The "zip" function, for instance, removes the ".gz" part of the filename (if present)
+  const zip = (f, p) => {
+    if (f.endsWith(ZIP_EXT)) {
+      debug("it is gzipped");
+      p.isCompressed = true;
+      return f.slice(0, -1 * ZIP_EXT.length);
+    }
+    return f;
+  };
+
+  const __NOT_MATCHING__ = "__NOT_MATCHING__";
+
+  const extAtEnd = f => {
+    if (f.startsWith(file.name) && f.endsWith(file.ext)) {
+      debug("it starts and ends with the right things");
+      return f.slice(file.name.length + 1, -1 * file.ext.length);
+    }
+    return __NOT_MATCHING__;
+  };
+
+  const extInMiddle = f => {
+    if (f.startsWith(file.base)) {
+      debug("it starts with the right things");
+      return f.slice(file.base.length + 1);
+    }
+    return __NOT_MATCHING__;
+  };
+
+  const dateAndIndex = (f, p) => {
+    const items = f.split(FILENAME_SEP);
+    let indexStr = items[items.length - 1];
+    debug("items: ", items, ", indexStr: ", indexStr);
+    let dateStr = f;
+    if (indexStr !== undefined && indexStr.match(/^\d+$/)) {
+      dateStr = f.slice(0, -1 * (indexStr.length + 1));
+      debug(`dateStr is ${dateStr}`);
+      if (pattern && !dateStr) {
+        dateStr = indexStr;
+        indexStr = "0";
+      }
+    } else {
+      indexStr = "0";
+    }
+
+    try {
+      // Two arguments for new Date() are intentional. This will set other date
+      // components to minimal values in the current timezone instead of UTC,
+      // as new Date(0) will do.
+      const date = format.parse(pattern, dateStr, new Date(0, 0));
+      if (format.asString(pattern, date) !== dateStr) return f;
+      p.index = parseInt(indexStr, 10);
+      p.date = dateStr;
+      p.timestamp = date.getTime();
+      return "";
+    } catch (e) {
+      //not a valid date, don't panic.
+      debug(`Problem parsing ${dateStr} as ${pattern}, error was: `, e);
+      return f;
+    }
+  };
+
+  const index = (f, p) => {
+    if (f.match(/^\d+$/)) {
+      debug("it has an index");
+      p.index = parseInt(f, 10);
+      return "";
+    }
+    return f;
+  };
+
+  let parts = [
+    zip,
+    keepFileExt ? extAtEnd : extInMiddle,
+    pattern ? dateAndIndex : index
+  ];
+
+  return filename => {
+    let result = { filename, index: 0, isCompressed: false };
+    // pass the filename through each of the file part parsers
+    let whatsLeftOver = parts.reduce(
+      (remains, part) => part(remains, result),
+      filename
+    );
+    // if there's anything left after parsing, then it wasn't a valid filename
+    return whatsLeftOver ? null : result;
+  };
+};
+
+
+/***/ }),
+
+/***/ 248:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+module.exports = {
+  RollingFileWriteStream: __nccwpck_require__(440),
+  RollingFileStream: __nccwpck_require__(1723),
+  DateRollingFileStream: __nccwpck_require__(4431)
+};
+
+
+/***/ }),
+
+/***/ 8162:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const debug = __nccwpck_require__(2830)('streamroller:moveAndMaybeCompressFile');
+const fs = __nccwpck_require__(2136);
+const zlib = __nccwpck_require__(3106);
+
+const _parseOption = function(rawOptions){
+  const defaultOptions = {
+    mode: parseInt("0600", 8),
+    compress: false,
+  };
+  const options = Object.assign({}, defaultOptions, rawOptions);
+  debug(`_parseOption: moveAndMaybeCompressFile called with option=${JSON.stringify(options)}`);
+  return options;
+};
+
+const moveAndMaybeCompressFile = async (
+  sourceFilePath,
+  targetFilePath,
+  options
+) => {
+  options = _parseOption(options);
+
+  if (sourceFilePath === targetFilePath) {
+    debug(`moveAndMaybeCompressFile: source and target are the same, not doing anything`);
+    return;
+  }
+
+  if (await fs.pathExists(sourceFilePath)) {
+    debug(
+      `moveAndMaybeCompressFile: moving file from ${sourceFilePath} to ${targetFilePath} ${
+        options.compress ? "with" : "without"
+      } compress`
+    );
+    if (options.compress) {
+      await new Promise((resolve, reject) => {
+        let isCreated = false;
+        // to avoid concurrency, the forked process which can create the file will proceed (using flags wx)
+        const writeStream = fs.createWriteStream(targetFilePath, { mode: options.mode, flags: "wx" })
+          // wait until writable stream is valid before proceeding to read
+          .on("open", () => {
+            isCreated = true;
+            const readStream = fs.createReadStream(sourceFilePath)
+              // wait until readable stream is valid before piping
+              .on("open", () => {
+                readStream.pipe(zlib.createGzip()).pipe(writeStream);
+              })
+              .on("error", (e) => {
+                debug(`moveAndMaybeCompressFile: error reading ${sourceFilePath}`, e);
+                // manually close writable: https://nodejs.org/api/stream.html#readablepipedestination-options
+                writeStream.destroy(e);
+              });
+          })
+          .on("finish", () => {
+            debug(`moveAndMaybeCompressFile: finished compressing ${targetFilePath}, deleting ${sourceFilePath}`);
+            // delete sourceFilePath
+            fs.unlink(sourceFilePath)
+              .then(resolve)
+              .catch((e) => {
+                debug(`moveAndMaybeCompressFile: error deleting ${sourceFilePath}, truncating instead`, e);
+                // fallback to truncate
+                fs.truncate(sourceFilePath)
+                  .then(resolve)
+                  .catch((e) => {
+                    debug(`moveAndMaybeCompressFile: error truncating ${sourceFilePath}`, e);
+                    reject(e);
+                  });
+              });
+          })
+          .on("error", (e) => {
+            if (!isCreated) {
+              debug(`moveAndMaybeCompressFile: error creating ${targetFilePath}`, e);
+              // do not do anything if handled by another forked process
+              reject(e);
+            } else {
+              debug(`moveAndMaybeCompressFile: error writing ${targetFilePath}, deleting`, e);
+              // delete targetFilePath (taking as nothing happened)
+              fs.unlink(targetFilePath)
+                .then(() => { reject(e); })
+                .catch((e) => {
+                  debug(`moveAndMaybeCompressFile: error deleting ${targetFilePath}`, e);
+                  reject(e);
+                });
+            }
+          });
+      }).catch(() => {});
+    } else {
+      debug(`moveAndMaybeCompressFile: renaming ${sourceFilePath} to ${targetFilePath}`);
+      try {
+        await fs.move(sourceFilePath, targetFilePath, { overwrite: true });
+      } catch (e) {
+        debug(`moveAndMaybeCompressFile: error renaming ${sourceFilePath} to ${targetFilePath}`, e);
+        /* istanbul ignore else: no need to do anything if file does not exist */
+        if (e.code !== "ENOENT") {
+          debug(`moveAndMaybeCompressFile: trying copy+truncate instead`);
+          try {
+            await fs.copy(sourceFilePath, targetFilePath, { overwrite: true });
+            await fs.truncate(sourceFilePath);
+          } catch (e) {
+            debug(`moveAndMaybeCompressFile: error copy+truncate`, e);
+          }
+        }
+      }
+    }
+  }
+};
+
+module.exports = moveAndMaybeCompressFile;
+
+
+/***/ }),
+
+/***/ 9548:
+/***/ ((module) => {
+
+// allows us to inject a mock date in tests
+module.exports = () => new Date();
+
+
+/***/ }),
+
 /***/ 634:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -23616,6 +48309,123 @@ function simpleWrite(buf) {
 function simpleEnd(buf) {
   return buf && buf.length ? this.write(buf) : '';
 }
+
+/***/ }),
+
+/***/ 6496:
+/***/ ((module) => {
+
+const hexRegex = /^[-+]?0x[a-fA-F0-9]+$/;
+const numRegex = /^([\-\+])?(0*)([0-9]*(\.[0-9]*)?)$/;
+// const octRegex = /^0x[a-z0-9]+/;
+// const binRegex = /0x[a-z0-9]+/;
+
+ 
+const consider = {
+    hex :  true,
+    // oct: false,
+    leadingZeros: true,
+    decimalPoint: "\.",
+    eNotation: true,
+    //skipLike: /regex/
+};
+
+function toNumber(str, options = {}){
+    options = Object.assign({}, consider, options );
+    if(!str || typeof str !== "string" ) return str;
+    
+    let trimmedStr  = str.trim();
+    
+    if(options.skipLike !== undefined && options.skipLike.test(trimmedStr)) return str;
+    else if(str==="0") return 0;
+    else if (options.hex && hexRegex.test(trimmedStr)) {
+        return parse_int(trimmedStr, 16);
+    // }else if (options.oct && octRegex.test(str)) {
+    //     return Number.parseInt(val, 8);
+    }else if (trimmedStr.search(/[eE]/)!== -1) { //eNotation
+        const notation = trimmedStr.match(/^([-\+])?(0*)([0-9]*(\.[0-9]*)?[eE][-\+]?[0-9]+)$/); 
+        // +00.123 => [ , '+', '00', '.123', ..
+        if(notation){
+            // console.log(notation)
+            if(options.leadingZeros){ //accept with leading zeros
+                trimmedStr = (notation[1] || "") + notation[3];
+            }else{
+                if(notation[2] === "0" && notation[3][0]=== "."){ //valid number
+                }else{
+                    return str;
+                }
+            }
+            return options.eNotation ? Number(trimmedStr) : str;
+        }else{
+            return str;
+        }
+    // }else if (options.parseBin && binRegex.test(str)) {
+    //     return Number.parseInt(val, 2);
+    }else{
+        //separate negative sign, leading zeros, and rest number
+        const match = numRegex.exec(trimmedStr);
+        // +00.123 => [ , '+', '00', '.123', ..
+        if(match){
+            const sign = match[1];
+            const leadingZeros = match[2];
+            let numTrimmedByZeros = trimZeros(match[3]); //complete num without leading zeros
+            //trim ending zeros for floating number
+            
+            if(!options.leadingZeros && leadingZeros.length > 0 && sign && trimmedStr[2] !== ".") return str; //-0123
+            else if(!options.leadingZeros && leadingZeros.length > 0 && !sign && trimmedStr[1] !== ".") return str; //0123
+            else if(options.leadingZeros && leadingZeros===str) return 0; //00
+            
+            else{//no leading zeros or leading zeros are allowed
+                const num = Number(trimmedStr);
+                const numStr = "" + num;
+
+                if(numStr.search(/[eE]/) !== -1){ //given number is long and parsed to eNotation
+                    if(options.eNotation) return num;
+                    else return str;
+                }else if(trimmedStr.indexOf(".") !== -1){ //floating number
+                    if(numStr === "0" && (numTrimmedByZeros === "") ) return num; //0.0
+                    else if(numStr === numTrimmedByZeros) return num; //0.456. 0.79000
+                    else if( sign && numStr === "-"+numTrimmedByZeros) return num;
+                    else return str;
+                }
+                
+                if(leadingZeros){
+                    return (numTrimmedByZeros === numStr) || (sign+numTrimmedByZeros === numStr) ? num : str
+                }else  {
+                    return (trimmedStr === numStr) || (trimmedStr === sign+numStr) ? num : str
+                }
+            }
+        }else{ //non-numeric string
+            return str;
+        }
+    }
+}
+
+/**
+ * 
+ * @param {string} numStr without leading zeros
+ * @returns 
+ */
+function trimZeros(numStr){
+    if(numStr && numStr.indexOf(".") !== -1){//float
+        numStr = numStr.replace(/0+$/, ""); //remove ending zeros
+        if(numStr === ".")  numStr = "0";
+        else if(numStr[0] === ".")  numStr = "0"+numStr;
+        else if(numStr[numStr.length-1] === ".")  numStr = numStr.substr(0,numStr.length-1);
+        return numStr;
+    }
+    return numStr;
+}
+
+function parse_int(numStr, base){
+    //polyfill
+    if(parseInt) return parseInt(numStr, base);
+    else if(Number.parseInt) return Number.parseInt(numStr, base);
+    else if(window && window.parseInt) return window.parseInt(numStr, base);
+    else throw new Error("parseInt, Number.parseInt, window.parseInt are not supported")
+}
+
+module.exports = toNumber;
 
 /***/ }),
 
@@ -46444,6 +71254,39 @@ module.exports = {
 
 /***/ }),
 
+/***/ 5077:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+
+exports.S = function (fn) {
+  return Object.defineProperty(function () {
+    if (typeof arguments[arguments.length - 1] === 'function') fn.apply(this, arguments)
+    else {
+      return new Promise((resolve, reject) => {
+        arguments[arguments.length] = (err, res) => {
+          if (err) return reject(err)
+          resolve(res)
+        }
+        arguments.length++
+        fn.apply(this, arguments)
+      })
+    }
+  }, 'name', { value: fn.name })
+}
+
+exports.z = function (fn) {
+  return Object.defineProperty(function () {
+    const cb = arguments[arguments.length - 1]
+    if (typeof cb !== 'function') return fn.apply(this, arguments)
+    else fn.apply(this, arguments).then(r => cb(null, r), cb)
+  }, 'name', { value: fn.name })
+}
+
+
+/***/ }),
+
 /***/ 4488:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -47775,7 +72618,7 @@ class Logger extends Transform {
     }
 
     this.silent = silent;
-    this.format = format || this.format || __nccwpck_require__(7864)();
+    this.format = format || this.format || __nccwpck_require__(5483)();
 
     this.defaultMeta = defaultMeta || null;
     // Hoist other options onto this instance.
@@ -50812,7 +75655,7 @@ class DuplicationDetector extends BaseDetector {
       return new Map();
     }
     const os = __nccwpck_require__(857);
-    const { execSync } = __nccwpck_require__(5317);
+    const { execFileSync } = __nccwpck_require__(5317);
     const sccPath = DuplicationDetector.getSccBinPath();
     // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
     // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
@@ -50836,8 +75679,7 @@ class DuplicationDetector extends BaseDetector {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
       }
-      const cmd = `"${sccPath}" -f json --no-cocomo --no-size --by-file "${tmpRoot}"`;
-      const output = execSync(cmd, {
+      const output = execFileSync(sccPath, ['-f', 'json', '--no-cocomo', '--no-size', '--by-file', tmpRoot], {
         encoding: 'utf8',
         maxBuffer: 100 * 1024 * 1024,
         timeout: 300000,
@@ -52043,7 +76885,7 @@ module.exports = LizardDetector;
 /***/ 2034:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const { execSync } = __nccwpck_require__(5317);
+const { execSync, execFileSync } = __nccwpck_require__(5317);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
 const BaseDetector = __nccwpck_require__(658);
@@ -52143,11 +76985,12 @@ class SlocDetector extends BaseDetector {
     return args;
   }
 
-  // 执行 scc 并解析 JSON 输出
+  // 执行 scc 并解析 JSON 输出。
+  // execFileSync 参数数组直传，不经 shell 解析（Ref #49 #57 #29，与 pre-commit-action #26 同款）：
+  // 消除 sources / --include-ext（来自 allowed-extensions input）等外部输入包含
+  // shell 特殊字符（; ` $() 等）时的命令注入面
   runScc(args, sources) {
-    const cmd = `"${this.sccPath}" ${args.join(' ')}`;
-
-    const output = execSync(cmd, {
+    const output = execFileSync(this.sccPath, args, {
       encoding: 'utf8',
       maxBuffer: 100 * 1024 * 1024,
       timeout: 300000,
@@ -52679,10 +77522,10 @@ module.exports = {
 const axios = __nccwpck_require__(7269);
 const crypto = __nccwpck_require__(6982);
 const { callApig, getCredentials } = __nccwpck_require__(6239);
+const ObsClient = __nccwpck_require__(1728);
 const fs = __nccwpck_require__(9896);
 const os = __nccwpck_require__(857);
 const path = __nccwpck_require__(6928);
-const { execSync, execFileSync } = __nccwpck_require__(5317);
 const { sanitize } = __nccwpck_require__(9900);
 
 // 上报接口路径前缀：新旧网关接口与认证方式一一对应
@@ -52929,7 +77772,9 @@ class ApigSigner {
 
 class CoderepoUploader {
   constructor(config = {}) {
-    this.baseUrl = config.coderepoUrl || 'http://localhost:8080';
+    // coderepoUrl 由调用方恒传（src/index.js 部署固定常量），无 localhost 死 fallback
+    // （Ref #51，与 sec-comp #26/#31 同款：原 fallback 在真实调用链下不可达，删除即等价加固）
+    this.baseUrl = config.coderepoUrl;
     this.timeout = config.timeout || 30000;
     // 认证模式：useOidc=true 走新接口（/action-api/...）+ OIDC 免密联邦认证；
     // 否则走旧接口（/openlibing-coderepo/...）+ AK/SK（SDK-HMAC-SHA256）签名，兼容存量脚本
@@ -52943,7 +77788,6 @@ class CoderepoUploader {
     this.obsBucket = config.obsBucket || 'openlibing-gitcode-action';
     // OBS 写/读 endpoint（华为云西南-贵阳一）
     this.obsEndpoint = config.obsEndpoint || 'obs.cn-southwest-2.myhuaweicloud.com';
-    this.obsutilPath = '';
   }
 
   /**
@@ -53054,8 +77898,10 @@ class CoderepoUploader {
       return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
     }
     // 写本地临时文件（runner 上临时目录，用完即删）
-    const tmpFile = path.join(os.tmpdir(), `code-metrics-${Date.now()}.json`);
-    fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), 'utf-8');
+    // 随机文件名（crypto.randomUUID，不可预测）+ 0600 权限（同机其他账户/进程不可读）
+    // （Ref #50 #42：原毫秒时间戳文件名可预测、默认权限 644 可读）
+    const tmpFile = path.join(os.tmpdir(), `code-metrics-${crypto.randomUUID()}.json`);
+    fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), { encoding: 'utf8', mode: 0o600 });
 
     const objectKey = this.buildObjectKey(options);
     try {
@@ -53076,85 +77922,56 @@ class CoderepoUploader {
   }
 
   /**
-   * 用 obsutil 上传本地文件到 OBS（参考 upload-sarif-action）。
-   * 私有对象，不带 -acl=public-read；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
+   * 用 esdk-obs-nodejs SDK 上传本地文件到 OBS（Ref #36 #46 #55 #59 #23 #24 #47，
+   * 与 upload-sarif-action 已验证的 SDK 迁移同款路径）。
+   * 私有对象（不设置 ACL）；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
    *
-   * 凭证传递（按认证模式）：
-   * - OIDC 模式：STS 临时凭证，经 -e/-i/-k/-t 命令行参数传 endpoint/临时AK/临时SK/SecurityToken
-   * - AK/SK 模式：静态 obs-ak/obs-sk，经 -e/-i/-k 命令行参数传递
-   * CI 平台对 secrets/临时令牌自动掩码，不会明文落日志。
+   * 凭证全程内存传递（ObsClient 构造参数），消除 obsutil 子进程 argv 暴露面
+   * （同机进程可经 /proc/<pid>/cmdline 读取 -i/-k/-t 凭证；CI 平台掩码只覆盖日志）：
+   * - OIDC 模式：STS 临时凭证（accessKeyId / secretAccessKey / securityToken）
+   * - AK/SK 模式：静态 obs-ak / obs-sk
    *
-   * 安全处理：用 execFileSync 参数数组直接调用 obsutil，不经 shell 解析，避免仓库路径/pipelineRunId 等
-   * 外部输入包含分号、反引号、$() 等 shell 特殊字符时被注入执行任意命令。
+   * 迁移同时删除 ensureObsutil() 在线下载链路（Ref #58 #69 #63 #33：
+   * 下载/解压/执行行为不复存在）与 obsutil 执行日志（Ref #47：掩码不完整的
+   * -i/-k/-t 命令行打印随之消失）。
    */
   async uploadToOBS(cred, localFilePath, objectKey) {
-    const obsutil = await this.ensureObsutil();
-    // 记录 obsutil 版本，便于排查 runner 与本地环境差异
+    const server = `https://${this.obsEndpoint}`;
+    const client = this.useOidc
+      ? new ObsClient({
+          access_key_id: cred.accessKeyId,
+          secret_access_key: cred.secretAccessKey,
+          security_token: cred.securityToken,
+          server,
+          sslVerify: true
+        })
+      : new ObsClient({
+          access_key_id: this.obsAk,
+          secret_access_key: this.obsSk,
+          server,
+          sslVerify: true
+        });
+    // esdk-obs-nodejs 的 initFactory 为 fire-and-forget（内部 await refresh 后才设置签名上下文），
+    // 构造后立即 putObject 会读到 null signatureContext，让出一个微任务等待初始化完成
+    await Promise.resolve();
     try {
-      const versionOut = execFileSync(obsutil, ['version'], { encoding: 'utf8' }).trim();
-      console.log(`[upload] obsutil version: ${versionOut}`);
-    } catch (e) {
-      console.log(`[upload] obsutil version check failed: ${e.message}`);
-    }
-    const args = [
-      'cp',
-      localFilePath,
-      `obs://${this.obsBucket}/${objectKey}`,
-      '-f',
-      `-e=${this.obsEndpoint}`
-    ];
-    if (this.useOidc) {
-      // OIDC 模式：STS 临时凭证 + SecurityToken
-      args.push(`-i=${cred.accessKeyId}`, `-k=${cred.secretAccessKey}`, `-t=${cred.securityToken}`);
-    } else {
-      // AK/SK 模式：静态凭证
-      args.push(`-i=${this.obsAk}`, `-k=${this.obsSk}`);
-    }
-    // 打印执行命令（-k/-t 参数脱敏），便于定位上传失败原因
-    const maskedArgs = args.map(a => (a.startsWith('-k=') || a.startsWith('-t=') ? `${a.split('=')[0]}=***` : a));
-    console.log(`[upload] exec obsutil ${maskedArgs.join(' ')}`);
-    execFileSync(obsutil, args, { stdio: 'inherit' });
-  }
-
-  /**
-   * 确保 obsutil 可用：不存在时下载并解压到临时目录（与 upload-sarif-action 一致）。
-   * 下载失败时回退到系统已安装的 obsutil，避免网络抖动导致上传中断。
-   */
-  async ensureObsutil() {
-    if (this.obsutilPath && fs.existsSync(this.obsutilPath)) {
-      return this.obsutilPath;
-    }
-    const tmpDir = os.tmpdir();
-    const downloadUrl =
-      'https://obs-community.obs.cn-north-1.myhuaweicloud.com/obsutil/current/obsutil_linux_amd64.tar.gz';
-    const tarball = path.join(tmpDir, 'obsutil_linux_amd64.tar.gz');
-    const extractedDir = path.join(tmpDir, 'obsutil');
-    try {
-      if (!fs.existsSync(extractedDir)) {
-        execSync(`mkdir -p "${extractedDir}"`, { shell: '/bin/bash' });
+      const result = await client.putObject({
+        Bucket: this.obsBucket,
+        Key: objectKey,
+        SourceFile: localFilePath
+      });
+      // putObject 结果校验：HTTP 状态 2xx 视为成功，否则抛错（供上层返回失败原因）
+      const msg = (result && result.CommonMsg) || {};
+      if (!(msg.Status >= 200 && msg.Status < 300)) {
+        throw new Error(`OBS putObject failed (${msg.Status})${msg.Code ? ` [${msg.Code}]` : ''}: ${msg.Message || '未知错误'}`);
       }
-      execSync(
-        `wget -q "${downloadUrl}" -O "${tarball}" 2>/dev/null || curl -sL "${downloadUrl}" -o "${tarball}"`,
-        { shell: '/bin/bash' }
-      );
-      execSync(`tar zxf "${tarball}" -C "${extractedDir}" --strip-components=1`, { shell: '/bin/bash' });
-      execSync(`chmod 755 "${extractedDir}/obsutil"`, { shell: '/bin/bash' });
-      this.obsutilPath = path.join(extractedDir, 'obsutil');
-    } catch (e) {
-      // 下载失败时尝试使用系统已安装的 obsutil
+    } finally {
       try {
-        const existing = execSync('which obsutil', { encoding: 'utf8', shell: '/bin/bash' }).trim();
-        if (existing) {
-          this.obsutilPath = existing;
-        }
-      } catch (e2) {
-        // 无系统 obsutil，抛错
-      }
-      if (!this.obsutilPath) {
-        throw new Error(`obsutil 安装失败: ${e.message}`);
+        await client.close();
+      } catch (e) {
+        // 忽略关闭异常
       }
     }
-    return this.obsutilPath;
   }
 
   /**
@@ -53821,11 +78638,27 @@ module.exports = require("child_process");
 
 /***/ }),
 
+/***/ 9907:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("cluster");
+
+/***/ }),
+
 /***/ 4236:
 /***/ ((module) => {
 
 "use strict";
 module.exports = require("console");
+
+/***/ }),
+
+/***/ 9140:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("constants");
 
 /***/ }),
 
@@ -53946,6 +78779,14 @@ module.exports = require("path");
 
 "use strict";
 module.exports = require("perf_hooks");
+
+/***/ }),
+
+/***/ 932:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("process");
 
 /***/ }),
 
@@ -55666,6 +80507,146 @@ function parseParams (str) {
 }
 
 module.exports = parseParams
+
+
+/***/ }),
+
+/***/ 8686:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/// <reference types="../types/index.d.ts" />
+
+// (c) 2020-present Andrea Giammarchi
+
+const {parse: $parse, stringify: $stringify} = JSON;
+const {keys} = Object;
+
+const Primitive = String;   // it could be Number
+const primitive = 'string'; // it could be 'number'
+
+const ignore = {};
+const object = 'object';
+
+const noop = (_, value) => value;
+
+const primitives = value => (
+  value instanceof Primitive ? Primitive(value) : value
+);
+
+const Primitives = (_, value) => (
+  typeof value === primitive ? new Primitive(value) : value
+);
+
+const resolver = (input, lazy, parsed, $) => output => {
+  for (let ke = keys(output), {length} = ke, y = 0; y < length; y++) {
+    const k = ke[y];
+    const value = output[k];
+    if (value instanceof Primitive) {
+      const tmp = input[+value];
+      if (typeof tmp === object && !parsed.has(tmp)) {
+        parsed.add(tmp);
+        output[k] = ignore;
+        lazy.push({ o: output, k, r: tmp });
+      }
+      else
+        output[k] = $.call(output, k, tmp);
+    }
+    else if (output[k] !== ignore)
+      output[k] = $.call(output, k, value);
+  }
+  return output;
+};
+
+const set = (known, input, value) => {
+  const index = Primitive(input.push(value) - 1);
+  known.set(value, index);
+  return index;
+};
+
+/**
+ * Converts a specialized flatted string into a JS value.
+ * @param {string} text
+ * @param {(this: any, key: string, value: any) => any} [reviver]
+ * @returns {any}
+ */
+const parse = (text, reviver) => {
+  const input = $parse(text, Primitives).map(primitives);
+  const $ = reviver || noop;
+
+  let value = input[0];
+
+  if (typeof value === object && value) {
+    const lazy = [];
+    const revive = resolver(input, lazy, new Set, $);
+    value = revive(value);
+
+    let i = 0;
+    while (i < lazy.length) {
+      // it could be a lazy.shift() but that's costly
+      const {o, k, r} = lazy[i++];
+      o[k] = $.call(o, k, revive(r));
+    }
+  }
+
+  return $.call({'': value}, '', value);
+};
+exports.parse = parse;
+
+/**
+ * Converts a JS value into a specialized flatted string.
+ * @param {any} value
+ * @param {((this: any, key: string, value: any) => any) | (string | number)[] | null | undefined} [replacer]
+ * @param {string | number | undefined} [space]
+ * @returns {string}
+ */
+const stringify = (value, replacer, space) => {
+  const $ = replacer && typeof replacer === object ?
+            (k, v) => (k === '' || -1 < replacer.indexOf(k) ? v : void 0) :
+            (replacer || noop);
+  const known = new Map;
+  const input = [];
+  const output = [];
+  let i = +set(known, input, $.call({'': value}, '', value));
+  let firstRun = !i;
+  while (i < input.length) {
+    firstRun = true;
+    output[i] = $stringify(input[i++], replace, space);
+  }
+  return '[' + output.join(',') + ']';
+  function replace(key, value) {
+    if (firstRun) {
+      firstRun = !firstRun;
+      return value;
+    }
+    const after = $.call(this, key, value);
+    switch (typeof after) {
+      case object:
+        if (after === null) return after;
+      case primitive:
+        return known.get(after) || set(known, input, after);
+    }
+    return after;
+  }
+};
+exports.stringify = stringify;
+
+/**
+ * Converts a generic value into a JSON serializable object without losing recursion.
+ * @param {any} value
+ * @returns {any}
+ */
+const toJSON = value => $parse(stringify(value));
+exports.toJSON = toJSON;
+
+/**
+ * Converts a previously serialized object with recursion into a recursive one.
+ * @param {any} value
+ * @returns {any}
+ */
+const fromJSON = value => parse($stringify(value));
+exports.fromJSON = fromJSON;
 
 
 /***/ }),
@@ -62506,7 +87487,7 @@ module.exports = {"version":"3.19.0"};
 /************************************************************************/
 /******/ 	// The module cache
 /******/ 	var __webpack_module_cache__ = {};
-/******/
+/******/ 	
 /******/ 	// The require function
 /******/ 	function __nccwpck_require__(moduleId) {
 /******/ 		// Check if module is in cache
@@ -62520,7 +87501,7 @@ module.exports = {"version":"3.19.0"};
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
 /******/ 		};
-/******/
+/******/ 	
 /******/ 		// Execute the module function
 /******/ 		var threw = true;
 /******/ 		try {
@@ -62529,23 +87510,24 @@ module.exports = {"version":"3.19.0"};
 /******/ 		} finally {
 /******/ 			if(threw) delete __webpack_module_cache__[moduleId];
 /******/ 		}
-/******/
+/******/ 	
 /******/ 		// Return the exports of the module
 /******/ 		return module.exports;
 /******/ 	}
-/******/
+/******/ 	
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat */
-/******/
+/******/ 	
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
-/******/
+/******/ 	
 /************************************************************************/
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
 const { MetricsScanner, ConfigLoader } = __nccwpck_require__(9863);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
-const { execSync, execFile } = __nccwpck_require__(5317);
+const os = __nccwpck_require__(857);
+const { execSync, execFile, execFileSync } = __nccwpck_require__(5317);
 const { sanitize } = __nccwpck_require__(9900);
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
@@ -62559,8 +87541,10 @@ function getInput(name) {
 // ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
 // 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个作为本次安装的 PIP_INDEX_URL，
 // 避免执行机到某个源出网被重置（Connection reset by peer）时安装必然失败
-const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
-const PIP_ORIGINAL = 'https://pypi.org/simple';
+// 镜像地址改为环境变量注入（PIP_MIRROR_DEFAULT），源码不再硬编码第三方镜像公网地址；
+// 未配置时回退默认值（与原硬编码值一致，等价变换）（Ref #22，与 pre-commit-action #12 同款）
+const PIP_MIRROR_DEFAULT = process.env.PIP_MIRROR_DEFAULT || 'https://mirrors.huaweicloud.com/repository/pypi/simple';
+const PIP_ORIGINAL = 'https://pypi.org/simple'; // gitleaks:allow 官方 PyPI 源，功能必需
 const PIP_SPEED_TEST_TIMEOUT = 5;
 
 // 探测索引源首字节耗时（毫秒），超时或不可达返回 -1。
@@ -62632,8 +87616,9 @@ async function run() {
     // GitCode runner 自动注入 ATOMGIT_REF_NAME / ATOMGIT_TOKEN 等环境变量
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
-    // coderepo 服务地址硬编码到插件（部署时确定的固定值）
-    const coderepoUrl = 'https://apig.openlibing.com:443';
+    // coderepo 服务地址硬编码到插件（部署时确定的固定值）；
+    // 自家平台 APIG 网关端点，非第三方地址，登记白名单（合规例外）（Ref #22）
+    const coderepoUrl = 'https://apig.openlibing.com:443'; // gitleaks:allow 自家平台 APIG 网关，功能必需
     // 认证模式判定（OIDC 联邦认证标识）：workflow 声明 permissions: id-token: write 时，
     // runner 注入 ACTIONS_ID_TOKEN_REQUEST_URL，走新接口（/action-api/...）+ OIDC 免密认证；
     // 未声明时走旧接口（/openlibing-coderepo/...）+ AK/SK 签名，兼容尚未适配的存量脚本
@@ -62749,36 +87734,52 @@ async function run() {
     // 先测速选定 pip 索引源；仅在本次安装子进程中通过 PIP_INDEX_URL 注入，
     // 不改写执行机的 pip 配置文件（self-hosted 常驻机上写全局配置会跨任务持久生效）
     const pipIndexUrl = await detectPipIndexUrl();
-    // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
-    // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
-    let supportsBreakSystemPackages = false;
+    // pip 探测与安装统一在临时空目录执行（Ref #71，与 sec-comp #39 同款）：
+    // python -m 会把 cwd 置于 sys.path 首位，被测仓根目录的 pip.py / pip/ 可遮蔽官方 pip
+    // 实现任意代码执行；空目录 cwd 使工作区不再位于 sys.path，遮蔽面消除。
+    // 同时改用 execFileSync 参数数组直传，不经 shell 解析（Ref #26 同类面）
+    const pipCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pip-install-'));
     try {
-      const pipInstallHelp = execSync('python3 -m pip install --help', {
-        encoding: 'utf8',
-        timeout: 30000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-      supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
-    } catch (e) {
-      // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
-      core.debug(`pip install --help probe failed: ${e.message}`);
-    }
-    const pipInstallArgs = [
-      '-m', 'pip', 'install',
-      ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
-      `lizard==${LIZARD_VERSION}`
-    ];
-    try {
-      core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
-      execSync(['python3', ...pipInstallArgs].join(' '), {
-        stdio: 'inherit',
-        timeout: 120000,
-        env: { ...process.env, PIP_INDEX_URL: pipIndexUrl }
-      });
-      core.info('Python dependencies installed successfully');
-    } catch (e) {
-      // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
-      core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+      // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
+      // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
+      let supportsBreakSystemPackages = false;
+      try {
+        const pipInstallHelp = execFileSync('python3', ['-m', 'pip', 'install', '--help'], {
+          encoding: 'utf8',
+          timeout: 30000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: pipCwd
+        });
+        supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
+      } catch (e) {
+        // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
+        core.debug(`pip install --help probe failed: ${e.message}`);
+      }
+      const pipInstallArgs = [
+        '-m', 'pip', 'install',
+        ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
+        `lizard==${LIZARD_VERSION}`
+      ];
+      try {
+        core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
+        execFileSync('python3', pipInstallArgs, {
+          stdio: 'inherit',
+          timeout: 120000,
+          env: { ...process.env, PIP_INDEX_URL: pipIndexUrl },
+          cwd: pipCwd
+        });
+        core.info('Python dependencies installed successfully');
+      } catch (e) {
+        // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
+        core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+      }
+    } finally {
+      // 清理临时目录，不在 runner 上残留
+      try {
+        fs.rmSync(pipCwd, { recursive: true, force: true });
+      } catch (e) {
+        // 忽略清理失败
+      }
     }
 
     core.info('Starting code metrics scan...');

@@ -2,7 +2,8 @@ const core = require('@actions/core');
 const { MetricsScanner, ConfigLoader } = require('./scanner');
 const path = require('path');
 const fs = require('fs');
-const { execSync, execFile } = require('child_process');
+const os = require('os');
+const { execSync, execFile, execFileSync } = require('child_process');
 const { sanitize } = require('./utils/sanitize');
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
@@ -16,8 +17,10 @@ function getInput(name) {
 // ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
 // 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个作为本次安装的 PIP_INDEX_URL，
 // 避免执行机到某个源出网被重置（Connection reset by peer）时安装必然失败
-const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
-const PIP_ORIGINAL = 'https://pypi.org/simple';
+// 镜像地址改为环境变量注入（PIP_MIRROR_DEFAULT），源码不再硬编码第三方镜像公网地址；
+// 未配置时回退默认值（与原硬编码值一致，等价变换）（Ref #22，与 pre-commit-action #12 同款）
+const PIP_MIRROR_DEFAULT = process.env.PIP_MIRROR_DEFAULT || 'https://mirrors.huaweicloud.com/repository/pypi/simple';
+const PIP_ORIGINAL = 'https://pypi.org/simple'; // gitleaks:allow 官方 PyPI 源，功能必需
 const PIP_SPEED_TEST_TIMEOUT = 5;
 
 // 探测索引源首字节耗时（毫秒），超时或不可达返回 -1。
@@ -89,8 +92,9 @@ async function run() {
     // GitCode runner 自动注入 ATOMGIT_REF_NAME / ATOMGIT_TOKEN 等环境变量
     const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
 
-    // coderepo 服务地址硬编码到插件（部署时确定的固定值）
-    const coderepoUrl = 'https://apig.openlibing.com:443';
+    // coderepo 服务地址硬编码到插件（部署时确定的固定值）；
+    // 自家平台 APIG 网关端点，非第三方地址，登记白名单（合规例外）（Ref #22）
+    const coderepoUrl = 'https://apig.openlibing.com:443'; // gitleaks:allow 自家平台 APIG 网关，功能必需
     // 认证模式判定（OIDC 联邦认证标识）：workflow 声明 permissions: id-token: write 时，
     // runner 注入 ACTIONS_ID_TOKEN_REQUEST_URL，走新接口（/action-api/...）+ OIDC 免密认证；
     // 未声明时走旧接口（/openlibing-coderepo/...）+ AK/SK 签名，兼容尚未适配的存量脚本
@@ -206,36 +210,52 @@ async function run() {
     // 先测速选定 pip 索引源；仅在本次安装子进程中通过 PIP_INDEX_URL 注入，
     // 不改写执行机的 pip 配置文件（self-hosted 常驻机上写全局配置会跨任务持久生效）
     const pipIndexUrl = await detectPipIndexUrl();
-    // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
-    // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
-    let supportsBreakSystemPackages = false;
+    // pip 探测与安装统一在临时空目录执行（Ref #71，与 sec-comp #39 同款）：
+    // python -m 会把 cwd 置于 sys.path 首位，被测仓根目录的 pip.py / pip/ 可遮蔽官方 pip
+    // 实现任意代码执行；空目录 cwd 使工作区不再位于 sys.path，遮蔽面消除。
+    // 同时改用 execFileSync 参数数组直传，不经 shell 解析（Ref #26 同类面）
+    const pipCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pip-install-'));
     try {
-      const pipInstallHelp = execSync('python3 -m pip install --help', {
-        encoding: 'utf8',
-        timeout: 30000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-      supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
-    } catch (e) {
-      // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
-      core.debug(`pip install --help probe failed: ${e.message}`);
-    }
-    const pipInstallArgs = [
-      '-m', 'pip', 'install',
-      ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
-      `lizard==${LIZARD_VERSION}`
-    ];
-    try {
-      core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
-      execSync(['python3', ...pipInstallArgs].join(' '), {
-        stdio: 'inherit',
-        timeout: 120000,
-        env: { ...process.env, PIP_INDEX_URL: pipIndexUrl }
-      });
-      core.info('Python dependencies installed successfully');
-    } catch (e) {
-      // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
-      core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+      // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
+      // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
+      let supportsBreakSystemPackages = false;
+      try {
+        const pipInstallHelp = execFileSync('python3', ['-m', 'pip', 'install', '--help'], {
+          encoding: 'utf8',
+          timeout: 30000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: pipCwd
+        });
+        supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
+      } catch (e) {
+        // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
+        core.debug(`pip install --help probe failed: ${e.message}`);
+      }
+      const pipInstallArgs = [
+        '-m', 'pip', 'install',
+        ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
+        `lizard==${LIZARD_VERSION}`
+      ];
+      try {
+        core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
+        execFileSync('python3', pipInstallArgs, {
+          stdio: 'inherit',
+          timeout: 120000,
+          env: { ...process.env, PIP_INDEX_URL: pipIndexUrl },
+          cwd: pipCwd
+        });
+        core.info('Python dependencies installed successfully');
+      } catch (e) {
+        // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
+        core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+      }
+    } finally {
+      // 清理临时目录，不在 runner 上残留
+      try {
+        fs.rmSync(pipCwd, { recursive: true, force: true });
+      } catch (e) {
+        // 忽略清理失败
+      }
     }
 
     core.info('Starting code metrics scan...');
