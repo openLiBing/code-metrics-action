@@ -5,6 +5,7 @@ const ObsClient = require('esdk-obs-nodejs');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { sanitize } = require('../utils/sanitize');
 
 // 上报接口路径前缀：新旧网关接口与认证方式一一对应
 // - OIDC 联邦认证（新）：workflow 声明 permissions: id-token: write 时启用
@@ -335,12 +336,13 @@ class CoderepoUploader {
 
     const mainUrl = this.buildUrl('/metrics/code/report');
     const mainBody = JSON.stringify(payload);
-    console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${obsResult.obsUrl}`);
+    // obsUrl 内嵌从 gitUrl 提取的 owner/repo（外部可控），过 sanitize 防换行注入（Ref #64）
+    console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${sanitize(obsResult.obsUrl)}`);
     const mainResult = await this.report(mainUrl, mainBody);
     if (!mainResult.success) {
       // 上报失败但 OBS 文件已完整上传：打印固定格式链接，提示可走保底定时任务补导入
       console.warn(
-        `[upload] report failed: ${mainResult.error}. 全量数据已上传 OBS(${obsResult.obsUrl})，` +
+        `[upload] report failed: ${sanitize(mainResult.error)}. 全量数据已上传 OBS(${sanitize(obsResult.obsUrl)})，` +
           '可通过平台保底定时任务(入参 objectKey)补导入'
       );
       return { ...mainResult, obsUrl: obsResult.obsUrl };
@@ -384,7 +386,7 @@ class CoderepoUploader {
     try {
       await this.uploadToOBS(cred, tmpFile, objectKey);
       const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
-      console.log(`[upload] OBS uploaded: ${obsUrl}`);
+      console.log(`[upload] OBS uploaded: ${sanitize(obsUrl)}`);
       return { success: true, obsUrl: obsUrl, objectKey: objectKey };
     } catch (e) {
       return { success: false, error: `OBS 上传失败: ${e.message}` };
@@ -621,9 +623,10 @@ class CoderepoUploader {
 
       // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功
       if (resData?.code !== 200) {
-        // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因
+        // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因；
+        // msg/adviceMsg 为服务端响应字段，过 sanitize 防换行注入（Ref #64）
         console.error(
-          `[upload] report business failed: code=${resData?.code}, msg=${resData?.msg}, adviceMsg=${resData?.adviceMsg}`
+          `[upload] report business failed: code=${resData?.code}, msg=${sanitize(resData?.msg)}, adviceMsg=${sanitize(resData?.adviceMsg)}`
         );
         return { success: false, error: resData?.msg || 'Unknown error' };
       }

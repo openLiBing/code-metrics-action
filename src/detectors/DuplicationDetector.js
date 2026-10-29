@@ -85,7 +85,8 @@ class DuplicationDetector extends BaseDetector {
         fileSourceLineMaps.set(file, sourceLineMap);
         totalSourceLines += sourceLineMap.sourceCount;
       } catch (error) {
-        console.warn(`[WARN] Failed to read file ${file}: ${error.message}`);
+        // 只输出文件基名，不落 runner 绝对路径（Ref #60）
+        console.warn(`[WARN] Failed to read file ${path.basename(file)}: ${error.message}`);
       }
     }
     if (binarySkipped > 0) {
