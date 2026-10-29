@@ -1,4 +1,4 @@
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const BaseDetector = require('./BaseDetector');
@@ -98,11 +98,12 @@ class SlocDetector extends BaseDetector {
     return args;
   }
 
-  // 执行 scc 并解析 JSON 输出
+  // 执行 scc 并解析 JSON 输出。
+  // execFileSync 参数数组直传，不经 shell 解析（Ref #49 #57 #29，与 pre-commit-action #26 同款）：
+  // 消除 sources / --include-ext（来自 allowed-extensions input）等外部输入包含
+  // shell 特殊字符（; ` $() 等）时的命令注入面
   runScc(args, sources) {
-    const cmd = `"${this.sccPath}" ${args.join(' ')}`;
-
-    const output = execSync(cmd, {
+    const output = execFileSync(this.sccPath, args, {
       encoding: 'utf8',
       maxBuffer: 100 * 1024 * 1024,
       timeout: 300000,

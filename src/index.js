@@ -2,7 +2,8 @@ const core = require('@actions/core');
 const { MetricsScanner, ConfigLoader } = require('./scanner');
 const path = require('path');
 const fs = require('fs');
-const { execSync, execFile } = require('child_process');
+const os = require('os');
+const { execSync, execFile, execFileSync } = require('child_process');
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -207,36 +208,52 @@ async function run() {
     // 先测速选定 pip 索引源；仅在本次安装子进程中通过 PIP_INDEX_URL 注入，
     // 不改写执行机的 pip 配置文件（self-hosted 常驻机上写全局配置会跨任务持久生效）
     const pipIndexUrl = await detectPipIndexUrl();
-    // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
-    // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
-    let supportsBreakSystemPackages = false;
+    // pip 探测与安装统一在临时空目录执行（Ref #71，与 sec-comp #39 同款）：
+    // python -m 会把 cwd 置于 sys.path 首位，被测仓根目录的 pip.py / pip/ 可遮蔽官方 pip
+    // 实现任意代码执行；空目录 cwd 使工作区不再位于 sys.path，遮蔽面消除。
+    // 同时改用 execFileSync 参数数组直传，不经 shell 解析（Ref #26 同类面）
+    const pipCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pip-install-'));
     try {
-      const pipInstallHelp = execSync('python3 -m pip install --help', {
-        encoding: 'utf8',
-        timeout: 30000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-      supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
-    } catch (e) {
-      // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
-      core.debug(`pip install --help probe failed: ${e.message}`);
-    }
-    const pipInstallArgs = [
-      '-m', 'pip', 'install',
-      ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
-      `lizard==${LIZARD_VERSION}`
-    ];
-    try {
-      core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
-      execSync(['python3', ...pipInstallArgs].join(' '), {
-        stdio: 'inherit',
-        timeout: 120000,
-        env: { ...process.env, PIP_INDEX_URL: pipIndexUrl }
-      });
-      core.info('Python dependencies installed successfully');
-    } catch (e) {
-      // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
-      core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+      // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
+      // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
+      let supportsBreakSystemPackages = false;
+      try {
+        const pipInstallHelp = execFileSync('python3', ['-m', 'pip', 'install', '--help'], {
+          encoding: 'utf8',
+          timeout: 30000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: pipCwd
+        });
+        supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
+      } catch (e) {
+        // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
+        core.debug(`pip install --help probe failed: ${e.message}`);
+      }
+      const pipInstallArgs = [
+        '-m', 'pip', 'install',
+        ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
+        `lizard==${LIZARD_VERSION}`
+      ];
+      try {
+        core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
+        execFileSync('python3', pipInstallArgs, {
+          stdio: 'inherit',
+          timeout: 120000,
+          env: { ...process.env, PIP_INDEX_URL: pipIndexUrl },
+          cwd: pipCwd
+        });
+        core.info('Python dependencies installed successfully');
+      } catch (e) {
+        // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
+        core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+      }
+    } finally {
+      // 清理临时目录，不在 runner 上残留
+      try {
+        fs.rmSync(pipCwd, { recursive: true, force: true });
+      } catch (e) {
+        // 忽略清理失败
+      }
     }
 
     core.info('Starting code metrics scan...');
