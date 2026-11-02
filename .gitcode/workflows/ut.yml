@@ -67,7 +67,7 @@ jobs:
 
       # 将ut报告上传至openlibing平台运营
       - name: upload ut report to openlibing
-        if: ${{ success() && env.IS_PR_EVENT != 'true' }}
+        if: ${{ env.IS_PR_EVENT != 'true' }} # 默认仅前置步骤全部成功时执行（success 为平台默认行为），测试失败不上报残缺报告
         uses: openlibing/upload-ut-action@v1.0.0
         with:
           report_dir: ${{ env.UT_REPORT_DIR }}coverage-final.json
