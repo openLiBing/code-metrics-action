@@ -88,12 +88,6 @@ jobs:
           # allowed-extensions: ".c,.cpp,.h"
 ```
 
-> OIDC 免密依赖华为云侧已完成 GitHub 身份提供商（`GitHubActions`，颁发者 `https://token.actions.githubusercontent.com`）与信任委托配置，未配置时换证会失败。
-
-工作流支持手动触发与推送到主分支自动触发；运行结束后在运行摘要页以表格展示仓库/分支/提交/流水线等扫描信息、5 项指标及平台详情链接。
-
-> 插件运行时自动识别平台：GitHub 取 `GITHUB_*` 上下文（分支、提交、运行编号、工作流名），GitCode 回退 `ATOMGIT_*`，同一份代码可在两个平台运行。
-
 ## GitCode Actions 接入
 
 ```yaml
