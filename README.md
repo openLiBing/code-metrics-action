@@ -40,24 +40,42 @@ Fortran  GDScript  Solidity  Structured Text  TTCN-3  Zig
 
 ## GitHub Actions 接入（OIDC 免密）
 
-插件支持在 GitHub Actions 中运行，示例工作流见 [`.github/workflows/code-metrics-scan.yml`](.github/workflows/code-metrics-scan.yml)。GitHub 场景采用 **OIDC 免密认证**：插件向 GitHub Actions 申请 OIDC ID Token，再换取华为云临时凭证，仓库中无需配置任何长期密钥。
+插件支持在 GitHub Actions 中运行，采用 **OIDC 免密认证**：插件向 GitHub Actions 申请 OIDC ID Token，再换取华为云临时凭证，仓库中无需配置任何长期密钥。
 
 引用方式：
 
 ```yaml
+name: code-metrics-scan
+
+on:
+  # 手动触发：仓库 Actions 页面点击 Run workflow
+  workflow_dispatch:
+  # 代码推送触发：合并到主分支后自动扫描
+  push:
+    branches:
+      - master
+
+# OIDC 免密认证：必须声明 id-token: write，插件据此向平台申请 ID Token 换取华为云临时凭证
 permissions:
   contents: read
-  id-token: write # 必须声明，否则无法申请 OIDC ID Token
+  id-token: write
+
+concurrency:
+  group: code-metrics-scan-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   code-metrics-scan:
+    name: 代码度量检测
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 使用本仓库内的插件（迁移验证），OIDC 模式调用 APIG 接口，无需配置任何密钥
       - name: Code metrics scan
-        uses: openlibing/code-metrics-action@<版本或commit>
+        uses: openlibing/code-metrics-action@master
         with:
-          exclude-dirs: ".git,.github,node_modules,dist"
 ```
 
 > OIDC 免密依赖华为云侧已完成 GitHub 身份提供商（`GitHubActions`，颁发者 `https://token.actions.githubusercontent.com`）与信任委托配置，未配置时换证会失败。
