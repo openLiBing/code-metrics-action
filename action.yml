@@ -111,6 +111,19 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
+
+outputs:
+  code-scale:
+    description: "代码规模（有效代码行数）"
+  avg-function-loc:
+    description: "平均函数代码行数"
+  avg-cyclomatic-complexity:
+    description: "平均圈复杂度"
+  total-code-duplication-rate:
+    description: "总代码重复率（%）"
+  total-file-duplication-rate:
+    description: "总文件重复率（%）"
+
 runs:
   using: "node16"
   main: "dist/index.js"

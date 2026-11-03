@@ -1,0 +1,37 @@
+name: code-metrics-scan
+
+on:
+  # 手动触发：仓库 Actions 页面点击 Run workflow
+  workflow_dispatch:
+  # 代码推送触发：合并到主分支后自动扫描
+  push:
+    branches:
+      - main
+      - master
+
+# AK/SK 模式不需要 id-token 权限，仅需读取仓库代码
+permissions:
+  contents: read
+
+concurrency:
+  group: code-metrics-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-metrics-scan:
+    name: 代码度量检测
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 使用本仓库内的插件（迁移验证），AK/SK 模式调用 APIG 接口
+      - name: Code metrics scan
+        uses: ./
+        with:
+          # 排除非业务代码目录，避免把依赖与构建产物计入指标
+          exclude-dirs: ".git,.github,node_modules,dist,tmp_pre-commit-reports"
+          apig-app-key: ${{ secrets.APIG_APP_KEY }}
+          apig-app-secret: ${{ secrets.APIG_APP_SECRET }}
+          obs-ak: ${{ secrets.OBS_AK }}
+          obs-sk: ${{ secrets.OBS_SK }}

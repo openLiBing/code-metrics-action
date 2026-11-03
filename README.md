@@ -38,7 +38,36 @@ Fortran  GDScript  Solidity  Structured Text  TTCN-3  Zig
 - **多文件相同重复块**：若 3 个文件都包含相同的 10 行重复代码，则总代码重复行数 +30（每个文件的 10 行均计入）。
 - **同文件多段重复取并集**：若 A 文件第 1-10 行与 B 文件重复，第 2-11 行与 C 文件重复，则 A 文件的重复代码行数取两段重复区间的并集，即第 1-11 行共 11 行；此时总代码重复行数为 31（A 的 11 行 + B 的 10 行 + C 的 10 行）。
 
-## 使用方式
+## GitHub Actions 接入（AK/SK 模式）
+
+插件支持在 GitHub Actions 中运行，示例工作流见 [`.github/workflows/code-metrics-scan.yml`](.github/workflows/code-metrics-scan.yml)。GitHub 场景默认采用 AK/SK 方式调用 APIG 接口与上传 OBS，无需 OIDC 换证。
+
+在仓库 `Settings → Secrets and variables → Actions` 中配置以下 4 个 Secret：
+
+| Secret 名称       | 说明                                |
+| ----------------- | ----------------------------------- |
+| `APIG_APP_KEY`    | APIG 网关 AppKey（AK）              |
+| `APIG_APP_SECRET` | APIG 网关 AppSecret（SK）           |
+| `OBS_AK`          | OBS 访问密钥 AK（上传全量上报文件） |
+| `OBS_SK`          | OBS 访问密钥 SK                     |
+
+引用方式：
+
+```yaml
+- name: Code metrics scan
+  uses: openlibing/code-metrics-action@<版本或commit>
+  with:
+    apig-app-key: ${{ secrets.APIG_APP_KEY }}
+    apig-app-secret: ${{ secrets.APIG_APP_SECRET }}
+    obs-ak: ${{ secrets.OBS_AK }}
+    obs-sk: ${{ secrets.OBS_SK }}
+```
+
+工作流支持手动触发与推送到主分支自动触发；运行结束后在 Actions 运行摘要中可查看 5 项指标与平台详情链接。
+
+> 插件运行时自动识别平台：GitHub 取 `GITHUB_*` 上下文（分支、提交、运行编号、工作流名），GitCode 回退 `ATOMGIT_*`，同一份代码可在两个平台运行。
+
+## GitCode Actions 接入
 
 ```yaml
 name: code-metrics-scan

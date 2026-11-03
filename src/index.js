@@ -14,6 +14,54 @@ function getInput(name) {
   return process.env[hyphenKey] || process.env[underscoreKey] || core.getInput(name) || '';
 }
 
+// ===== CI 平台上下文适配（GitHub Actions 优先，保留 GitCode 回退）=====
+// GitHub Actions 注入 GITHUB_* 变量，GitCode runner 注入 ATOMGIT_* 变量；
+// 统一按“GitHub 优先、GitCode 回退”的顺序取值，同一份代码可在两个平台运行。
+function firstEnv(...names) {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+/** 当前运行所属分支：PR 事件取目标分支（GitHub 为 GITHUB_BASE_REF），其余取当前 ref */
+function resolveCiBranch() {
+  const eventName = firstEnv('GITHUB_EVENT_NAME', 'ATOMGIT_EVENT_NAME').toLowerCase();
+  if (eventName === 'pull_request' || eventName === 'pull_request_target' || eventName === 'mr') {
+    return firstEnv('GITHUB_BASE_REF', 'ATOMGIT_HEAD_REF');
+  }
+  return firstEnv('GITHUB_REF_NAME', 'ATOMGIT_REF_NAME');
+}
+
+/**
+ * 写入人类可读的结果展示：
+ * - GitHub Actions 写 GITHUB_STEP_SUMMARY（运行摘要页可见），避免使用中文 output key 触发平台校验失败；
+ * - GitCode 保持写 ATOMGIT_OUTPUT，供流水线结果面板直接展示。
+ */
+function appendDisplayLines(lines, logLabel) {
+  try {
+    const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+    if (summaryFile) {
+      fs.appendFileSync(summaryFile, lines.join('\n') + '\n', 'utf8');
+      return;
+    }
+    const atomgitFile = process.env.ATOMGIT_OUTPUT;
+    if (atomgitFile) {
+      fs.appendFileSync(atomgitFile, lines.join('\n') + '\n', 'utf8');
+    }
+  } catch (e) {
+    core.warning(`写入${logLabel}失败: ${e.message}`);
+  }
+}
+
+/** 未从 git 命令取到仓库地址时的平台兜底：优先 GitHub 上下文 */
+function resolveRepoUrlFromEnv() {
+  const repository = firstEnv('GITHUB_REPOSITORY');
+  if (!repository) return '';
+  return `${firstEnv('GITHUB_SERVER_URL') || 'https://github.com'}/${repository}`;
+}
+
 // ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
 // 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个作为本次安装的 PIP_INDEX_URL，
 // 避免执行机到某个源出网被重置（Connection reset by peer）时安装必然失败
@@ -88,9 +136,8 @@ async function run() {
     const minLines = parseInt(getInput('min-lines') || '10', 10);
     const outputFile = getInput('output') || 'metrics.json';
 
-    // atomgit 上下文：当前工作流所属仓的分支/标签名
-    // GitCode runner 自动注入 ATOMGIT_REF_NAME / ATOMGIT_TOKEN 等环境变量
-    const atomgitRefName = process.env['ATOMGIT_REF_NAME'] || '';
+    // CI 上下文兜底分支：GitHub 取 GITHUB_REF_NAME（PR 取目标分支），GitCode 取 ATOMGIT_REF_NAME
+    const ciBranch = resolveCiBranch();
 
     // coderepo 服务地址硬编码到插件（部署时确定的固定值）；
     // 自家平台 APIG 网关端点，非第三方地址，登记白名单（合规例外）（Ref #22）
@@ -148,22 +195,26 @@ async function run() {
     } catch (e) {
       core.warning(`从 git 命令获取仓库信息失败: ${e.message}`);
     }
+    // GitHub 兜底：git 命令不可用时（如浅克隆异常），用平台上下文拼仓库地址
+    if (!gitUrl) {
+      gitUrl = resolveRepoUrlFromEnv();
+    }
     if (!branchName) {
-      branchName = atomgitRefName || '';
+      branchName = ciBranch;
     }
 
     // repository 字段已移除：写死 source-dir 后，工作流所在仓 git_url 即扫描仓，
     // 后端从 gitUrl 提取 owner/repo 拼接流水线链接
-    // pipelineRunId / runNumber：优先用 GitCode runner 自动注入的 ATOMGIT_RUN_ID / ATOMGIT_RUN_NUMBER，
-    // 兼容 workflow 手动注入的 PIPELINE_RUN_ID / PIPELINE_RUN_NUMBER（旧配置）
-    const pipelineRunId = process.env['ATOMGIT_RUN_ID'] || process.env['PIPELINE_RUN_ID'] || '';
+    // pipelineRunId / runNumber / commitId / pipelineName：
+    // GitHub 取 GITHUB_RUN_ID / GITHUB_RUN_NUMBER / GITHUB_SHA / GITHUB_WORKFLOW，
+    // GitCode 回退 ATOMGIT_*，并兼容 workflow 手动注入的 PIPELINE_RUN_ID / PIPELINE_RUN_NUMBER（旧配置）
+    const pipelineRunId = firstEnv('GITHUB_RUN_ID', 'ATOMGIT_RUN_ID', 'PIPELINE_RUN_ID');
     // runNumber 从环境变量获取，仅作记录
-    const runNumber = process.env['ATOMGIT_RUN_NUMBER'] || process.env['PIPELINE_RUN_NUMBER'] || '';
-    // commitId：触发本次工作流的提交 SHA（ATOMGIT_SHA），口径与 CodeQL 上报（openlibing-upload-sarif）一致
-    const commitId = process.env['ATOMGIT_SHA'] || '';
-    // pipelineName：流水线名称（GitCode runner 自动注入的 ATOMGIT_WORKFLOW），
-    // 口径与安全编译选项插件（security-compilation-options-action）一致，供度量数据下钻页展示来源流水线
-    const pipelineName = process.env['ATOMGIT_WORKFLOW'] || '';
+    const runNumber = firstEnv('GITHUB_RUN_NUMBER', 'ATOMGIT_RUN_NUMBER', 'PIPELINE_RUN_NUMBER');
+    // commitId：触发本次工作流的提交 SHA，口径与 CodeQL 上报（openlibing-upload-sarif）一致
+    const commitId = firstEnv('GITHUB_SHA', 'ATOMGIT_SHA');
+    // pipelineName：流水线名称，供度量数据下钻页展示来源流水线
+    const pipelineName = firstEnv('GITHUB_WORKFLOW', 'ATOMGIT_WORKFLOW');
 
     // 加载配置
     let config;
@@ -289,7 +340,8 @@ async function run() {
     core.setOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
     core.setOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
 
-    // 输出概览结果（按固定顺序输出每项指标，标识为 中文名（英文名），重复率带 %），写入 ATOMGIT_OUTPUT 便于工作流直接展示
+    // 输出概览结果（按固定顺序输出每项指标，标识为 中文名（英文名），重复率带 %）
+    // GitHub 写入运行摘要（Markdown 列表），GitCode 保持写 ATOMGIT_OUTPUT（键值对）
     const overviewDisplay = [
       ['codeScale', '代码规模（codeScale）', String(result.codeScale)],
       ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', String(result.avgFunctionLoc)],
@@ -297,16 +349,13 @@ async function run() {
       ['totalCodeDuplicationRate', '总代码重复率（totalCodeDuplicationRate）', `${result.totalCodeDuplicationRate}%`],
       ['totalFileDuplicationRate', '总文件重复率（totalFileDuplicationRate）', `${result.totalFileDuplicationRate}%`]
     ];
-    try {
-      const overviewOutputFile = process.env['ATOMGIT_OUTPUT'];
-      if (overviewOutputFile) {
-        // 每行一个 标识=值 键值对，避免单行 JSON 多行转义问题
-        const lines = overviewDisplay.map(item => `${item[1]}=${item[2]}`);
-        fs.appendFileSync(overviewOutputFile, lines.join('\n') + '\n', 'utf8');
-      }
-    } catch (e) {
-      core.warning(`写入 ATOMGIT_OUTPUT 概览结果失败: ${e.message}`);
-    }
+    const isGithubRunner = Boolean(process.env.GITHUB_STEP_SUMMARY);
+    appendDisplayLines(
+      isGithubRunner
+        ? ['', '## 代码度量指标扫描结果', ...overviewDisplay.map(item => `- ${item[1]}：${item[2]}`)]
+        : overviewDisplay.map(item => `${item[1]}=${item[2]}`),
+      '概览结果'
+    );
 
     // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥），仅写 ATOMGIT_OUTPUT
     // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出
@@ -321,15 +370,14 @@ async function run() {
     } else {
       core.info(`${DETAIL_LINK_LABEL}: 无链接（上报失败或链接构建异常，不输出）`);
     }
-    try {
-      const detailOutputFile = process.env['ATOMGIT_OUTPUT'];
-      if (detailOutputFile && (detailLink || detailTip)) {
-        // 链接行 key 以 url 结尾：平台按 key 末尾小写 url 判定 type=link 渲染为可点击链接；提示行 key 不带 url 后缀，避免提示文本被渲染成无效链接
-        const detailOutputLine = detailLink ? `扫描结果url=${detailLink}` : `扫描结果=${detailTip}`;
-        fs.appendFileSync(detailOutputFile, detailOutputLine + '\n', 'utf8');
-      }
-    } catch (e) {
-      core.warning(`写入 ATOMGIT_OUTPUT 链接结果失败: ${e.message}`);
+    if (detailLink || detailTip) {
+      // GitHub 渲染为 Markdown 链接/提示；GitCode 保持 key 以 url 结尾触发 type=link 渲染
+      appendDisplayLines(
+        isGithubRunner
+          ? [detailLink ? `- [${DETAIL_LINK_LABEL}](${detailLink})` : `- ${detailTip}`]
+          : [detailLink ? `扫描结果url=${detailLink}` : `扫描结果=${detailTip}`],
+        '扫描结果链接'
+      );
     }
 
     core.info('Code metrics scan completed successfully');
