@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const { execSync, execFile, execFileSync } = require('child_process');
 const { sanitize } = require('./utils/sanitize');
+const { ciEnv, resolveCiBranch, resolveRepoUrlFromEnv } = require('./utils/ciContext');
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -12,26 +13,6 @@ function getInput(name) {
   const hyphenKey = `INPUT_${name.toUpperCase().replace(/-/g, '-')}`;
   const underscoreKey = `INPUT_${name.toUpperCase().replace(/-/g, '_')}`;
   return process.env[hyphenKey] || process.env[underscoreKey] || core.getInput(name) || '';
-}
-
-// ===== CI 平台上下文适配（GitHub Actions 优先，保留 GitCode 回退）=====
-// GitHub Actions 注入 GITHUB_* 变量，GitCode runner 注入 ATOMGIT_* 变量；
-// 统一按“GitHub 优先、GitCode 回退”的顺序取值，同一份代码可在两个平台运行。
-function firstEnv(...names) {
-  for (const name of names) {
-    const value = process.env[name];
-    if (value && value.trim()) return value.trim();
-  }
-  return '';
-}
-
-/** 当前运行所属分支：PR 事件取目标分支（GitHub 为 GITHUB_BASE_REF），其余取当前 ref */
-function resolveCiBranch() {
-  const eventName = firstEnv('GITHUB_EVENT_NAME', 'ATOMGIT_EVENT_NAME').toLowerCase();
-  if (eventName === 'pull_request' || eventName === 'pull_request_target' || eventName === 'mr') {
-    return firstEnv('GITHUB_BASE_REF', 'ATOMGIT_HEAD_REF');
-  }
-  return firstEnv('GITHUB_REF_NAME', 'ATOMGIT_REF_NAME');
 }
 
 /** Markdown 表格单元格转义：竖线必须转义，换行压平，避免撑破表格 */
@@ -127,13 +108,6 @@ function appendAtomgitOutput(lines, logLabel) {
   } catch (e) {
     core.warning(`写入${logLabel}失败: ${e.message}`);
   }
-}
-
-/** 未从 git 命令取到仓库地址时的平台兜底：优先 GitHub 上下文 */
-function resolveRepoUrlFromEnv() {
-  const repository = firstEnv('GITHUB_REPOSITORY');
-  if (!repository) return '';
-  return `${firstEnv('GITHUB_SERVER_URL') || 'https://github.com'}/${repository}`;
 }
 
 // ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
@@ -279,15 +253,14 @@ async function run() {
     // repository 字段已移除：写死 source-dir 后，工作流所在仓 git_url 即扫描仓，
     // 后端从 gitUrl 提取 owner/repo 拼接流水线链接
     // pipelineRunId / runNumber / commitId / pipelineName：
-    // GitHub 取 GITHUB_RUN_ID / GITHUB_RUN_NUMBER / GITHUB_SHA / GITHUB_WORKFLOW，
-    // GitCode 回退 ATOMGIT_*，并兼容 workflow 手动注入的 PIPELINE_RUN_ID / PIPELINE_RUN_NUMBER（旧配置）
-    const pipelineRunId = firstEnv('GITHUB_RUN_ID', 'ATOMGIT_RUN_ID', 'PIPELINE_RUN_ID');
+    // 按已判定的平台只读取对应变量（GitHub: GITHUB_*，GitCode: ATOMGIT_*）
+    const pipelineRunId = ciEnv('runId');
     // runNumber 从环境变量获取，仅作记录
-    const runNumber = firstEnv('GITHUB_RUN_NUMBER', 'ATOMGIT_RUN_NUMBER', 'PIPELINE_RUN_NUMBER');
+    const runNumber = ciEnv('runNumber');
     // commitId：触发本次工作流的提交 SHA，口径与 CodeQL 上报（openlibing-upload-sarif）一致
-    const commitId = firstEnv('GITHUB_SHA', 'ATOMGIT_SHA');
+    const commitId = ciEnv('sha');
     // pipelineName：流水线名称，供度量数据下钻页展示来源流水线
-    const pipelineName = firstEnv('GITHUB_WORKFLOW', 'ATOMGIT_WORKFLOW');
+    const pipelineName = ciEnv('workflow');
 
     // 加载内置默认配置（配置文件能力已移除，运行参数统一由 action 输入覆盖）
     const config = ConfigLoader.getDefaultConfig();

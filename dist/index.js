@@ -572,8 +572,8 @@ class OidcClient {
             const res = yield httpclient
                 .getJson(id_token_url)
                 .catch(error => {
-                throw new Error(`Failed to get ID Token. \n 
-        Error Code : ${error.statusCode}\n 
+                throw new Error(`Failed to get ID Token. \n
+        Error Code : ${error.statusCode}\n
         Error Message: ${error.message}`);
             });
             const id_token = (_a = res.result) === null || _a === void 0 ? void 0 : _a.value;
@@ -6568,7 +6568,7 @@ exports.MAX_DOWNLOAD_PART_SIZE = 5 * GB;
 exports.DEFAULT_DOWNLOAD_PART_SIZE = 5 * MB;
 exports.MIN_DOWNLOAD_PART_SIZE = 100 * KB;
 
-exports.IAM_DOMAIN_PATH_EXTENSION = '/v3.0/OS-CREDENTIAL/securitytokens'; 
+exports.IAM_DOMAIN_PATH_EXTENSION = '/v3.0/OS-CREDENTIAL/securitytokens';
 
 
 /***/ }),
@@ -6618,11 +6618,11 @@ LogUtil.prototype.initLog = function(filename, maxLogSize, backups, level, logTo
 		this.loggerInf = logger;
 		return;
 	}
-	
+
 	if(!filename){
 		return;
 	}
-	
+
 	let dir = path.dirname(filename);
 	checkAndCreateDir(dir, path);
 	let ext = path.extname(filename);
@@ -6630,11 +6630,11 @@ LogUtil.prototype.initLog = function(filename, maxLogSize, backups, level, logTo
 	if(!ext){
 		ext = '.log';
 	}
-	
+
 	level = level === undefined ? 'info' : String(level);
 	maxLogSize = maxLogSize === undefined ? 102400 : parseInt(maxLogSize, 10);
 	backups = backups === undefined ? 10 : parseInt(backups, 10);
-	
+
 	let fileInterface = path.join(dir, file + ext);
 	let layoutFormat = '%d{yyyy/MM/dd hh:mm:ss SSS}|%c|%-5p|%m';
 	let cateInterface = 'sdk-file';
@@ -6643,7 +6643,7 @@ LogUtil.prototype.initLog = function(filename, maxLogSize, backups, level, logTo
 		cateInterface += ':' + String(name);
 		cateConsole += ':' + String(name);
 	}
-	
+
 	let appenders = {};
 	appenders[cateConsole] = {
         type:'console',
@@ -6658,19 +6658,19 @@ LogUtil.prototype.initLog = function(filename, maxLogSize, backups, level, logTo
             pattern : layoutFormat,
         }
     };
-	
+
 	let categories = {
 		default: { appenders: [cateConsole], level: 'off' }
 	};
 	categories[cateInterface] =  { appenders: [cateInterface], level:level.toLowerCase()};
 	categories[cateConsole] =  { appenders: [cateConsole], level:level.toLowerCase()};
-	
+
 	log4js.configure({
 		categories: categories,
 	    appenders: appenders,
 	    replaceConsole: true
 	});
-	
+
 	this.loggerInf = log4js.getLogger(cateInterface);
 	if(logToConsole){
 		this.consoleLog = log4js.getLogger(cateConsole);
@@ -6867,7 +6867,7 @@ ObsClient.prototype.listBuckets = function(param, callback){
 };
 
 ObsClient.prototype.putObject = function(param, callback){
-	
+
 	if(('Body' in param) && ('SourceFile' in param)){
 		let err = 'the input body and sourcefile exist at same time,please specify one of eigther a string or file to be send!';
 		if(this.log.isLevelEnabled('error')){
@@ -6875,7 +6875,7 @@ ObsClient.prototype.putObject = function(param, callback){
 		}
 		return callback(new Error(err), null);
 	}
-	
+
 	if(!('ContentType' in param)){
 		if('Key' in param){
 			param.ContentType = this.util.mimeTypes[param.Key.substring(param.Key.lastIndexOf('.') + 1)];
@@ -6884,7 +6884,7 @@ ObsClient.prototype.putObject = function(param, callback){
 			param.ContentType = this.util.mimeTypes[param.SourceFile.substring(param.SourceFile.lastIndexOf('.') + 1)];
 		}
 	}
-	
+
 	this.exec('PutObject', param, callback);
 };
 
@@ -6911,7 +6911,7 @@ ObsClient.prototype.modifyObject = function(param, callback){
 };
 
 ObsClient.prototype.appendObject = function(param, callback){
-	
+
 	if(('Body' in param) && ('SourceFile' in param)){
 		let err = 'the input body and sourcefile exist at same time,please specify one of eigther a string or file to be send!';
 		if(this.log.isLevelEnabled('error')){
@@ -6919,7 +6919,7 @@ ObsClient.prototype.appendObject = function(param, callback){
 		}
 		return callback(new Error(err), null);
 	}
-	
+
 	if(!('ContentType' in param)){
 		if('Key' in param){
 			param.ContentType = this.util.mimeTypes[param.Key.substring(param.Key.lastIndexOf('.') + 1)];
@@ -6928,7 +6928,7 @@ ObsClient.prototype.appendObject = function(param, callback){
 			param.ContentType = this.util.mimeTypes[param.SourceFile.substring(param.SourceFile.lastIndexOf('.') + 1)];
 		}
 	}
-	
+
 	this.exec('AppendObject', param, callback);
 };
 
@@ -7012,7 +7012,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 		}
 		callback(code ? (code.CommonMsg.Code + ':' + code.CommonMsg.Message) : null, result);
 	};
-	
+
 	if(_log.isLevelEnabled('info')){
 		_log.runLog('info', funcName, 'enter ' + funcName + '...' );
 	}
@@ -7037,8 +7037,8 @@ ObsClient.prototype.uploadFile = function(param, callback){
 		return;
 	}
 	let fs = __nccwpck_require__(9896);
-	uploadFile = String(uploadFile); 
-	
+	uploadFile = String(uploadFile);
+
 	if(!fs.existsSync(uploadFile)){
 		_callback('InvalidArgument', 'UploadFile does not exist!');
 		return;
@@ -7048,15 +7048,15 @@ ObsClient.prototype.uploadFile = function(param, callback){
 		_callback('InvalidArgument', 'UploadFile is not a file!');
 		return;
 	}
-	
+
 	let fileSize = fstat.size;
-	
+
 	let enableCheckpoint = param.EnableCheckpoint;
 	let checkpointFile = null;
 	let enableCheckSum = false;
 
 	let taskNum = parseInt(param.TaskNum, 10) || 20;
-	
+
 	if(enableCheckpoint){
 		checkpointFile = param.CheckpointFile;
 		checkpointFile = (checkpointFile && checkpointFile !== '') ? String(checkpointFile) : uploadFile + '.upload_record';
@@ -7080,10 +7080,10 @@ ObsClient.prototype.uploadFile = function(param, callback){
 	if(_log.isLevelEnabled('debug')){
 		_log.runLog('debug', funcName, 'Begin to uploadFile to OBS from file:' + uploadFile);
 	}
-	
+
 	let events = __nccwpck_require__(4434);
 	let eventEmitter = new events.EventEmitter();
-	
+
 	let calculateUploadCheckpointMD5 = function(uploadCheckpoint){
 		let data = [];
 		data.push(uploadCheckpoint.bucketName);
@@ -7134,7 +7134,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 		}
 		return obsClient.util.bufMD5(Buffer.from(data.join(''), 'utf8'));
 	};
-	
+
 	let writeCheckpointFileSync = function(checkpointFile, uploadCheckpoint){
 		try{
 			fs.writeFileSync(checkpointFile, JSON.stringify(uploadCheckpoint));
@@ -7160,7 +7160,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 			return false;
 		}
 	};
-	
+
 	let abortRequest = function(uploadCheckpoint, checkpointFile, code, message){
 		if(uploadCheckpoint && uploadCheckpoint.uploadId){
 			obsClient.abortMultipartUpload({
@@ -7182,7 +7182,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 			_callback(code, message);
 		}
 	};
-	
+
 	let transResultToError = function(result){
 		let ret = [];
 		if(result && result.CommonMsg){
@@ -7192,7 +7192,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 		}
 		return ret.join(',');
 	};
-	
+
 	eventEmitter.on('start to uploadFile', function(uploadCheckpoint){
 		if(!uploadCheckpoint){
 			uploadCheckpoint = {};
@@ -7236,7 +7236,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 				}
 				partsLoaded[partNumber] = loaded;
 				progressCallback(finishedBytes, uploadCheckpoint.uploadFileStat.fileSize, (new Date().getTime() - startTime) / 1000);
-			}; 
+			};
 
 			// 段进度
 			let createProgressCallbackByPartNumber = function(partNumber){
@@ -7262,7 +7262,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 							UploadId : uploadId,
 							Parts: parts
 						}, function(err, result){
-							if(err || result.CommonMsg.Status >= 500){ 
+							if(err || result.CommonMsg.Status >= 500){
 								if(checkpointFile){
 									_callback('IncompletedUpload', err ? err : transResultToError(result));
 								}else{
@@ -7286,7 +7286,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 					}
 				}
 			};
-			
+
 			eventEmitter.on('doUpload', function(currentGroupIndex, groupCount, taskNum){
 				let start = (currentGroupIndex - 1) * taskNum;
 				let end = (currentGroupIndex === groupCount) ? uploadCheckpoint.partCount : currentGroupIndex * taskNum;
@@ -7354,19 +7354,19 @@ ObsClient.prototype.uploadFile = function(param, callback){
 					start++;
 				}
 			});
-			
+
 			let groupCount = (uploadCheckpoint.partCount % taskNum === 0) ? (uploadCheckpoint.partCount / taskNum) : (Math.floor(uploadCheckpoint.partCount / taskNum) + 1);
 			eventEmitter.emit('doUpload', 1, groupCount, taskNum);
 		};
-		
+
 		let uploadId = uploadCheckpoint.uploadId;
 		if(!uploadId){
 			let contentType = uploadCheckpoint.contentType ? uploadCheckpoint.contentType : obsClient.util.mimeTypes[key.substring(key.lastIndexOf('.') + 1)];
-			
+
 			if(!contentType){
 				contentType = obsClient.util.mimeTypes[uploadFile.substring(uploadFile.lastIndexOf('.') + 1)];
 			}
-			
+
 			obsClient.initiateMultipartUpload({
 				Bucket : uploadCheckpoint.bucketName,
 				Key : uploadCheckpoint.objectKey,
@@ -7394,7 +7394,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 					_callback(result);
 					return;
 				}
-				
+
 				uploadId = result.InterfaceResult.UploadId;
 				uploadCheckpoint.uploadId = uploadId;
 				uploadCheckpoint.md5 = calculateUploadCheckpointMD5(uploadCheckpoint);
@@ -7410,7 +7410,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 			startToUploadFile(uploadId);
 		}
 	});
-	
+
 	let uploadCheckpoint;
 	let partSize = parseInt(param.PartSize, 10);
 	let partCount;
@@ -7446,7 +7446,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 	uploadCheckpoint.expires = param.Expires;
 	uploadCheckpoint.md5 = calculateUploadCheckpointMD5(uploadCheckpoint);
 	uploadCheckpoint.uploadFileStat = {fileSize : fileSize, lastModified : fstat.mtime.toUTCString()};
-	
+
 	if(checkpointFile){
 		if(!fs.existsSync(checkpointFile)){// call uploadFile first time
 			eventEmitter.on('start to writeFile', function(){
@@ -7489,7 +7489,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 					abortRequest(uploadCheckpoint, checkpointFile, 'CheckpointFileInvalid', 'CheckpointFile is invalid!');
 					return;
 				}
-				
+
 				if(uploadCheckpoint.uploadFileStat.checkSum){
 					obsClient.util.fileMD5(uploadFile, function(err, checkSum){
 						if(err || checkSum !== uploadCheckpoint.uploadFileStat.checkSum){
@@ -7508,7 +7508,7 @@ ObsClient.prototype.uploadFile = function(param, callback){
 	}
 };
 
-// 当指定了参数DownloadFile，将使用此值作为保存文件名，否则使用对象名作为保存文件名， 保存时将覆盖同名文件。 
+// 当指定了参数DownloadFile，将使用此值作为保存文件名，否则使用对象名作为保存文件名， 保存时将覆盖同名文件。
 // 另外，还将使用 保存文件名+".obsnodejssdk.tmp"后缀的形式 作为下载过程中的临时中间文件名，且也会覆盖同名文件。
 // 另外，当开启了断点延续下载（EnableCheckpoint=true），还将使用 参数CheckpointFile（如果没有指定CheckpointFile将使用对象名）+".obsnodejssdk.chkpt"后缀的形式 作为保存历史下载情况和校验信息的文件名，且也会覆盖同名文件。
 ObsClient.prototype.downloadFile = function(param, callback){
@@ -7531,7 +7531,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 			callback(code ? (code.CommonMsg.Code + ':' + code.CommonMsg.Message) : null, result);
 		}
 	};
-	
+
 	_log.runLog('debug', funcName, 'enter ' + funcName + '...' );
 
 	let bucket = param.Bucket;
@@ -7541,7 +7541,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 		return;
 	}
 	bucket = String(bucket);
-	
+
 	let key = param.Key;
 	if(!key){
 		_log.runLog('error', funcName, 'Key is a required element!');
@@ -7549,9 +7549,9 @@ ObsClient.prototype.downloadFile = function(param, callback){
 		return;
 	}
 	key = String(key);
-	
+
 	let pathLib = __nccwpck_require__(6928);
-	
+
 	let downloadFile;
 	if(!param.DownloadFile){
 		downloadFile = (__nccwpck_require__(932).cwd)() + pathLib.sep + key;
@@ -7565,7 +7565,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 	let fs = __nccwpck_require__(9896);
 
 	let taskNum = parseInt(param.TaskNum, 10) || 10;
-	
+
 	let initWriteAndClose4DownloadTmpFile = function(tmpFileFd, tmpFile, tmpFileSize, callback) {
 		let buffer = Buffer.from('1', 'utf8');
 		let start = new Date().getTime();
@@ -7612,9 +7612,9 @@ ObsClient.prototype.downloadFile = function(param, callback){
 						}
 						return callback(true, tmpFile);
 					});
-				}	
+				}
 			});
-		});	
+		});
 	}
 
 	const prepareDownloadTempFile = util.promisify((tmpFile, tmpFileSize, callback) => {
@@ -7653,7 +7653,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 
 		let enableCheckpoint = param.EnableCheckpoint;
 		let checkpointFile = null;
-		
+
 		if(enableCheckpoint){
 			checkpointFile = param.CheckpointFile;
 			checkpointFile = (checkpointFile && checkpointFile !== '') ? String(checkpointFile) : downloadFile + chkSuffix;
@@ -7662,37 +7662,37 @@ ObsClient.prototype.downloadFile = function(param, callback){
 				mkdirsSync(checkPointFileDir);
 			}
 		}
-		
+
 		let tempFileDir = pathLib.dirname(downloadTempFile);
 		if(!fs.existsSync(tempFileDir)){
 			mkdirsSync(tempFileDir);
 		}
-		
+
 		if(err || result.CommonMsg.Status >= 500){
 			_log.runLog('warn', funcName,  'the peer server occur exception!');
 			_callback('GetObjectSizeError', err);
 			return;
 		}
-		
+
 		if(result.CommonMsg.Status >= 300 && result.CommonMsg.Status < 500){
 			_log.runLog('warn', funcName,  result.CommonMsg.Message);
 			_callback(result);
 			return;
 		}
-		
+
 		let objectSize = parseInt(result.InterfaceResult.ContentLength, 10);
-		
+
 		if(objectSize === 0){
 			fs.writeFileSync(downloadFile, Buffer.from(''));
 			callback(null, result);
 			return;
 		}
-		
+
 		let objestStat = result;
-		
+
 		let events = __nccwpck_require__(4434);
 		let eventEmitter = new events.EventEmitter();
-		
+
 		let calculateDownloadCheckpointMD5 = function(downloadCheckpoint){
 			let data = [];
 			data.push(downloadCheckpoint.bucketName);
@@ -7722,7 +7722,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 				data.push(downloadCheckpoint.sseCKey);
 			}
 			if(downloadCheckpoint.partsMeta && (downloadCheckpoint.partsMeta instanceof Object)){
-				// key是分段段号，且在partsMeta上最小编号是1。  
+				// key是分段段号，且在partsMeta上最小编号是1。
 				for(let key in downloadCheckpoint.partsMeta){
 					if ({}.hasOwnProperty.call(downloadCheckpoint.partsMeta, key)) {
 						data.push(String(key));
@@ -7737,7 +7737,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 			}
 			return obsClient.util.bufMD5(Buffer.from(data.join(''), 'utf8'));
 		};
-		
+
 		let writeCheckpointFileSync = function(checkpointFile, downloadCheckpoint){
 			try{
 				if(fs.existsSync(downloadTempFile)){
@@ -7759,18 +7759,18 @@ ObsClient.prototype.downloadFile = function(param, callback){
 				return false;
 			}
 		};
-		
+
 		eventEmitter.on('start to downloadFile', function(downloadCheckpoint){
 			if(!downloadCheckpoint){
 				downloadCheckpoint = {};
 			}
-			
+
 			if(!downloadCheckpoint.partsMeta){
 				downloadCheckpoint.partsMeta = {};
 			}
-			
+
 			_log.runLog('debug', funcName, 'Begin to downloadFile from OBS to:' + downloadFile);
-			
+
 			let finishedCount = 0;
 			let hasError = false;
 			let isAbort = false;
@@ -7802,7 +7802,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 				}
 				partsLoaded[partNumber] = loaded;
 				progressCallback(finishedBytes, downloadCheckpoint.objectStatus.objectSize, (new Date().getTime() - startTime) / 1000);
-			}; 
+			};
 
 			// 段进度
 			let createProgressCallbackByStartPart = function(partNumber){
@@ -7842,7 +7842,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 						}
 						_callback(null, null, result);
 					});
-				}else{	
+				}else{
 					if(checkpointFile){
 						if(!writeCheckpointFileSync(checkpointFile, downloadCheckpoint)){
 							return;
@@ -7854,7 +7854,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 					}
 				}
 			};
-			
+
 			eventEmitter.on('doDownload', function(currentGroupIndex, groupCount, taskNum){
 				let start = (currentGroupIndex - 1) * taskNum;
 				let end = (currentGroupIndex === groupCount) ? downloadCheckpoint.partCount : currentGroupIndex * taskNum;
@@ -7919,7 +7919,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 							_callback('DownloadFileFailed',`write to downloadTempFile occur exception : ${err.stack}`);
 							delete result.InterfaceResult.Content;
 						});
-						
+
 						res.on('error', (err) => {
 							// 如果可读流在处理期间发送错误，则可写流目标不会自动关闭。 如果发生错误，则需要手动关闭每个流以防止内存泄漏。
 							hasError = true;
@@ -8023,7 +8023,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 
 			eventEmitter.emit('doDownload', 1, groupCount, taskNum);
 		});
-		
+
 		let downloadCheckpoint;
 		let _tmpDownloadCheckpoint;
 		let partSize = parseInt(param.PartSize, 10);
@@ -8042,7 +8042,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 		downloadCheckpoint.sseCKey = param.SseCKey;
 		downloadCheckpoint.md5 = calculateDownloadCheckpointMD5(downloadCheckpoint);
 		downloadCheckpoint.objectStatus = {objectSize : objectSize, lastModified : objestStat.InterfaceResult.LastModified, etag: objestStat.InterfaceResult.ETag};
-		
+
 		let tryContinueDownload_noChkFile = function() {
 			fs.writeFile(checkpointFile, JSON.stringify(downloadCheckpoint), function(err){
 				if(err){
@@ -8072,8 +8072,8 @@ ObsClient.prototype.downloadFile = function(param, callback){
 			}
 
 			let tempFileStat = fs.statSync(downloadTempFile);
-			if( tempFileStatusInChk.fileName !== downloadTempFile 
-				|| tempFileStatusInChk.lastModified !== tempFileStat.mtime.toUTCString() 
+			if( tempFileStatusInChk.fileName !== downloadTempFile
+				|| tempFileStatusInChk.lastModified !== tempFileStat.mtime.toUTCString()
 				|| tempFileStatusInChk.fileSize !==  tempFileStat.size){
 				_log.runLog('warn',  'verifyTempFileStatus' , ' the tempFileStatus information in checkpointfile is not consistent.');
 				return false;
@@ -8100,10 +8100,10 @@ ObsClient.prototype.downloadFile = function(param, callback){
 						_callback('ParseCheckpointFileError', 'pasre checkpointFile data occur exception : ' + e);
 					}
 				}
-				
+
 				// verify : downloadTempFile  vs  checkpointfile
-				if(!downloadCheckpoint || downloadCheckpoint.bucketName !== bucket || downloadCheckpoint.objectKey !== key || downloadCheckpoint.downloadFile !== downloadFile || 
-						!downloadCheckpoint.objectStatus || downloadCheckpoint.objectStatus.objectSize !== objectSize || downloadCheckpoint.objectStatus.lastModified !== objestStat.InterfaceResult.LastModified || downloadCheckpoint.objectStatus.etag !== objestStat.InterfaceResult.ETag 
+				if(!downloadCheckpoint || downloadCheckpoint.bucketName !== bucket || downloadCheckpoint.objectKey !== key || downloadCheckpoint.downloadFile !== downloadFile ||
+						!downloadCheckpoint.objectStatus || downloadCheckpoint.objectStatus.objectSize !== objectSize || downloadCheckpoint.objectStatus.lastModified !== objestStat.InterfaceResult.LastModified || downloadCheckpoint.objectStatus.etag !== objestStat.InterfaceResult.ETag
 						|| !verifyDownloadTempFileStatus(downloadCheckpoint.tempFileStatus) || downloadCheckpoint.md5 !== calculateDownloadCheckpointMD5(downloadCheckpoint)){
 					// 校验不通过，不使用延续下载，需执行prepareDownloadTempFile()
 					fs.unlinkSync(checkpointFile, function(){});
@@ -8123,7 +8123,7 @@ ObsClient.prototype.downloadFile = function(param, callback){
 					_log.runLog('debug',  funcName , 'CheckpointFile is valid!');
 					eventEmitter.emit('start to downloadFile', downloadCheckpoint);
 				}
-				
+
 			});
 		}
 
@@ -8165,7 +8165,7 @@ function createPromise(current){
 			current.call(this, param, callback);
 			return;
 		}
-		
+
 		let that = this;
 		return new Promise(function(resolve, reject) {
 			current.call(that, param, function(err, result){
@@ -8215,7 +8215,7 @@ ObsClient.prototype.exec = function(funcName, param, callback){
 		if(_log.isLevelEnabled('info')){
 			_log.runLog('info', funcName, 'ObsClient cost ' +  (new Date().getTime() - start) + ' ms');
 		}
-		
+
 		if(err && !(err instanceof Error)){
 			err = new Error(err);
 		}
@@ -8714,7 +8714,7 @@ const functionGraphConfiguration = {
 				}
 			},
 			'FunctionGraph' : {},
-	
+
 			'Event' : {
 				'type' : 'array',
 				'items' : {
@@ -8722,7 +8722,7 @@ const functionGraphConfiguration = {
 				}
 			}
 		}
-	}	
+	}
 };
 
 const topicConfiguration = {
@@ -8754,7 +8754,7 @@ const topicConfiguration = {
 				}
 			},
 			'Topic' : {},
-	
+
 			'Event' : {
 				'type' : 'array',
 				'items' : {
@@ -8882,7 +8882,7 @@ const CustomDomainCertificateConfig = {
 			'type': 'string',
 			'required': true,
 		}
-			
+
 	}
 }
 
@@ -8911,44 +8911,44 @@ const operations = {
 			},
 			'Location' : {
 				'location' : 'xml',
-				'sentAs' : 'Location' 
+				'sentAs' : 'Location'
 			},
 			'GrantRead' : {
 				'location' : 'header',
 				'sentAs' : 'grant-read',
 				'withPrefix' : true,
 			},
-			
+
 			'GrantWrite' : {
 				'location' : 'header',
 				'sentAs' : 'grant-write',
 				'withPrefix' : true,
 			},
-			
+
 			'GrantReadAcp' : {
 				'location' : 'header',
 				'sentAs' : 'grant-read-acp',
 				'withPrefix' : true,
 			},
-			
+
 			'GrantWriteAcp' : {
 				'location' : 'header',
 				'sentAs' : 'grant-write-acp',
 				'withPrefix' : true,
 			},
-			
+
 			'GrantFullControl' : {
 				'location' : 'header',
 				'sentAs' : 'grant-full-control',
 				'withPrefix' : true,
 			},
-			
+
 			'GrantReadDelivered' : {
 				'location' : 'header',
 				'sentAs' : 'grant-read-delivered',
 				'withPrefix' : true,
 			},
-			
+
 			'GrantFullControlDelivered' : {
 				'location' : 'header',
 				'sentAs' : 'grant-full-control-delivered',
@@ -8971,7 +8971,7 @@ const operations = {
 			},
 		}
 	},
-	
+
     'ListBuckets' : {
 		'httpMethod' : 'GET',
 		'parameters' : {
@@ -9052,7 +9052,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'HeadBucket' : {
 		'httpMethod' : 'HEAD',
 		'parameters' : {
@@ -9062,7 +9062,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'HeadApiVersion' : {
 		'httpMethod' : 'HEAD',
 		'urlPath' : 'apiversion',
@@ -9072,7 +9072,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'HeadApiVersionOutput' : {
 		'parameters' : {
 			'ApiVersion' : {
@@ -9537,7 +9537,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'GetBucketLocationOutput' : {
 		'data' : {
 			'type' : 'xml'
@@ -9619,7 +9619,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'SetBucketAcl' : {
 		'httpMethod' : 'PUT',
 		'urlPath' : 'acl',
@@ -9641,7 +9641,7 @@ const operations = {
 			'Grants' : grants
 		},
 	},
-	
+
 	'GetBucketAcl' : {
 		'httpMethod' : 'GET',
 		'urlPath' : 'acl',
@@ -9663,7 +9663,7 @@ const operations = {
 			'GrantsV2': grantsV2,
 		}
 	},
-	
+
 	'SetBucketLoggingConfiguration' : {
 		'httpMethod' : 'PUT',
 		'urlPath' : 'logging',
@@ -9722,7 +9722,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'GetBucketPolicy' : {
 		'httpMethod' : 'GET',
 		'urlPath' : 'policy',
@@ -9789,7 +9789,7 @@ const operations = {
 			'Rules' : rules
 		},
 	},
-	
+
 	'DeleteBucketLifecycleConfiguration' : {
 		'httpMethod' : 'DELETE',
 		'urlPath' : 'lifecycle',
@@ -9818,7 +9818,7 @@ const operations = {
 			'RoutingRules' : routingRules
 		},
 	},
-	
+
 	'GetBucketWebsiteConfiguration' : {
 		'httpMethod' : 'GET',
 		'urlPath' : 'website',
@@ -9870,7 +9870,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'GetBucketVersioningConfiguration' : {
 		'httpMethod' : 'GET',
 		'urlPath' : 'versioning',
@@ -10099,7 +10099,7 @@ const operations = {
 			}
 		}
 	},
-	
+
 	'GetBucketStoragePolicy' :{
 		'httpMethod' : 'GET',
 		'urlPath' : 'storageClass',
@@ -10110,7 +10110,7 @@ const operations = {
 			},
 		}
 	},
-	
+
 	'GetBucketStoragePolicyOutput' :{
 		'data' : {
 			'type' : 'xml',
@@ -10231,7 +10231,7 @@ const operations = {
 			}
 		}
 	},
-	
+
 	'PutObject' : {
 		'httpMethod' : 'PUT',
 		'parameters' : {
@@ -10259,11 +10259,11 @@ const operations = {
 			'Offset' : {
 				'type' : 'plain'
 			},
-			
+
 			'ProgressCallback' :{
 				'type' : 'plain'
 			},
-			
+
 			'ContentLength' :{
 				'location' : 'header',
 				'sentAs' : 'Content-Length',
@@ -10744,11 +10744,11 @@ const operations = {
 			'Offset' : {
 				'type' : 'plain'
 			},
-			
+
 			'ProgressCallback' :{
 				'type' : 'plain'
 			},
-			
+
 			'ContentLength' :{
 				'location' : 'header',
 				'sentAs' : 'Content-Length',
@@ -10943,7 +10943,7 @@ const operations = {
 			}
 		},
 	},
-	
+
 	'GetObject' : {
 		'httpMethod' : 'GET',
 		'parameters' : {
@@ -11154,7 +11154,7 @@ const operations = {
 			'StorageClass' : {
 				'location' : 'header',
 				'sentAs' : 'storage-class',
-				'withPrefix' : true	
+				'withPrefix' : true
 			},
 			'StorageClassObs' : {
 				'location' : 'header',
@@ -11623,7 +11623,7 @@ const operations = {
 			}
 		},
 	},
-	
+
 	'GetObjectMetadataOutput' : {
 		'parameters' : {
 			'Expiration' : {
@@ -11847,7 +11847,7 @@ const operations = {
 			}
 		},
 	},
-	
+
     'SetObjectMetadata': {
         'httpMethod': 'PUT',
         'urlPath': 'metadata',
@@ -11886,7 +11886,7 @@ const operations = {
                 'sentAs': 'Content-Language'
             },
             'ContentEncoding': {
-            	'location': 'header', 
+            	'location': 'header',
             	'sentAs': 'Content-Encoding'
             },
             'ContentType': {
@@ -11904,7 +11904,7 @@ const operations = {
             },
             'Metadata': {
             	'type' : 'object',
-            	'location': 'header', 
+            	'location': 'header',
             	'sentAs': 'meta-',
                 'withPrefix': true
             },
@@ -12338,7 +12338,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'InitiateMultipartUpload' : {
 		'httpMethod' : 'POST',
 		'urlPath' : 'uploads',
@@ -12677,7 +12677,7 @@ const operations = {
 			'ProgressCallback' :{
 				'type' : 'plain'
 			},
-			
+
 			'SseC' :{
 				'location' : 'header',
 				'sentAs' : 'server-side-encryption-customer-algorithm',
@@ -12962,7 +12962,7 @@ const operations = {
 			}
 		},
 	},
-	
+
 	'CompleteMultipartUpload' : {
 		'httpMethod' : 'POST',
 		'data' : {
@@ -13353,7 +13353,7 @@ const operations = {
 			'IsPublic' : {
 				'location' : 'xml',
 				'sentAs' : 'IsPublic',
-			}, 
+			},
 		}
 	},
 	'GetBucketPublicStatus' : {
@@ -13375,7 +13375,7 @@ const operations = {
 			'IsPublic' : {
 				'location' : 'xml',
 				'sentAs' : 'IsPublic',
-			}, 
+			},
 		}
 	},
 	'SetBucketCustomDomain' : {
@@ -13603,7 +13603,7 @@ const mimeTypes = {
 };
 
 
-const allowedResourceParameterNames = [        
+const allowedResourceParameterNames = [
 	'acl',
 	'backtosource',
     'policy',
@@ -13720,9 +13720,9 @@ const obsAllowedUri = ['Everyone', 'Logdelivery'];
 
 const v2AllowedUri = ['http://acs.amazonaws.com/groups/global/AllUsers', 'http://acs.amazonaws.com/groups/global/AuthenticatedUsers', 'http://acs.amazonaws.com/groups/s3/LogDelivery'];
 
-const obsAllowedEvent = ['ObjectCreated:*', 'ObjectCreated:Put', 'ObjectCreated:Post', 'ObjectCreated:Copy', 
+const obsAllowedEvent = ['ObjectCreated:*', 'ObjectCreated:Put', 'ObjectCreated:Post', 'ObjectCreated:Copy',
     'ObjectCreated:CompleteMultipartUpload', 'ObjectRemoved:*', 'ObjectRemoved:Delete', 'ObjectRemoved:DeleteMarkerCreated'];
-const v2AllowedEvent = ['s3:ObjectCreated:*', 's3:ObjectCreated:Put', 's3:ObjectCreated:Post', 's3:ObjectCreated:Copy', 
+const v2AllowedEvent = ['s3:ObjectCreated:*', 's3:ObjectCreated:Put', 's3:ObjectCreated:Post', 's3:ObjectCreated:Copy',
     's3:ObjectCreated:CompleteMultipartUpload', 's3:ObjectRemoved:*', 's3:ObjectRemoved:Delete', 's3:ObjectRemoved:DeleteMarkerCreated'];
 
 const negotiateMethod = 'HeadApiVersion';
@@ -13817,7 +13817,7 @@ function isObject(obj) {
 
 
 function makeObjFromXml(xml, methodName, log, bc){
-	
+
 	try {
 		const result = parser.parse(xml, options);
 		if(result === null || result === undefined){
@@ -13826,7 +13826,7 @@ function makeObjFromXml(xml, methodName, log, bc){
 			}
 			return bc(new Error('xml is not well format'), null);
 		}
-		
+
 		bc(null, result);
 	} catch (err) {
 		return bc(err, null);
@@ -13843,27 +13843,27 @@ function getExpireDate(utcDateStr){
 	let year = date.getUTCFullYear();
 	let expireDate = '';
 	expireDate += year + '-';
-	
+
 	if(moth < 10){
 		expireDate += '0';
 	}
 	expireDate += moth + '-';
-	
+
 	if(day < 10){
 		expireDate += '0';
 	}
 	expireDate += day + 'T';
-	
+
 	if(hour < 10){
 		expireDate += '0';
 	}
 	expireDate += hour + ':';
-	
+
 	if(min < 10){
 		expireDate += '0';
 	}
 	expireDate += min + ':';
-	
+
 	if(sec < 10){
 		expireDate += '0';
 	}
@@ -13882,28 +13882,28 @@ function getDates(utcDateStr){
 	let shortDate = '';
 	let longDate = '';
 	shortDate += year;
-	
+
 	if(moth < 10){
 		shortDate += '0';
 	}
 	shortDate += moth;
-	
+
 	if(day < 10){
 		shortDate += '0';
 	}
 	shortDate += day;
-	
+
 	longDate += shortDate + 'T';
 	if(hour < 10){
 		longDate += '0';
 	}
 	longDate +=  hour;
-	
+
 	if(min < 10){
 		longDate += '0';
 	}
 	longDate +=  min;
-	
+
 	if(sec < 10){
 		longDate += '0';
 	}
@@ -13953,13 +13953,13 @@ function getV4Signature(shortDate, longDate, sk, region, canonicalRequest){
 
 
 function getXSdkDateIAMCloud() { // To get the x-sdk-date for Iamcloud
-  const now = new Date(); 
-  const year = now.getUTCFullYear(); 
+  const now = new Date();
+  const year = now.getUTCFullYear();
   const month = String(now.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(now.getUTCDate()).padStart(2, '0'); 
-  const hours = String(now.getUTCHours()).padStart(2, '0'); 
-  const minutes = String(now.getUTCMinutes()).padStart(2, '0'); 
-  const seconds = String(now.getUTCSeconds()).padStart(2, '0'); 
+  const day = String(now.getUTCDate()).padStart(2, '0');
+  const hours = String(now.getUTCHours()).padStart(2, '0');
+  const minutes = String(now.getUTCMinutes()).padStart(2, '0');
+  const seconds = String(now.getUTCSeconds()).padStart(2, '0');
 
   return `${year}${month}${day}T${hours}${minutes}${seconds}Z`;
 }
@@ -13971,7 +13971,7 @@ function Utils(logger) {
 	this.permanentAk = null;
 	this.permanentSk = null;
 	this.securityToken = null;
-	this.isSecure = true; 
+	this.isSecure = true;
 	this.server = null;
 	this.pathStyle = false;
 	this.signatureContext = null;
@@ -14018,7 +14018,7 @@ Utils.prototype.refresh = async function (ak, sk, securityToken, is_shadow_clien
 	this.ak = ak ? String(ak).trim() : null;
 	this.sk = sk ? String(sk).trim(): null;
 	this.securityToken = securityToken ? String(securityToken).trim() : null;
-	
+
 	if (is_shadow_client) {
 		await this.getTemporaryKeysFromCloudAlliance(this.ak, this.sk,this.iam_domain, this.shadow_expires)
 	}
@@ -14030,7 +14030,7 @@ Utils.prototype.initFactory = function (ak, sk, isSecure,
 
 	this.is_shadow_client = is_shadow_client
 	this.iam_domain = iam_domain
-		
+
 	shadow_expires = Number(shadow_expires)
 
 	if (shadow_expires && (shadow_expires < (15 * 60) || shadow_expires > (60 * 60 * 24))) {
@@ -14044,7 +14044,7 @@ Utils.prototype.initFactory = function (ak, sk, isSecure,
 	if (httpAgent !== undefined) {
 		this.httpAgent = httpAgent;
 	}
-	
+
 	if (httpsAgent !== undefined) {
 		this.httpsAgent = httpsAgent;
 	}
@@ -14060,7 +14060,7 @@ Utils.prototype.initFactory = function (ak, sk, isSecure,
 	}
 
 	server = String(server).trim();
-	
+
 	if (server.indexOf('https://') === 0) {
 		server = server.slice('https://'.length);
 		isSecure = true;
@@ -14068,74 +14068,74 @@ Utils.prototype.initFactory = function (ak, sk, isSecure,
 		server = server.slice('http://'.length);
 		isSecure = false;
 	}
-	
+
 	let index = server.lastIndexOf('/');
 	while (index >= 0) {
 		server = server.slice(0, index);
 		index = server.lastIndexOf('/');
 	}
-	
+
 	index = server.indexOf(':');
 	if (index >= 0) {
 		port = server.slice(index + 1);
 		server = server.slice(0, index);
 	}
 	this.server = server;
-	
+
 	if (/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/.test(this.server)) {
 		pathStyle = true;
 	}
-	
+
 	if (isSecure !== undefined) {
 		this.isSecure = isSecure;
 	}
 	if (pathStyle !== undefined) {
 		this.pathStyle = pathStyle;
 	}
-	
+
 	if (signature !== undefined) {
 		signature = String(signature).trim().toLowerCase();
 	} else {
 		signature = 'obs';
 	}
-	
+
 	if (isSignatureNegotiation !== undefined) {
 		this.isSignatureNegotiation = isSignatureNegotiation;
 	}
 
 	this.isCname = isCname;
-	
+
 	if (this.pathStyle || this.isCname) {
 		this.isSignatureNegotiation = false;
 		if (signature === 'obs') {
 			signature = 'v2';
 		}
 	}
-	
+
 	this.signatureContext = signature === 'obs' ? obsSignatureContext : v2SignatureContext;
-	
+
 	if (region !== undefined) {
 		this.region = String(region).trim();
 	}
-	
+
 	this.port = port ? parseInt(port, 10) : (this.isSecure ? 443 : 80);
-	
+
 	if (maxRetryCount !== undefined) {
 		this.maxRetryCount = parseInt(maxRetryCount, 10);
 	}
-	
+
 	if (timeout !== undefined) {
 		this.timeout = parseInt(timeout, 10);
 	}
-	
+
 	if (sslVerify !== undefined) {
 		this.sslVerify = sslVerify;
 	}
-	
+
 	if (maxConnections !== undefined) {
 		this.maxConnections = parseInt(maxConnections, 10);
 	}
-	
+
 	if (userAgent) {
 		this.userAgent = userAgent;
 	}
@@ -14152,7 +14152,7 @@ Utils.prototype.initFactory = function (ak, sk, isSecure,
 	if (thirdHttpLib) {
 		this.thirdHttpLib = thirdHttpLib;
 	}
-	
+
 	if (longConnection !== undefined && Number(longConnection) >= 0) {
 		if (!this.httpAgent) {
 			this.httpAgent = new httpLib.Agent({ keepAlive: true, keepAliveMsecs: Number(longConnection) * 1000, maxSockets: this.maxConnections, maxFreeSockets: this.maxConnections });
@@ -14162,7 +14162,7 @@ Utils.prototype.initFactory = function (ak, sk, isSecure,
 		}
 	}
 
-	
+
 }
 
 function generateSignatureCloudAlliance(request, ak, sk) {
@@ -14203,13 +14203,13 @@ function parseExpirationTime(expiresAtStr) {
 Utils.prototype.waitForCloudAllianceGetsReady = async function() {
 	const startTime = Date.now();
 	const timeout = 60 * 1000; // 60 seconds
-	
+
 	while (!this.is_shadow_client_ready) {
 		if (Date.now() - startTime > timeout) {
     	throw new Error("Timeout: Shadow client not ready");
 		}
-		await new Promise(resolve => setTimeout(resolve, 1000)); 
-	}		
+		await new Promise(resolve => setTimeout(resolve, 1000));
+	}
 }
 
 Utils.prototype.refreshShadowClient = async function () {
@@ -14239,7 +14239,7 @@ Utils.prototype.getTemporaryKeysFromCloudAlliance = async function(ak,sk,iam_dom
 	//If is_shadow_client true, call iam-domain and get temp ak-sk
 	const request = {
 		method: 'POST',
-		host: iam_domain, 
+		host: iam_domain,
 		path: IAM_DOMAIN_PATH_EXTENSION,
 		body: JSON.stringify({
 			auth: {
@@ -14253,7 +14253,7 @@ Utils.prototype.getTemporaryKeysFromCloudAlliance = async function(ak,sk,iam_dom
 		})
 	};
 
-	
+
 	const validAk = this.permanentAk ? this.permanentAk : ak
 	const validSk = this.permanentSk ? this.permanentSk : sk
 
@@ -14277,7 +14277,7 @@ Utils.prototype.getTemporaryKeysFromCloudAlliance = async function(ak,sk,iam_dom
 	let log = this.log
 
 	const req = await httpsLib.request(options, (res) => {
-		
+
 		let responseData = '';
 		res.on('data', (chunk) => {
 			responseData += chunk;
@@ -14308,7 +14308,7 @@ Utils.prototype.getTemporaryKeysFromCloudAlliance = async function(ak,sk,iam_dom
 			}
 		})
 	});
-	
+
 	req.on('error', (err => {
 		req.removeAllListeners('abort');
 		req.abort();
@@ -14325,7 +14325,7 @@ Utils.prototype.getTemporaryKeysFromCloudAlliance = async function(ak,sk,iam_dom
 
 	req.write(request.body);
 	req.end();
-		
+
 }
 Utils.prototype.SseKmsAdapter = function(value, signatureContext){
 	value = value || '';
@@ -14383,7 +14383,7 @@ Utils.prototype.URIAdapter = function(value, signatureContext){
 			return 'LogDelivery'
 		}
 		return '';
-		
+
 	}
 	if(v2AllowedUri.indexOf(value) >= 0){
 		return value;
@@ -14416,7 +14416,7 @@ Utils.prototype.StorageClassAdapter = function(value, signatureContext){
 		}
 		return '';
 	}
-	
+
 	if(v2AllowedStorageClass.indexOf(value) >= 0){
 		if(value === 'INTELLIGENT_TIERING'){
 			this.log.runLog('warn', 'Intelligent tiering supports only OBS signature');
@@ -14439,16 +14439,16 @@ Utils.prototype.ACLAdapter = function(value, signatureContext){
 		if(obsAllowedAcl.indexOf(value) >= 0){
 			return value;
 		}
-		
+
 		return '';
 	}
-	
+
 	if(value === 'public-read-delivered'){
 		value = 'public-read';
 	}else if(value === 'public-read-write-delivered'){
 		value = 'public-read-write';
 	}
-	
+
 	if(v2AllowedAcl.indexOf(value) >= 0){
 		return value;
 	}
@@ -14477,7 +14477,7 @@ Utils.prototype.doNegotiation = function(funcName, param, callback, checkBucket,
 			opt.signatureContext = item.signatureContext;
 			return that.sendRequest(funcName, opt, callback);
 		}
-		
+
 		o = this.bucketEventEmitters[param.Bucket];
 		if(!o){
 			o = {
@@ -14485,7 +14485,7 @@ Utils.prototype.doNegotiation = function(funcName, param, callback, checkBucket,
 			};
 			this.bucketEventEmitters[param.Bucket] = o;
 		}
-		
+
 		if(o.s){
 			o.e.once('done', () => {
 				that.doNegotiation(funcName, param, callback, checkBucket, checkCache, setCache);
@@ -14516,7 +14516,7 @@ Utils.prototype.doNegotiation = function(funcName, param, callback, checkBucket,
 		if(result.CommonMsg.Status < 300 && result.InterfaceResult && result.InterfaceResult.ApiVersion >= '3.0'){
 			signatureContext = obsSignatureContext;
 		}
-		
+
 		if(setCache){
 			that.bucketSignatureCache[param.Bucket] = {
 				signatureContext : signatureContext,
@@ -14546,7 +14546,7 @@ Utils.prototype.exec = function(funcName, param, callback){
 			let _callback = function(err, result){
 				if(!err && result.CommonMsg.Status === 400 &&
 						result.CommonMsg.Message === 'Unsupported Authorization Type' &&
-						param.signatureContext && 
+						param.signatureContext &&
 						param.signatureContext.signature === 'v2'){
 					param.signatureContext = v2SignatureContext;
 					let opt = that.makeParam(funcName, param);
@@ -14559,7 +14559,7 @@ Utils.prototype.exec = function(funcName, param, callback){
 				}
 				callback(err, result);
 			};
-			
+
 			that.doNegotiation(funcName, param, _callback, false, true, false);
 		}else if(funcName === 'DeleteObjects' && param.EncodingType === 'url'){
 			param.Objects.map( e =>{
@@ -14628,7 +14628,7 @@ Utils.prototype.buildXml = function(mXml, xmlMeta, key, sentAs, signatureContext
 			xml += '>';
 			xml += result + '</' + sentAs + '>';
 		}
-		
+
 	}else if(!xmlMeta.notAllowEmpty || String(mXml[key]) !== ''){
 		if(type === 'adapter'){
 			xml += '<' + sentAs + '>' + String(this[key + 'Adapter'](mXml[key], signatureContext)).replace(/&/g, '&amp;').replace(/'/g, '&apos;').replace(/"/g, '&quot;') + '</' + sentAs + '>';
@@ -14695,7 +14695,7 @@ Utils.prototype.buildObject = function(model, obj, key, opt, ifRootXMlDecode){
 			}
 		}
 	}
-	
+
 	if(opt[key] === undefined){
 		if(model[key].type === 'object'){
 			opt[key] = model[key].parameters ? this.jsonToObject(model[key].parameters, null, null, ifRootXMlDecode) : {};
@@ -14708,7 +14708,7 @@ Utils.prototype.buildObject = function(model, obj, key, opt, ifRootXMlDecode){
 };
 
 Utils.prototype.makeParam = function (methodName, param) {
-	
+
 
 	let signatureContext = param.signatureContext || this.signatureContext;
 	let model = signatureContext.signature === 'obs' ? obsModel[methodName] : v2Model[methodName];
@@ -14722,7 +14722,7 @@ Utils.prototype.makeParam = function (methodName, param) {
 	opt.$pipeHook = param.PipeHook;
 	opt.$responseHook = param.ResponseHook;
 	opt.$highWaterMark = param.HighWaterMark;
-	
+
 	//If the method is setBucketCustomDomain, check the certificate params
 	if (methodName === customDomainCertificateMethod&&param.DomainBody) {
 		checkCustomDomainCertificateParams(param.DomainBody,this.log,methodName,opt)
@@ -14820,14 +14820,14 @@ Utils.prototype.makeParam = function (methodName, param) {
 			}
 		}
 	}
-	
+
 	if('data' in model && 'xmlRoot' in model.data){
 		if(xml || model.data.xmlAllowEmpty){
 			let xmlRoot = model.data.xmlRoot;
 			xml = '<' + xmlRoot + '>' + xml + '</' + xmlRoot + '>';
 		}
 	}
-	
+
 	exheaders.Host = this.server;
 	if(!this.pathStyle && !this.isCname){
 		let uriList = uri.split('/');
@@ -14837,7 +14837,7 @@ Utils.prototype.makeParam = function (methodName, param) {
 			if(requestUri.indexOf('//') === 0){
 				requestUri = requestUri.slice(1);
 			}
-			
+
 			if(signatureContext.signature === 'v4'){
 				uri = requestUri;
 			}else if(requestUri === '/'){
@@ -14846,7 +14846,7 @@ Utils.prototype.makeParam = function (methodName, param) {
 			opt.requestUri = encodeURIWithSafe(requestUri, '/');
 		}
 	}
-	
+
 	opt.method = method;
 	opt.uri = encodeURIWithSafe(uri, '/');
 	opt.urlPath = urlPath;
@@ -14864,7 +14864,7 @@ Utils.prototype.makeParam = function (methodName, param) {
 		}
 	}
 	opt.headers = exheaders;
-	
+
 	if('srcFile' in opt){
 		if (!fs.existsSync(opt.srcFile)) {
 			opt.err = 'the file [' + opt.srcFile + '] is not exist!';
@@ -14873,7 +14873,7 @@ Utils.prototype.makeParam = function (methodName, param) {
 			}
 			return opt;
 		}
-		
+
 		let fileSize = fs.statSync(opt.srcFile).size;
 		if ('Content-Length' in opt.headers || 'PartSize' in opt || 'Offset' in opt) {
 			let offset = opt.Offset;
@@ -14914,7 +14914,7 @@ Utils.prototype.sendRequest = function(funcName, opt, bc, retryCount){
 				that.sendRequest(funcName, opt, bc, retryCount + 1);
 				return;
 			}
-			
+
 			if(err.message !== 'pause' && !readable && msg !== 'PREMATURE_END' && msg !== 'SELF_SIGNED_CERT_IN_CHAIN' && msg !== 'DEPTH_ZERO_SELF_SIGNED_CERT' && retryCount <= that.maxRetryCount){
 				that.sendRequest(funcName, opt, bc, retryCount + 1);
 				return;
@@ -14927,7 +14927,7 @@ Utils.prototype.sendRequest = function(funcName, opt, bc, retryCount){
 Utils.prototype.doAuth = function(opt, methodName, signatureContext) {
 	let interestHeader = ['Content-MD5', 'Content-Type', 'Date'];
 	let log = this.log;
-	
+
 	let hasSecurityToken = false;
 	let securityToken = '';
 
@@ -15013,7 +15013,7 @@ Utils.prototype.v4Auth = function(opt, methodName, signatureContext){
 	let log = this.log;
 	let shortDate = null;
 	let longDate = null;
-	
+
 	if(signatureContext.headerPrefix + 'date' in header){
 		longDate = header[signatureContext.headerPrefix + 'date'];
 		shortDate = longDate.slice(0, longDate.indexOf('T'));
@@ -15022,14 +15022,14 @@ Utils.prototype.v4Auth = function(opt, methodName, signatureContext){
 		shortDate = dates[0];
 		longDate = dates[1];
 	}
-	
+
 	let credential = this.ak + '/' + shortDate + '/' + this.region + '/s3/aws4_request';
-	
+
 	let signedAndCanonicalHeaders = getSignedAndCanonicalHeaders(header);
-	
+
 	let signedHeaders = signedAndCanonicalHeaders[0];
 	let canonicalHeaders = signedAndCanonicalHeaders[1];
-	
+
 	let canonicalQueryString = '';
 	if(opt.urlPath){
 		let path = opt.urlPath.slice(1);
@@ -15050,12 +15050,12 @@ Utils.prototype.v4Auth = function(opt, methodName, signatureContext){
 	canonicalRequest +=  canonicalHeaders + '\n';
 	canonicalRequest += signedHeaders + '\n';
 	canonicalRequest += CONTENT_SHA256;
-	
+
 	if(log.isLevelEnabled('debug')){
 		log.runLog('debug',methodName, 'canonicalRequest:' + canonicalRequest);
 	}
 	let signature = getV4Signature(shortDate, longDate, this.sk, this.region, canonicalRequest);
-	
+
 	opt.headers.Authorization = 'AWS4-HMAC-SHA256 Credential=' + credential + ',SignedHeaders=' + signedHeaders + ',Signature=' + signature;
 };
 
@@ -15075,7 +15075,7 @@ Utils.prototype.contrustCommonMsg = function(opt, obj, headers, methodName, sign
 	opt.InterfaceResult = {};
 	let log = this.log;
 	this.parseCommonHeaders(opt, headers, signatureContext);
-	
+
 	if(log.isLevelEnabled('info')){
 		log.runLog('info', methodName, 'request finished with request id:' + opt.InterfaceResult.RequestId);
 	}
@@ -15084,18 +15084,18 @@ Utils.prototype.contrustCommonMsg = function(opt, obj, headers, methodName, sign
 			continue;
 		}
 		let sentAs = obj[key].sentAs || key;
-		
+
 		if(obj[key].withPrefix){
 			sentAs = signatureContext.headerPrefix + sentAs;
 		}
-		
+
 		if(obj[key].type === 'object'){
 			opt.InterfaceResult[key] = parseObjectFromHeaders(sentAs, headers);
 			continue;
 		}
 		let val = headers[sentAs];
-		
-		
+
+
 		if(val === undefined){
 			val = headers[sentAs.toLowerCase()];
 		}
@@ -15135,7 +15135,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 	if(log.isLevelEnabled('debug')){
 		log.runLog('debug', methodName, 'response msg :statusCode:' + serverback.statusCode + ', headers:' + headerTostring(headers));
 	}
-	
+
 	let doLog = function(){
 		if(log.isLevelEnabled('debug')){
 			let logMsg = 'Status:' + opt.CommonMsg.Status + ', Code:' + opt.CommonMsg.Code + ', Message:' + opt.CommonMsg.Message;
@@ -15144,7 +15144,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 		bc(null,opt);
 	};
 	let that = this;
-	
+
 	if(serverback.statusCode >= 300 && serverback.statusCode < 400 && serverback.statusCode !== 304 && !readable && retryCount <= that.maxRetryCount){
 		let location = headers.location || headers.Location;
 		if(location){
@@ -15162,8 +15162,8 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 		if(log.isLevelEnabled('error')){
 			log.runLog('error', methodName, 'get redirect code 3xx, but no location in headers');
 		}
-	} 
-	
+	}
+
 	if(serverback.statusCode < 300){
 		let getCount = 0
 		let objectTotalSize = headers['content-length']
@@ -15182,7 +15182,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 				};
 				serverback.on('data', progressListener)
 			}
-			
+
 			let stream = fs.createWriteStream(dstFile);
 			stream.once('close', function(){
 				if(opt.InterfaceResult && opt.InterfaceResult.ContentLength !== undefined && fs.existsSync(dstFile)){
@@ -15198,7 +15198,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 				}
 				bc(err, null);
 			});
-			
+
 			serverback.once('error', function(err){
 				stream.end();
 				if(log.isLevelEnabled('error')){
@@ -15228,7 +15228,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 				let respMsg = 'Status: ' + opt.CommonMsg.Status + ', headers: ' +  headerTostring(headers);
 				log.runLog('debug', methodName, respMsg);
 			}
-			
+
 			for (let key in obj){
 				if(obj[key].location !== 'body'){
 					continue;
@@ -15239,7 +15239,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 			return doLog();
 		}
 	}
-	
+
 	let body = [];
 	serverback.on('data', function(data) {
 		body.push(data);
@@ -15250,7 +15250,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 		bc(err, null);
 	}).once('end', function() {
 		body = Buffer.concat(body);
-		
+
 		if(serverback.statusCode < 300){
 			if(log.isLevelEnabled('debug')){
 				let respMsg = 'Status: ' + opt.CommonMsg.Status + ', headers: ' +  headerTostring(headers);
@@ -15261,7 +15261,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 				log.runLog('debug', methodName, respMsg);
 			}
 			that.contrustCommonMsg(opt, obj, headers, methodName, signatureContext);
-			
+
 			if(body.length > 0 && ('data' in model)){
 				if(model.data.type === 'xml'){
 					return makeObjFromXml(body, methodName, log, function(err, result){
@@ -15286,7 +15286,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 						doLog();
 					});
 				}
-				
+
 				if(model.data.type === 'body'){
 					for (let key in obj){
 						if(obj[key].location === 'body'){
@@ -15298,7 +15298,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 			}
 			return doLog();
 		}
-		
+
 		if(log.isLevelEnabled('debug')){
 			let respMsg = 'Status: ' + opt.CommonMsg.Status + ', headers: ' +  headerTostring(headers);
 			if(body.length > 0){
@@ -15307,22 +15307,22 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 			}
 			log.runLog('debug', methodName, respMsg);
 		}
-		
+
 		opt.CommonMsg.RequestId = headers[signatureContext.headerPrefix + 'request-id'];
 		opt.CommonMsg.Id2 = headers[signatureContext.headerPrefix + 'id2'];
 		opt.CommonMsg.Indicator = headers['x-reserved-indicator'];
 		if(log.isLevelEnabled('error')){
 			log.runLog('error', methodName, 'request error with http status code:' + serverback.statusCode);
 		}
-		
+
 		if(log.isLevelEnabled('info')){
 			log.runLog('info', methodName, 'request finished with request id:' + opt.CommonMsg.RequestId);
 		}
-		
+
 		if(body.length === 0){
 			return doLog();
 		}
-		
+
 		return makeObjFromXml(body, methodName, log, function(err, re){
 			if(err){
 				if(log.isLevelEnabled('error')){
@@ -15344,7 +15344,7 @@ Utils.prototype.getRequest = function(methodName, serverback, dstFile, saveAsStr
 			doLog();
 		});
 	});
-	
+
 };
 
 function isMatchingPattern(host, pattern) {
@@ -15450,11 +15450,11 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 	let nowDate = new Date();
 	opt.headers.Date = nowDate.toUTCString();
 	delete opt.headers.Authorization;// retry bug fix
-	
+
 	let ex = opt.headers;
 	let path = (opt.requestUri ? opt.requestUri : opt.uri) + opt.urlPath;
 	let method = opt.method;
-	
+
 	if (methodName === customDomainCertificateMethod && opt.xml !== undefined) {
 		if (isValidStringInKb(opt.xml) > 40) {
 			const err =  'Total XML body of Certificate should be equal or less than 40KB!';
@@ -15469,14 +15469,14 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 			opt.headers[signatureContext.headerPrefix + 'security-token'] = this.securityToken;
 		}
 	    if(signatureContext.signature === 'v4'){
-	    	this.v4Auth(opt, methodName, signatureContext); 
+	    	this.v4Auth(opt, methodName, signatureContext);
 	    }else{
 	    	this.doAuth(opt, methodName, signatureContext);
 	    }
 	}
 
 	ex['User-Agent'] = this.userAgent;
-	
+
 	if(log.isLevelEnabled('info')){
 		log.runLog('info', methodName, 'prepare request parameters ok, then start to send request to service');
 	}
@@ -15488,23 +15488,23 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 			}
 		}
 		header_msg.Authorization = '****';
-		
+
 		if (header_msg[signatureContext.stsToken]) {
 			header_msg[signatureContext.stsToken] = '****';
 		}
-		
+
 		let msg = 'method:' + method + ', path:' + path + 'headers:' + headerTostring(header_msg);
 		if (body && !readable) {
 			msg += 'body:' + body;
 		}
 		log.runLog('debug', methodName, 'request msg:' + msg);
 	}
-	
+
 	let ca = null;
 	if(this.sslVerify && this.sslVerify !== true && fs.existsSync(String(this.sslVerify))){
 		ca = fs.readFileSync(String(this.sslVerify));
 	}
-	
+
 	let reopt = {
 		method : method,
 		host : ex.Host,
@@ -15520,16 +15520,16 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 	};
 
 	let requestPath = reopt.host + ':' + reopt.port + reopt.path;
-	
+
 	let start = nowDate.getTime();
-	
+
 	let _isSecure = opt.protocol ? opt.protocol.toLowerCase().indexOf('https') === 0 : this.isSecure;
-	
+
 	reopt.agent = _isSecure ? this.httpsAgent : this.httpAgent;
 	if (!this.shouldUseProxy(reopt.host) && reopt.agent.proxyUri) {
 		reopt.agent = null;
 	}
-	
+
 	let _http = _isSecure ? httpsLib : httpLib;
 	if (this.thirdHttpLib) {
 		_http = this.thirdHttpLib;
@@ -15539,9 +15539,9 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 	if(opt.$requestHook){
 		opt.$requestHook(req);
 	}
-	
+
 	let that = this;
-	
+
 	let progressListener;
 	let errorListener;
 	let doAbort = function(){
@@ -15568,7 +15568,7 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 		if(log.isLevelEnabled('info')){
 			log.runLog('info', methodName, 'get http response for ' + requestPath +  ' cost ' +  (new Date().getTime() - start) + ' ms');
 		}
-		
+
 		if(opt.$responseHook){
 			opt.$responseHook(serverback);
 		}
@@ -15587,7 +15587,7 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 		doAbort();
 		bc(new Error('pause'));
 	});
-	
+
 	if(log.isLevelEnabled('info')){
 		req.once('socket', function(socket){
 			if(log.isLevelEnabled('debug')){
@@ -15600,11 +15600,11 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 			log.runLog('info', methodName, 'get tcp socket for ' + requestPath + ' cost ' +  (new Date().getTime() - start) + ' ms');
 		});
 	}
-	
+
 	if(['GET', 'HEAD', 'OPTIONS'].includes(method)){
 		return req.end();
 	}
-	
+
 	let progressCallback = opt.ProgressCallback;
 	let writeCount = 0;
 	let writeStart = new Date().getTime();
@@ -15618,7 +15618,7 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 				}
 			});
 		}
-		
+
 		errorListener = function(err){
 			req.removeAllListeners('abort');
 			req.abort();
@@ -15628,15 +15628,15 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 			}
 			bc(err);
 		};
-		
+
 		body.once('error', errorListener);
-		
+
 		let contentLength = ('ContentLength' in opt) ? parseInt(opt.ContentLength, 10) : -1;
-		
+
 		if(contentLength > 0 && body.end === Infinity){
 			body.end =  (body.start ? body.start : 0) + contentLength - 1;
 		}
-		
+
 		if(progressCallback){
 			progressListener = function(data){
 				writeCount += data.length;
@@ -15644,17 +15644,17 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 			};
 			body.on('data', progressListener);
 		}
-		
+
 		if(opt.$pipeHook){
 			return opt.$pipeHook(body, req);
 		}
 		return body.pipe(req);
 	}
-	
+
 	if(!('srcFile' in opt)){
 		return req.end();
 	}
-	
+
 	let stream = null;
 	let offset = opt.Offset >= 0 ? opt.Offset : 0;
 	if('PartSize' in opt){
@@ -15662,7 +15662,7 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 	}else if('ContentLength' in opt){
 		stream = fs.createReadStream(opt.srcFile, {start:offset, end:offset+Math.max(parseInt(opt.ContentLength, 10)-1, 0)});
 	}
-	
+
 	if(!stream){
 		stream = fs.createReadStream(opt.srcFile);
 	}
@@ -15672,7 +15672,7 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 		progressListener = function(data){
 			writeCount += data.length;
 			progressCallback(writeCount, fileSize, (new Date().getTime()-writeStart)/1000);
-		}; 
+		};
 		stream.on('data', progressListener);
 	}
 	errorListener = function(err){
@@ -15684,9 +15684,9 @@ Utils.prototype.makeRequest = async function (methodName, opt, retryCount, bc) {
 		}
 		bc(err);
 	};
-	
+
 	stream.once('error', errorListener);
-	
+
 	if(opt.$pipeHook){
 		return opt.$pipeHook(stream, req);
 	}
@@ -15703,7 +15703,7 @@ Utils.prototype.fileMD5 = function (filePath, bc){
 	sha.on('finish', ()=>{
 		bc(null, sha.digest('base64'));
 	});
-	
+
 	stream.on('error',function(err){
 		sha.destroy();
 		bc(err);
@@ -15719,12 +15719,12 @@ Utils.prototype.createSignedUrlSync = function(param){
 
 Utils.prototype.createV2SignedUrlSync = function(param){
 	param = param || {};
-	
+
 	let method = param.Method ? String(param.Method) : 'GET';
 	let bucketName = param.Bucket ? String(param.Bucket) : null;
 	let objectKey = param.Key ? String(param.Key) : null;
 	let specialParam = param.SpecialParam ? String(param.SpecialParam) : null;
-	
+
 	if(this.signatureContext.signature === 'obs' && specialParam === 'storagePolicy'){
 		specialParam = 'storageClass';
 	}else if(this.signatureContext.signature === 'v2' && specialParam === 'storageClass'){
@@ -15742,7 +15742,7 @@ Utils.prototype.createV2SignedUrlSync = function(param){
 			}
 		}
 	}
-	
+
 	let queryParams = {};
 	if(param.QueryParams && (param.QueryParams instanceof Object) && !(param.QueryParams instanceof Array)){
 		for(let key in param.QueryParams){
@@ -15751,7 +15751,7 @@ Utils.prototype.createV2SignedUrlSync = function(param){
 			}
 		}
 	}
-	
+
 	if(this.securityToken && !queryParams[this.signatureContext.headerPrefix + 'security-token']){
 		queryParams[this.signatureContext.headerPrefix + 'security-token'] = this.securityToken;
 	}
@@ -15771,9 +15771,9 @@ Utils.prototype.createV2SignedUrlSync = function(param){
 			resource += '/';
 		}
 	}
-	
+
 	headers.Host = host;
-	
+
 	if(objectKey){
 		objectKey = encodeURIWithSafe(objectKey, '/');
 		result += '/' + objectKey;
@@ -15782,23 +15782,23 @@ Utils.prototype.createV2SignedUrlSync = function(param){
 		}
 		resource += objectKey;
 	}
-	
+
 	if(resource === ''){
 		resource = '/';
 	}
-	
+
 	result += '?';
-	
+
 	if(specialParam){
 		queryParams[specialParam] = '';
 	}
-	
+
 	if(this.signatureContext.signature === 'v2'){
 		queryParams.AWSAccessKeyId = this.ak;
 	}else{
 		queryParams.AccessKeyId = this.ak;
 	}
-	
+
 	if(expires < 0){
 		expires = 300;
 	}
@@ -15820,7 +15820,7 @@ Utils.prototype.createV2SignedUrlSync = function(param){
 			}
 		}
 	}
-	
+
 	let queryParamsKeys = [];
 	for(let key in queryParams){
 		if ({}.hasOwnProperty.call(queryParams, key)) {
@@ -15858,12 +15858,12 @@ Utils.prototype.createV2SignedUrlSync = function(param){
 
 	let stringToSign = [method];
 	stringToSign.push('\n');
-	
+
 	if('content-md5' in interestHeaders){
 		stringToSign.push(interestHeaders['content-md5']);
 	}
 	stringToSign.push('\n');
-	
+
 	if('content-type' in interestHeaders){
 		stringToSign.push(interestHeaders['content-type']);
 	}
@@ -15921,7 +15921,7 @@ Utils.prototype.createV4SignedUrlSync = function(param){
 	let bucketName = param.Bucket ? String(param.Bucket) : null;
 	let objectKey = param.Key ? String(param.Key) : null;
 	let specialParam = param.SpecialParam ? String(param.SpecialParam) : null;
-	
+
 	if(specialParam === 'storageClass'){
 		specialParam = 'storagePolicy';
 	}
@@ -15935,7 +15935,7 @@ Utils.prototype.createV4SignedUrlSync = function(param){
 			}
 		}
 	}
-	
+
 	let queryParams = {};
 	if(param.QueryParams && (param.QueryParams instanceof Object) && !(param.QueryParams instanceof Array)){
 		for(let key in param.QueryParams){
@@ -15944,11 +15944,11 @@ Utils.prototype.createV4SignedUrlSync = function(param){
 			}
 		}
 	}
-	
+
 	if(this.securityToken && !queryParams[this.signatureContext.headerPrefix + 'security-token']){
 		queryParams[this.signatureContext.headerPrefix + 'security-token'] = this.securityToken;
 	}
-			
+
 	let result = '';
 	let resource = '';
 	let host = this.server;
@@ -15960,45 +15960,45 @@ Utils.prototype.createV4SignedUrlSync = function(param){
 			host = bucketName + '.' + host;
 		}
 	}
-	
+
 	if(objectKey){
 		objectKey = encodeURIWithSafe(objectKey, '/');
 		result += '/' + objectKey;
 		resource += '/' + objectKey;
 	}
-	
+
 	if(resource === ''){
 		resource = '/';
 	}
-	
+
 	result += '?';
-	
+
 	if(specialParam){
 		queryParams[specialParam] = '';
 	}
-	
+
 	if(expires < 0){
 		expires = 300;
 	}
 
 	let utcDateStr = headers.date || headers.Date || new Date().toUTCString();
-	
+
 	let dates = getDates(utcDateStr);
 	let shortDate = dates[0];
 	let longDate = dates[1];
-	
+
 	headers.Host = host + ((this.port === 80 || this.port === 443) ? '' : ':' + this.port);
-	
-	
+
+
 	queryParams['X-Amz-Algorithm'] = 'AWS4-HMAC-SHA256';
 	queryParams['X-Amz-Credential'] = this.ak + '/' + shortDate + '/' + this.region + '/s3/aws4_request';
 	queryParams['X-Amz-Date'] = longDate;
 	queryParams['X-Amz-Expires'] = String(expires);
-	
+
     let signedAndCanonicalHeaders = getSignedAndCanonicalHeaders(headers);
-	
+
 	queryParams['X-Amz-SignedHeaders'] = signedAndCanonicalHeaders[0];
-	
+
 	let _queryParams = {};
 	let queryParamsKeys = [];
 	for(let key in queryParams){
@@ -16015,49 +16015,49 @@ Utils.prototype.createV4SignedUrlSync = function(param){
 			result += '&';
 		}
 	}
-	
+
 	let canonicalQueryString = '';
-	
+
 	queryParamsKeys.sort();
-	
+
 	for(let i=0;i<queryParamsKeys.length;){
 		canonicalQueryString += queryParamsKeys[i] + '=' + _queryParams[queryParamsKeys[i]];
 		if(++i !== queryParamsKeys.length){
 			canonicalQueryString += '&';
 		}
 	}
-	
+
 	let canonicalRequest = method + '\n';
 	canonicalRequest += resource +  '\n';
 	canonicalRequest += canonicalQueryString + '\n';
 	canonicalRequest += signedAndCanonicalHeaders[1] + '\n';
 	canonicalRequest += signedAndCanonicalHeaders[0] + '\n';
 	canonicalRequest += 'UNSIGNED-PAYLOAD';
-	
+
 	let signature = getV4Signature(shortDate, longDate, this.sk, this.region, canonicalRequest);
-	
+
 	result += 'X-Amz-Signature=' + encodeURIWithSafe(signature);
-	
+
 	return {
 		ActualSignedRequestHeaders : headers,
 		SignedUrl : (this.isSecure ? 'https' : 'http') + '://' + host + ':' + this.port + result
 	};
-			
+
 };
 
 
 Utils.prototype.createPostSignatureSync = function(param){
-	
+
 	if(this.signatureContext.signature === 'v4'){
 		return this.createV4PostSignatureSync(param);
 	}
-	
+
 	param = param || {};
 	let bucketName = param.Bucket ? String(param.Bucket) : null;
 	let objectKey = param.Key ? String(param.Key) : null;
 	let expires = param.Expires ? parseInt(param.Expires, 10) : 300;
 	let formParams = {};
-	
+
 	if(param.FormParams && (param.FormParams instanceof Object) && !(param.FormParams instanceof Array)){
 		for(let key in param.FormParams){
 			if ({}.hasOwnProperty.call(param.FormParams, key)){
@@ -16065,33 +16065,33 @@ Utils.prototype.createPostSignatureSync = function(param){
 			}
 		}
 	}
-	
+
 	if(this.securityToken && !formParams[this.signatureContext.headerPrefix + 'security-token']){
 		formParams[this.signatureContext.headerPrefix + 'security-token'] = this.securityToken;
 	}
-	
+
 	let expireDate = new Date();
 	expireDate.setTime(parseInt(new Date().getTime(), 10) + expires * 1000);
 	expireDate = getExpireDate(expireDate.toUTCString());
-	
+
 	if(bucketName){
 		formParams.bucket = bucketName;
 	}
-	
+
 	if(objectKey){
 		formParams.key = objectKey;
 	}
-	
+
 	let policy = [];
 	policy.push('{"expiration":"');
 	policy.push(expireDate);
 	policy.push('", "conditions":[');
-	
+
 	let matchAnyBucket = true;
 	let matchAnyKey = true;
-	
+
 	let conditionAllowKeys = ['acl', 'bucket', 'key', 'success_action_redirect', 'redirect', 'success_action_status'];
-	
+
 	for(let key in formParams){
 		if ({}.hasOwnProperty.call(formParams, key)){
 			if(!key){
@@ -16117,23 +16117,23 @@ Utils.prototype.createPostSignatureSync = function(param){
 			policy.push('"},');
 		}
 	}
-	
-	
+
+
 	if(matchAnyBucket){
 		policy.push('["starts-with", "$bucket", ""],');
 	}
-	
+
 	if(matchAnyKey){
 		policy.push('["starts-with", "$key", ""],');
 	}
-	
+
 	// 去除末尾的逗号
 	let originPolicy = policy.join('').replace(/,$/, '') + ']}';
-	
+
 	policy = Buffer.from(originPolicy,'utf8').toString('base64');
-	
+
 	let signature = crypto.createHmac('sha1', this.sk).update(policy).digest('base64');
-	
+
 	return {
 		OriginPolicy : originPolicy,
 		Policy : policy,
@@ -16145,12 +16145,12 @@ Utils.prototype.createPostSignatureSync = function(param){
 
 Utils.prototype.createV4PostSignatureSync = function(param){
 	param = param || {};
-	
+
 	let bucketName = param.Bucket ? String(param.Bucket) : null;
 	let objectKey = param.Key ? String(param.Key) : null;
 	let expires = param.Expires ? parseInt(param.Expires, 10) : 300;
 	let formParams = {};
-	
+
 	if(param.FormParams && (param.FormParams instanceof Object) && !(param.FormParams instanceof Array)){
 		for(let key in param.FormParams){
 			if ({}.hasOwnProperty.call(param.FormParams, key)) {
@@ -16158,85 +16158,85 @@ Utils.prototype.createV4PostSignatureSync = function(param){
 			}
 		}
 	}
-	
+
 	if(this.securityToken && !formParams[this.signatureContext.headerPrefix + 'security-token']){
 		formParams[this.signatureContext.headerPrefix + 'security-token'] = this.securityToken;
 	}
-	
+
 	let utcDateStr = new Date().toUTCString();
 	let dates = getDates(utcDateStr);
 	let shortDate = dates[0];
 	let longDate = dates[1];
-	
+
 	let credential = this.ak + '/' + shortDate + '/' + this.region + '/s3/aws4_request';
-	
+
 	let expireDate = new Date();
 	expireDate.setTime(parseInt(new Date().getTime(), 10) + expires * 1000);
-	
+
 	expireDate = getExpireDate(expireDate.toUTCString());
-	
+
 	formParams['X-Amz-Algorithm'] = 'AWS4-HMAC-SHA256';
 	formParams['X-Amz-Date'] = longDate;
 	formParams['X-Amz-Credential'] = credential;
-	
+
 	if(bucketName){
 		formParams.bucket = bucketName;
 	}
-	
+
 	if(objectKey){
 		formParams.key = objectKey;
 	}
-	
+
 	let policy = [];
 	policy.push('{"expiration":"');
 	policy.push(expireDate);
 	policy.push('", "conditions":[');
-	
+
 	let matchAnyBucket = true;
 	let matchAnyKey = true;
-	
+
 	let conditionAllowKeys = ['acl', 'bucket', 'key', 'success_action_redirect', 'redirect', 'success_action_status'];
-	
+
 	for(let key in formParams){
 		if(!key){
 			continue;
 		}
 		let val = formParams[key];
 		key = String(key).toLowerCase();
-		
+
 		if(key === 'bucket'){
 			matchAnyBucket = false;
 		}else if(key === 'key'){
 			matchAnyKey = false;
 		}
-		
+
 		if(allowedResponseHttpHeaderMetadataNames.indexOf(key) < 0 && conditionAllowKeys.indexOf(key) < 0 && key.indexOf(this.signatureContext.headerPrefix) !== 0){
 			continue;
 		}
-		
+
 		policy.push('{"');
 		policy.push(key);
 		policy.push('":"');
 		policy.push(val !== null ? String(val) : '');
 		policy.push('"},');
 	}
-	
+
 	if(matchAnyBucket){
 		policy.push('["starts-with", "$bucket", ""],');
 	}
-	
+
 	if(matchAnyKey){
 		policy.push('["starts-with", "$key", ""],');
 	}
-	
+
 	policy.push(']}');
-	
+
 	let originPolicy = policy.join('');
-	
+
 	policy = Buffer.from(originPolicy,'utf8').toString('base64');
-	
+
 	let signature = createV4Signature(shortDate, this.sk, this.region, policy);
-	
+
 	return {
 		OriginPolicy : originPolicy,
 		Policy : policy,
@@ -16641,7 +16641,7 @@ const functionGraphConfiguration = {
 				}
 			},
 			'FunctionGraph' : {},
-	
+
 			'Event' : {
 				'type' : 'array',
 				'items' : {
@@ -16649,7 +16649,7 @@ const functionGraphConfiguration = {
 				}
 			}
 		}
-	}	
+	}
 };
 
 const topicConfiguration = {
@@ -16681,7 +16681,7 @@ const topicConfiguration = {
 				}
 			},
 			'Topic' : {},
-	
+
 			'Event' : {
 				'type' : 'array',
 				'items' : {
@@ -16811,7 +16811,7 @@ const CustomDomainCertificateConfig = {
 			'type': 'string',
 			'required': true,
 		}
-			
+
 	}
 }
 
@@ -16846,25 +16846,25 @@ const operations = {
 				'sentAs' : 'grant-read',
 				'withPrefix' : true,
 			},
-			
+
 			'GrantWrite' : {
 				'location' : 'header',
 				'sentAs' : 'grant-write',
 				'withPrefix' : true,
 			},
-			
+
 			'GrantReadAcp' : {
 				'location' : 'header',
 				'sentAs' : 'grant-read-acp',
 				'withPrefix' : true,
 			},
-			
+
 			'GrantWriteAcp' : {
 				'location' : 'header',
 				'sentAs' : 'grant-write-acp',
 				'withPrefix' : true,
 			},
-			
+
 			'GrantFullControl' : {
 				'location' : 'header',
 				'sentAs' : 'grant-full-control',
@@ -16886,7 +16886,7 @@ const operations = {
 			},
 		}
 	},
-	
+
     'ListBuckets' : {
 		'httpMethod' : 'GET',
 		'parameters' : {
@@ -16983,7 +16983,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'HeadApiVersion' : {
 		'httpMethod' : 'HEAD',
 		'urlPath' : 'apiversion',
@@ -16993,7 +16993,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'HeadApiVersionOutput' : {
 		'parameters' : {
 			'ApiVersion' : {
@@ -17411,7 +17411,7 @@ const operations = {
 			}
 		},
 	},
-	
+
 	'GetBucketLocationOutput' : {
 		'data' : {
 			'type' : 'xml',
@@ -17509,7 +17509,7 @@ const operations = {
 			},
 		},
 	},
-	
+
 	'SetBucketAcl' : {
 		'httpMethod' : 'PUT',
 		'urlPath' : 'acl',
@@ -17536,7 +17536,7 @@ const operations = {
 			}
 		},
 	},
-	
+
 	'GetBucketAcl' : {
 		'httpMethod' : 'GET',
 		'urlPath' : 'acl',
@@ -17562,7 +17562,7 @@ const operations = {
 			'Grants' : grants
 		}
 	},
-	
+
 	'SetBucketLoggingConfiguration' : {
 		'httpMethod' : 'PUT',
 		'urlPath' : 'logging',
@@ -17628,7 +17628,7 @@ const operations = {
 			}
 		},
 	},
-	
+
 	'GetBucketPolicy' : {
 		'httpMethod' : 'GET',
 		'urlPath' : 'policy',
@@ -17715,7 +17715,7 @@ const operations = {
 			'Rules' : rules
 		},
 	},
-	
+
 	'DeleteBucketLifecycleConfiguration' : {
 		'httpMethod' : 'DELETE',
 		'urlPath' : 'lifecycle',
@@ -17754,7 +17754,7 @@ const operations = {
 			}
 		},
 	},
-	
+
 	'GetBucketWebsiteConfiguration' : {
 		'httpMethod' : 'GET',
 		'urlPath' : 'website',
@@ -17821,7 +17821,7 @@ const operations = {
 			}
 		},
 	},
-	
+
 	'GetBucketVersioningConfiguration' : {
 		'httpMethod' : 'GET',
 		'urlPath' : 'versioning',
@@ -18108,7 +18108,7 @@ const operations = {
 			}
 		}
 	},
-	
+
 	'GetBucketStoragePolicy' :{
 		'httpMethod' : 'GET',
 		'urlPath' : 'storagePolicy',
@@ -18124,7 +18124,7 @@ const operations = {
 			}
 		}
 	},
-	
+
 	'GetBucketStoragePolicyOutput' :{
 		'data' : {
 			'type' : 'xml',
@@ -18271,7 +18271,7 @@ const operations = {
 			}
 		}
 	},
-	
+
 	'PutObject' : {
 		'httpMethod' : 'PUT',
 		'parameters' : {
@@ -18877,7 +18877,7 @@ const operations = {
 			}
 		},
 	},
-	
+
 	'GetObject' : {
 		'httpMethod' : 'GET',
 		'parameters' : {
@@ -19540,7 +19540,7 @@ const operations = {
 			}
 		},
 	},
-	
+
 	 'SetObjectMetadata': {
 	        'httpMethod': 'PUT',
 	        'urlPath': 'metadata',
@@ -19579,7 +19579,7 @@ const operations = {
 	                'sentAs': 'Content-Language'
 	            },
 	            'ContentEncoding': {
-	            	'location': 'header', 
+	            	'location': 'header',
 	            	'sentAs': 'Content-Encoding'
 	            },
 	            'ContentType': {
@@ -19597,7 +19597,7 @@ const operations = {
 	            },
 	            'Metadata': {
 	            	'type' : 'object',
-	            	'location': 'header', 
+	            	'location': 'header',
 	            	'sentAs': 'meta-',
 	                'withPrefix': true
 	            },
@@ -21019,7 +21019,7 @@ const operations = {
 			'IsPublic' : {
 				'location' : 'xml',
 				'sentAs' : 'IsPublic',
-			}, 
+			},
 		}
 	},
 	'GetBucketPublicStatus' : {
@@ -21041,7 +21041,7 @@ const operations = {
 			'IsPublic' : {
 				'location' : 'xml',
 				'sentAs' : 'IsPublic',
-			}, 
+			},
 		}
 	},
 	'SetBucketCustomDomain' : {
@@ -21293,7 +21293,7 @@ exports.validate = function (xmlData, options) {
     // check for byte order mark (BOM)
     xmlData = xmlData.substr(1);
   }
-  
+
   for (let i = 0; i < xmlData.length; i++) {
 
     if (xmlData[i] === '<' && xmlData[i+1] === '?') {
@@ -21305,7 +21305,7 @@ exports.validate = function (xmlData, options) {
       //read until you reach to '>' avoiding any '>' in attribute value
       let tagStartPos = i;
       i++;
-      
+
       if (xmlData[i] === '!') {
         i = readCommentAndCDATA(xmlData, i);
         continue;
@@ -21898,12 +21898,12 @@ Builder.prototype.buildObjectNode = function(val, key, attrStr, level) {
 
     let tagEndExp = '</' + key + this.tagEndChar;
     let piClosingChar = "";
-    
+
     if(key[0] === "?") {
       piClosingChar = "?";
       tagEndExp = "";
     }
-  
+
     // attrStr is an empty string in case the attribute came as undefined or null
     if ((attrStr || attrStr === '') && val.indexOf('<') === -1) {
       return ( this.indentate(level) + '<' +  key + attrStr + piClosingChar + '>' + val + tagEndExp );
@@ -21955,11 +21955,11 @@ Builder.prototype.buildTextValNode = function(val, key, attrStr, level) {
       .replace(/-$/, '- ');    // trailing - would form --> with the closing delimiter
     return this.indentate(level) + `<!--${safeVal}-->` +  this.newLine;
   }else if(key[0] === "?") {//PI tag
-    return  this.indentate(level) + '<' + key + attrStr+ '?' + this.tagEndChar; 
+    return  this.indentate(level) + '<' + key + attrStr+ '?' + this.tagEndChar;
   }else{
     let textValue = this.options.tagValueProcessor(key, val);
     textValue = this.replaceEntitiesValue(textValue);
-  
+
     if( textValue === ''){
       return this.indentate(level) + '<' + key + attrStr + this.closeTag(key) + this.tagEndChar;
     }else{
@@ -22003,10 +22003,10 @@ module.exports = Builder;
 const EOL = "\n";
 
 /**
- * 
- * @param {array} jArray 
- * @param {any} options 
- * @returns 
+ *
+ * @param {array} jArray
+ * @param {any} options
+ * @returns
  */
 function toXml(jArray, options) {
     let indentation = "";
@@ -22652,7 +22652,7 @@ function validatePropertyName(propertyName, optionName) {
 
 /**
  * Normalizes processEntities option for backward compatibility
- * @param {boolean|object} value 
+ * @param {boolean|object} value
  * @returns {object} Always returns normalized object
  */
 function normalizeProcessEntities(value) {
@@ -23326,9 +23326,9 @@ function isItStopNode(stopNodesExact, stopNodesWildcard, jPath, currentTagName) 
 
 /**
  * Returns the tag Expression and where it is ending handling single-double quotes situation
- * @param {string} xmlData 
+ * @param {string} xmlData
  * @param {number} i starting index
- * @returns 
+ * @returns
  */
 function tagExpWithClosingIndex(xmlData, i, closingChar = ">") {
   let attrBoundary;
@@ -23401,9 +23401,9 @@ function readTagExp(xmlData, i, removeNSPrefix, closingChar = ">") {
 }
 /**
  * find paired tag for a stop node
- * @param {string} xmlData 
- * @param {string} tagName 
- * @param {number} i 
+ * @param {string} xmlData
+ * @param {string} tagName
+ * @param {number} i
  */
 function readStopNodeData(xmlData, tagName, i) {
   const startIndex = i;
@@ -23499,16 +23499,16 @@ const { prettify} = __nccwpck_require__(7594);
 const validator = __nccwpck_require__(9433);
 
 class XMLParser{
-    
+
     constructor(options){
         this.externalEntities = {};
         this.options = buildOptions(options);
-        
+
     }
     /**
-     * Parse XML dats to JS object 
-     * @param {string|Buffer} xmlData 
-     * @param {boolean|Object} validationOption 
+     * Parse XML dats to JS object
+     * @param {string|Buffer} xmlData
+     * @param {boolean|Object} validationOption
      */
     parse(xmlData,validationOption){
         if(typeof xmlData === "string"){
@@ -23519,7 +23519,7 @@ class XMLParser{
         }
         if( validationOption){
             if(validationOption === true) validationOption = {}; //validate with default options
-            
+
             const result = validator.validate(xmlData, validationOption);
             if (result !== true) {
               throw Error( `${result.err.msg}:${result.err.line}:${result.err.col}` )
@@ -23534,8 +23534,8 @@ class XMLParser{
 
     /**
      * Add Entity which is not by default supported by this library
-     * @param {string} key 
-     * @param {string} value 
+     * @param {string} key
+     * @param {string} value
      */
     addEntity(key, value){
         if(value.indexOf("&") !== -1){
@@ -23561,20 +23561,20 @@ module.exports = XMLParser;
 
 
 /**
- * 
- * @param {array} node 
- * @param {any} options 
- * @returns 
+ *
+ * @param {array} node
+ * @param {any} options
+ * @returns
  */
 function prettify(node, options){
   return compress( node, options);
 }
 
 /**
- * 
- * @param {array} arr 
- * @param {object} options 
- * @param {string} jPath 
+ *
+ * @param {array} arr
+ * @param {object} options
+ * @param {string} jPath
  * @returns object
  */
 function compress(arr, options, jPath){
@@ -23593,7 +23593,7 @@ function compress(arr, options, jPath){
     }else if(property === undefined){
       continue;
     }else if(tagObj[property]){
-      
+
       let val = compress(tagObj[property], options, newJpath);
       const isLeaf = isLeafTag(val, options);
 
@@ -23621,7 +23621,7 @@ function compress(arr, options, jPath){
         }
       }
     }
-    
+
   }
   // if(text && text.length > 0) compressedObj[options.textNodeName] = text;
   if(typeof text === "string"){
@@ -23656,7 +23656,7 @@ function assignAttributes(obj, attrMap, jpath, options){
 function isLeafTag(obj, options){
   const { textNodeName } = options;
   const propCount = Object.keys(obj).length;
-  
+
   if (propCount === 0) {
     return true;
   }
@@ -33003,7 +33003,7 @@ class DateRollingFileStream extends RollingFileWriteStream {
         options.daysToKeep = 1;
       } else {
         process.emitWarning(
-          "options.daysToKeep is deprecated due to the confusion it causes when used " + 
+          "options.daysToKeep is deprecated due to the confusion it causes when used " +
           "together with file size rolling. Please use options.numBackups instead.",
           "DeprecationWarning", "streamroller-DEP0001"
         );
@@ -33699,7 +33699,7 @@ const numRegex = /^([\-\+])?(0*)([0-9]*(\.[0-9]*)?)$/;
 // const octRegex = /^0x[a-z0-9]+/;
 // const binRegex = /0x[a-z0-9]+/;
 
- 
+
 const consider = {
     hex :  true,
     // oct: false,
@@ -33712,9 +33712,9 @@ const consider = {
 function toNumber(str, options = {}){
     options = Object.assign({}, consider, options );
     if(!str || typeof str !== "string" ) return str;
-    
+
     let trimmedStr  = str.trim();
-    
+
     if(options.skipLike !== undefined && options.skipLike.test(trimmedStr)) return str;
     else if(str==="0") return 0;
     else if (options.hex && hexRegex.test(trimmedStr)) {
@@ -33722,7 +33722,7 @@ function toNumber(str, options = {}){
     // }else if (options.oct && octRegex.test(str)) {
     //     return Number.parseInt(val, 8);
     }else if (trimmedStr.search(/[eE]/)!== -1) { //eNotation
-        const notation = trimmedStr.match(/^([-\+])?(0*)([0-9]*(\.[0-9]*)?[eE][-\+]?[0-9]+)$/); 
+        const notation = trimmedStr.match(/^([-\+])?(0*)([0-9]*(\.[0-9]*)?[eE][-\+]?[0-9]+)$/);
         // +00.123 => [ , '+', '00', '.123', ..
         if(notation){
             // console.log(notation)
@@ -33749,11 +33749,11 @@ function toNumber(str, options = {}){
             const leadingZeros = match[2];
             let numTrimmedByZeros = trimZeros(match[3]); //complete num without leading zeros
             //trim ending zeros for floating number
-            
+
             if(!options.leadingZeros && leadingZeros.length > 0 && sign && trimmedStr[2] !== ".") return str; //-0123
             else if(!options.leadingZeros && leadingZeros.length > 0 && !sign && trimmedStr[1] !== ".") return str; //0123
             else if(options.leadingZeros && leadingZeros===str) return 0; //00
-            
+
             else{//no leading zeros or leading zeros are allowed
                 const num = Number(trimmedStr);
                 const numStr = "" + num;
@@ -33767,7 +33767,7 @@ function toNumber(str, options = {}){
                     else if( sign && numStr === "-"+numTrimmedByZeros) return num;
                     else return str;
                 }
-                
+
                 if(leadingZeros){
                     return (numTrimmedByZeros === numStr) || (sign+numTrimmedByZeros === numStr) ? num : str
                 }else  {
@@ -33781,9 +33781,9 @@ function toNumber(str, options = {}){
 }
 
 /**
- * 
+ *
  * @param {string} numStr without leading zeros
- * @returns 
+ * @returns
  */
 function trimZeros(numStr){
     if(numStr && numStr.indexOf(".") !== -1){//float
@@ -58828,10 +58828,11 @@ module.exports = {
 const axios = __nccwpck_require__(7269);
 const crypto = __nccwpck_require__(6982);
 const { callApig, getCredentials, configure } = __nccwpck_require__(6239);
+const { IS_GITHUB } = __nccwpck_require__(7496);
 
 // OIDC 身份提供商按平台区分：GitHub 平台注册名为 GitHubActions，GitCode 为 GitCodeActions（SDK 默认）。
 // 在 GitHub Actions 中换证前显式切换，否则 provider_urn 不匹配会导致 STS 换证失败。
-if (process.env.GITHUB_ACTIONS === 'true') {
+if (IS_GITHUB) {
   configure({ oidcProviderName: 'GitHubActions' });
 }
 const ObsClient = __nccwpck_require__(1728);
@@ -59130,7 +59131,7 @@ class CoderepoUploader {
       pipelineRunId: options.pipelineRunId,
       commitId: options.commitId,
       runNumber: options.runNumber,
-      // pipelineName：流水线名称（GitCode runner 注入的 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
+      // pipelineName：流水线名称（GitHub 取 GITHUB_WORKFLOW，GitCode 取 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
       pipelineName: options.pipelineName,
       metricsData: overallMetrics,
       detectionStartedAt: options.startTime,
@@ -59487,6 +59488,71 @@ class CoderepoUploader {
 }
 
 module.exports = CoderepoUploader;
+
+
+/***/ }),
+
+/***/ 7496:
+/***/ ((module) => {
+
+/**
+ * CI 平台上下文适配。
+ * 进程启动时一次性判定平台，之后只读取该平台的变量，不跨平台混用：
+ * - GitHub Actions：GITHUB_ACTIONS=true，读取 GITHUB_*
+ * - GitCode Actions：无该标志，读取 ATOMGIT_*
+ */
+const IS_GITHUB = process.env.GITHUB_ACTIONS === 'true';
+
+const ENV_KEYS = IS_GITHUB
+  ? {
+      eventName: 'GITHUB_EVENT_NAME',
+      baseRef: 'GITHUB_BASE_REF',
+      refName: 'GITHUB_REF_NAME',
+      runId: 'GITHUB_RUN_ID',
+      runNumber: 'GITHUB_RUN_NUMBER',
+      sha: 'GITHUB_SHA',
+      workflow: 'GITHUB_WORKFLOW',
+      repository: 'GITHUB_REPOSITORY',
+      serverUrl: 'GITHUB_SERVER_URL'
+    }
+  : {
+      eventName: 'ATOMGIT_EVENT_NAME',
+      baseRef: 'ATOMGIT_HEAD_REF',
+      refName: 'ATOMGIT_REF_NAME',
+      runId: 'ATOMGIT_RUN_ID',
+      runNumber: 'ATOMGIT_RUN_NUMBER',
+      sha: 'ATOMGIT_SHA',
+      workflow: 'ATOMGIT_WORKFLOW'
+    };
+
+/** 读取当前平台的环境变量（未定义时返回空串） */
+function ciEnv(key) {
+  const envKey = ENV_KEYS[key];
+  return envKey ? String(process.env[envKey] || '').trim() : '';
+}
+
+/** 当前运行所属分支：PR/MR 事件取目标分支，其余取当前 ref */
+function resolveCiBranch() {
+  const eventName = ciEnv('eventName').toLowerCase();
+  if (eventName === 'pull_request' || eventName === 'pull_request_target' || eventName === 'mr') {
+    return ciEnv('baseRef');
+  }
+  return ciEnv('refName');
+}
+
+/** 仓库地址兜底：仅 GitHub 提供仓库环境变量，GitCode 主要由 git 命令获取 */
+function resolveRepoUrlFromEnv() {
+  if (!IS_GITHUB) {
+    return '';
+  }
+  const repository = ciEnv('repository');
+  if (!repository) {
+    return '';
+  }
+  return `${ciEnv('serverUrl') || 'https://github.com'}/${repository}`;
+}
+
+module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveRepoUrlFromEnv };
 
 
 /***/ }),
@@ -68776,7 +68842,7 @@ module.exports = /*#__PURE__*/JSON.parse('{"application/1d-interleaved-parityfec
 /************************************************************************/
 /******/ 	// The module cache
 /******/ 	var __webpack_module_cache__ = {};
-/******/ 	
+/******/
 /******/ 	// The require function
 /******/ 	function __nccwpck_require__(moduleId) {
 /******/ 		// Check if module is in cache
@@ -68790,7 +68856,7 @@ module.exports = /*#__PURE__*/JSON.parse('{"application/1d-interleaved-parityfec
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
 /******/ 		};
-/******/ 	
+/******/
 /******/ 		// Execute the module function
 /******/ 		var threw = true;
 /******/ 		try {
@@ -68799,16 +68865,16 @@ module.exports = /*#__PURE__*/JSON.parse('{"application/1d-interleaved-parityfec
 /******/ 		} finally {
 /******/ 			if(threw) delete __webpack_module_cache__[moduleId];
 /******/ 		}
-/******/ 	
+/******/
 /******/ 		// Return the exports of the module
 /******/ 		return module.exports;
 /******/ 	}
-/******/ 	
+/******/
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat */
-/******/ 	
+/******/
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
-/******/ 	
+/******/
 /************************************************************************/
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
@@ -68818,6 +68884,7 @@ const fs = __nccwpck_require__(9896);
 const os = __nccwpck_require__(857);
 const { execSync, execFile, execFileSync } = __nccwpck_require__(5317);
 const { sanitize } = __nccwpck_require__(9900);
+const { ciEnv, resolveCiBranch, resolveRepoUrlFromEnv } = __nccwpck_require__(7496);
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -68825,26 +68892,6 @@ function getInput(name) {
   const hyphenKey = `INPUT_${name.toUpperCase().replace(/-/g, '-')}`;
   const underscoreKey = `INPUT_${name.toUpperCase().replace(/-/g, '_')}`;
   return process.env[hyphenKey] || process.env[underscoreKey] || core.getInput(name) || '';
-}
-
-// ===== CI 平台上下文适配（GitHub Actions 优先，保留 GitCode 回退）=====
-// GitHub Actions 注入 GITHUB_* 变量，GitCode runner 注入 ATOMGIT_* 变量；
-// 统一按“GitHub 优先、GitCode 回退”的顺序取值，同一份代码可在两个平台运行。
-function firstEnv(...names) {
-  for (const name of names) {
-    const value = process.env[name];
-    if (value && value.trim()) return value.trim();
-  }
-  return '';
-}
-
-/** 当前运行所属分支：PR 事件取目标分支（GitHub 为 GITHUB_BASE_REF），其余取当前 ref */
-function resolveCiBranch() {
-  const eventName = firstEnv('GITHUB_EVENT_NAME', 'ATOMGIT_EVENT_NAME').toLowerCase();
-  if (eventName === 'pull_request' || eventName === 'pull_request_target' || eventName === 'mr') {
-    return firstEnv('GITHUB_BASE_REF', 'ATOMGIT_HEAD_REF');
-  }
-  return firstEnv('GITHUB_REF_NAME', 'ATOMGIT_REF_NAME');
 }
 
 /** Markdown 表格单元格转义：竖线必须转义，换行压平，避免撑破表格 */
@@ -68940,13 +68987,6 @@ function appendAtomgitOutput(lines, logLabel) {
   } catch (e) {
     core.warning(`写入${logLabel}失败: ${e.message}`);
   }
-}
-
-/** 未从 git 命令取到仓库地址时的平台兜底：优先 GitHub 上下文 */
-function resolveRepoUrlFromEnv() {
-  const repository = firstEnv('GITHUB_REPOSITORY');
-  if (!repository) return '';
-  return `${firstEnv('GITHUB_SERVER_URL') || 'https://github.com'}/${repository}`;
 }
 
 // ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
@@ -69092,15 +69132,14 @@ async function run() {
     // repository 字段已移除：写死 source-dir 后，工作流所在仓 git_url 即扫描仓，
     // 后端从 gitUrl 提取 owner/repo 拼接流水线链接
     // pipelineRunId / runNumber / commitId / pipelineName：
-    // GitHub 取 GITHUB_RUN_ID / GITHUB_RUN_NUMBER / GITHUB_SHA / GITHUB_WORKFLOW，
-    // GitCode 回退 ATOMGIT_*，并兼容 workflow 手动注入的 PIPELINE_RUN_ID / PIPELINE_RUN_NUMBER（旧配置）
-    const pipelineRunId = firstEnv('GITHUB_RUN_ID', 'ATOMGIT_RUN_ID', 'PIPELINE_RUN_ID');
+    // 按已判定的平台只读取对应变量（GitHub: GITHUB_*，GitCode: ATOMGIT_*）
+    const pipelineRunId = ciEnv('runId');
     // runNumber 从环境变量获取，仅作记录
-    const runNumber = firstEnv('GITHUB_RUN_NUMBER', 'ATOMGIT_RUN_NUMBER', 'PIPELINE_RUN_NUMBER');
+    const runNumber = ciEnv('runNumber');
     // commitId：触发本次工作流的提交 SHA，口径与 CodeQL 上报（openlibing-upload-sarif）一致
-    const commitId = firstEnv('GITHUB_SHA', 'ATOMGIT_SHA');
+    const commitId = ciEnv('sha');
     // pipelineName：流水线名称，供度量数据下钻页展示来源流水线
-    const pipelineName = firstEnv('GITHUB_WORKFLOW', 'ATOMGIT_WORKFLOW');
+    const pipelineName = ciEnv('workflow');
 
     // 加载内置默认配置（配置文件能力已移除，运行参数统一由 action 输入覆盖）
     const config = ConfigLoader.getDefaultConfig();

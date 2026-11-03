@@ -1,10 +1,11 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const { callApig, getCredentials, configure } = require('@openlibing/huaweicloud-oidc-client');
+const { IS_GITHUB } = require('../utils/ciContext');
 
 // OIDC 身份提供商按平台区分：GitHub 平台注册名为 GitHubActions，GitCode 为 GitCodeActions（SDK 默认）。
 // 在 GitHub Actions 中换证前显式切换，否则 provider_urn 不匹配会导致 STS 换证失败。
-if (process.env.GITHUB_ACTIONS === 'true') {
+if (IS_GITHUB) {
   configure({ oidcProviderName: 'GitHubActions' });
 }
 const ObsClient = require('esdk-obs-nodejs');
@@ -303,7 +304,7 @@ class CoderepoUploader {
       pipelineRunId: options.pipelineRunId,
       commitId: options.commitId,
       runNumber: options.runNumber,
-      // pipelineName：流水线名称（GitCode runner 注入的 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
+      // pipelineName：流水线名称（GitHub 取 GITHUB_WORKFLOW，GitCode 取 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
       pipelineName: options.pipelineName,
       metricsData: overallMetrics,
       detectionStartedAt: options.startTime,
