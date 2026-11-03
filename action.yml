@@ -76,7 +76,7 @@ inputs:
       validation:
         required_message: ""
   obs-ak:
-    description: "OBS 访问密钥 AK，仅 AK/SK 模式使用（全量上报文件上传到 openlibing-gitcode-action 桶）。OIDC 模式使用 STS 临时凭证，无需传入"
+    description: "OBS 访问密钥 AK，仅 AK/SK 模式使用（全量上报文件上传到平台对应 OBS 桶：GitCode 为 openlibing-gitcode-action，GitHub 为 openlibing-github-action）。OIDC 模式使用 STS 临时凭证，无需传入"
     required: false
     default: ""
     layout:
