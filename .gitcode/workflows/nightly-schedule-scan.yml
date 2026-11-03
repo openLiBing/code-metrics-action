@@ -21,7 +21,6 @@ stages:
           - name: Checkout repository
             uses: checkout
             with:
-              token: ${{ secrets.ROBOT_TOKEN }}
               ref: master
 
           - name: setup-go
