@@ -48,18 +48,25 @@ Fortran  GDScript  Solidity  Structured Text  TTCN-3  Zig
 name: code-metrics-scan
 
 on:
-  # 手动触发：仓库 Actions 页面点击 Run workflow
+  # 三种触发方式可按需选择（可组合启用），示例默认只保留手动触发：
+  # 1) workflow_dispatch：手动触发，在 Actions 页面按需执行
   workflow_dispatch:
-  # 代码推送触发：合并到主分支后自动扫描
-  push:
-    branches:
-      - master
+  # 2) push：代码推送触发，推送到指定分支时自动执行（按需启用，示例已注释）
+  # push:
+  #   branches:
+  #     - master
+  # 3) schedule：定时触发，按 cron 表达式定期执行（按需启用，示例已注释；GitHub 使用标准 5 段 cron）
+  # schedule:
+  #   - cron: "0 0 * * *"
 
 # OIDC 免密认证：必须声明 id-token: write，插件据此向平台申请 ID Token 换取华为云临时凭证
 permissions:
   contents: read
   id-token: write
 
+# 并发控制（可选，非必须）：同一分支只保留最新一次扫描。
+# 新任务启动时会取消同组中仍在运行的旧任务，避免重复占用执行机，也避免旧提交的扫描晚于新提交完成导致平台展示的结果错乱。
+# group 按分支区分（github.ref）；不配置也能正常运行，只是允许多次扫描并行。
 concurrency:
   group: code-metrics-scan-${{ github.ref }}
   cancel-in-progress: true
@@ -72,10 +79,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 使用本仓库内的插件（迁移验证），OIDC 模式调用 APIG 接口，无需配置任何密钥
-      - name: Code metrics scan
+      - name: code-metrics-scan
         uses: openlibing/code-metrics-action@master
         with:
+          # 可选：排除指定目录/文件，不传 exclude-dirs 时除内置排除目录外默认全量扫描
+          # exclude-dirs: "node_modules,target,dist,.git,.github,.mvn"
+          # 可选：指定扫描的文件扩展名（覆盖式：只扫指定扩展名 + 文件名特例，如 CMakeLists.txt / Makefile 始终放行）
+          # allowed-extensions: ".c,.cpp,.h"
 ```
 
 > OIDC 免密依赖华为云侧已完成 GitHub 身份提供商（`GitHubActions`，颁发者 `https://token.actions.githubusercontent.com`）与信任委托配置，未配置时换证会失败。

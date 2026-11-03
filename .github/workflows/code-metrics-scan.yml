@@ -13,6 +13,9 @@ permissions:
   contents: read
   id-token: write
 
+# 并发控制（可选，非必须）：同一分支只保留最新一次扫描。
+# 新任务启动时取消同组中仍在运行的旧任务，避免重复占用执行机，
+# 也避免旧提交的扫描晚于新提交完成导致平台展示结果错乱。
 concurrency:
   group: code-metrics-scan-${{ github.ref }}
   cancel-in-progress: true
