@@ -55,4 +55,3 @@ stages:
             with:
               sarif_file: ${{ steps.pre-commit.outputs.sarif-files }}
               source_path: .
-              category: "pre-commit-report"
