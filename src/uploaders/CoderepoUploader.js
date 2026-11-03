@@ -1,6 +1,12 @@
 const axios = require('axios');
 const crypto = require('crypto');
-const { callApig, getCredentials } = require('@openlibing/huaweicloud-oidc-client');
+const { callApig, getCredentials, configure } = require('@openlibing/huaweicloud-oidc-client');
+
+// OIDC 身份提供商按平台区分：GitHub 平台注册名为 GitHubActions，GitCode 为 GitCodeActions（SDK 默认）。
+// 在 GitHub Actions 中换证前显式切换，否则 provider_urn 不匹配会导致 STS 换证失败。
+if (process.env.GITHUB_ACTIONS === 'true') {
+  configure({ oidcProviderName: 'GitHubActions' });
+}
 const ObsClient = require('esdk-obs-nodejs');
 const fs = require('fs');
 const os = require('os');

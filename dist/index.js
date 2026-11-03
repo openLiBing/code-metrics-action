@@ -77521,7 +77521,13 @@ module.exports = {
 
 const axios = __nccwpck_require__(7269);
 const crypto = __nccwpck_require__(6982);
-const { callApig, getCredentials } = __nccwpck_require__(6239);
+const { callApig, getCredentials, configure } = __nccwpck_require__(6239);
+
+// OIDC 身份提供商按平台区分：GitHub 平台注册名为 GitHubActions，GitCode 为 GitCodeActions（SDK 默认）。
+// 在 GitHub Actions 中换证前显式切换，否则 provider_urn 不匹配会导致 STS 换证失败。
+if (process.env.GITHUB_ACTIONS === 'true') {
+  configure({ oidcProviderName: 'GitHubActions' });
+}
 const ObsClient = __nccwpck_require__(1728);
 const fs = __nccwpck_require__(9896);
 const os = __nccwpck_require__(857);
@@ -87558,22 +87564,96 @@ function resolveCiBranch() {
   return firstEnv('GITHUB_REF_NAME', 'ATOMGIT_REF_NAME');
 }
 
+/** Markdown 表格单元格转义：竖线必须转义，换行压平，避免撑破表格 */
+function escapeCell(value) {
+  return String(value === null || value === undefined || value === '' ? '-' : value)
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, ' ');
+}
+
+/** 格式化为东八区时间（平台展示口径统一为 UTC+8） */
+function formatCstTime(date) {
+  const cst = new Date(date.getTime() + 8 * 3600 * 1000);
+  return `${cst.toISOString().replace('T', ' ').slice(0, 19)} (UTC+8)`;
+}
+
 /**
- * 写入人类可读的结果展示：
- * - GitHub Actions 写 GITHUB_STEP_SUMMARY（运行摘要页可见），避免使用中文 output key 触发平台校验失败；
- * - GitCode 保持写 ATOMGIT_OUTPUT，供流水线结果面板直接展示。
+ * 生成运行摘要（Markdown 表格）。
+ * GitHub Actions 没有 GitCode 那样的输出面板，只能在运行摘要页展示，故两个平台统一用摘要表呈现。
+ *
+ * @param {Object} ctx 扫描上下文（仓库、分支、提交、流水线、完成时间、详情链接）
+ * @param {Object} result 扫描结果（5 项指标）
+ * @returns {string} Markdown 文本
  */
-function appendDisplayLines(lines, logLabel) {
+function buildSummaryMarkdown(ctx, result) {
+  const pipelineLabel = ctx.runNumber ? `#${ctx.runNumber}` : ctx.pipelineRunId || '-';
+  const repoBase = String(ctx.gitUrl || '').replace(/\.git$/, '');
+  const pipelineUrl = repoBase && ctx.pipelineRunId ? `${repoBase}/actions/runs/${ctx.pipelineRunId}` : '';
+  const pipelineCell = pipelineUrl ? `[${escapeCell(pipelineLabel)}](${pipelineUrl})` : escapeCell(pipelineLabel);
+
+  const scanRows = [
+    ['仓库', ctx.gitUrl],
+    ['分支', ctx.branchName],
+    ['提交', ctx.commitId ? String(ctx.commitId).slice(0, 8) : ''],
+    ['流水线', pipelineCell],
+    ['扫描完成时间', ctx.finishedAt]
+  ];
+  const metricRows = [
+    ['代码规模', `${result.codeScale} 行`, '有效代码行数（排除空行与注释）'],
+    ['平均函数代码行', `${result.avgFunctionLoc} 行`, '函数体有效代码行的算术平均值'],
+    ['平均圈复杂度', `${result.avgCyclomaticComplexity}`, '函数级圈复杂度的算术平均值'],
+    ['总代码重复率', `${result.totalCodeDuplicationRate}%`, '重复代码行占有效代码行的比例'],
+    ['总文件重复率', `${result.totalFileDuplicationRate}%`, '内容完全一致文件占总文件数的比例']
+  ];
+
+  const lines = [
+    '## 📊 代码度量指标扫描结果',
+    '',
+    '| 扫描信息 | 扫描值 |',
+    '|:--|:--|',
+    ...scanRows.map(([key, value]) => `| ${escapeCell(key)} | ${value === pipelineCell ? value : escapeCell(value)} |`),
+    '',
+    '### 指标概览',
+    '',
+    '| 指标 | 数值 | 说明 |',
+    '|:--|--:|:--|',
+    ...metricRows.map(([key, value, desc]) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
+    ''
+  ];
+  if (ctx.detailLink) {
+    lines.push(`> 查看详情：[代码度量指标扫描结果](${ctx.detailLink})`);
+  } else if (ctx.detailTip) {
+    lines.push(`> ${escapeCell(ctx.detailTip)}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * 写入运行摘要：
+ * - GitHub Actions 写 GITHUB_STEP_SUMMARY；
+ * - GitCode Actions 写 ATOMGIT_STEP_SUMMARY（流水线 summary 页面）。
+ */
+function appendStepSummary(markdown) {
+  const targets = new Set(
+    [process.env.GITHUB_STEP_SUMMARY, process.env.ATOMGIT_STEP_SUMMARY].filter(Boolean)
+  );
+  for (const file of targets) {
+    try {
+      fs.appendFileSync(file, markdown, 'utf8');
+    } catch (e) {
+      core.warning(`写入运行摘要失败: ${e.message}`);
+    }
+  }
+}
+
+/** 写入 GitCode 输出面板（ATOMGIT_OUTPUT，键值对） */
+function appendAtomgitOutput(lines, logLabel) {
+  const outputFile = process.env.ATOMGIT_OUTPUT;
+  if (!outputFile) {
+    return;
+  }
   try {
-    const summaryFile = process.env.GITHUB_STEP_SUMMARY;
-    if (summaryFile) {
-      fs.appendFileSync(summaryFile, lines.join('\n') + '\n', 'utf8');
-      return;
-    }
-    const atomgitFile = process.env.ATOMGIT_OUTPUT;
-    if (atomgitFile) {
-      fs.appendFileSync(atomgitFile, lines.join('\n') + '\n', 'utf8');
-    }
+    fs.appendFileSync(outputFile, lines.join('\n') + '\n', 'utf8');
   } catch (e) {
     core.warning(`写入${logLabel}失败: ${e.message}`);
   }
@@ -87864,24 +87944,7 @@ async function run() {
     core.setOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
     core.setOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
 
-    // 输出概览结果（按固定顺序输出每项指标，标识为 中文名（英文名），重复率带 %）
-    // GitHub 写入运行摘要（Markdown 列表），GitCode 保持写 ATOMGIT_OUTPUT（键值对）
-    const overviewDisplay = [
-      ['codeScale', '代码规模（codeScale）', String(result.codeScale)],
-      ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', String(result.avgFunctionLoc)],
-      ['avgCyclomaticComplexity', '平均圈复杂度（avgCyclomaticComplexity）', String(result.avgCyclomaticComplexity)],
-      ['totalCodeDuplicationRate', '总代码重复率（totalCodeDuplicationRate）', `${result.totalCodeDuplicationRate}%`],
-      ['totalFileDuplicationRate', '总文件重复率（totalFileDuplicationRate）', `${result.totalFileDuplicationRate}%`]
-    ];
-    const isGithubRunner = Boolean(process.env.GITHUB_STEP_SUMMARY);
-    appendDisplayLines(
-      isGithubRunner
-        ? ['', '## 代码度量指标扫描结果', ...overviewDisplay.map(item => `- ${item[1]}：${item[2]}`)]
-        : overviewDisplay.map(item => `${item[1]}=${item[2]}`),
-      '概览结果'
-    );
-
-    // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥），仅写 ATOMGIT_OUTPUT
+    // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥）
     // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出
     const DETAIL_LINK_LABEL = '代码度量指标扫描结果';
     // detailLink/tip 为服务端响应字段，拼进日志/输出行前过 sanitize 防换行注入（Ref #64）
@@ -87894,15 +87957,40 @@ async function run() {
     } else {
       core.info(`${DETAIL_LINK_LABEL}: 无链接（上报失败或链接构建异常，不输出）`);
     }
+
+    // GitCode 输出面板：保持原有键值对输出（概览 + 详情链接），供流水线结果面板展示
+    const overviewDisplay = [
+      ['codeScale', '代码规模（codeScale）', String(result.codeScale)],
+      ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', String(result.avgFunctionLoc)],
+      ['avgCyclomaticComplexity', '平均圈复杂度（avgCyclomaticComplexity）', String(result.avgCyclomaticComplexity)],
+      ['totalCodeDuplicationRate', '总代码重复率（totalCodeDuplicationRate）', `${result.totalCodeDuplicationRate}%`],
+      ['totalFileDuplicationRate', '总文件重复率（totalFileDuplicationRate）', `${result.totalFileDuplicationRate}%`]
+    ];
+    appendAtomgitOutput(overviewDisplay.map(item => `${item[1]}=${item[2]}`), '概览结果');
     if (detailLink || detailTip) {
-      // GitHub 渲染为 Markdown 链接/提示；GitCode 保持 key 以 url 结尾触发 type=link 渲染
-      appendDisplayLines(
-        isGithubRunner
-          ? [detailLink ? `- [${DETAIL_LINK_LABEL}](${detailLink})` : `- ${detailTip}`]
-          : [detailLink ? `扫描结果url=${detailLink}` : `扫描结果=${detailTip}`],
+      // 链接行 key 以 url 结尾：GitCode 按 key 末尾小写 url 判定 type=link 渲染为可点击链接
+      appendAtomgitOutput(
+        [detailLink ? `扫描结果url=${detailLink}` : `扫描结果=${detailTip}`],
         '扫描结果链接'
       );
     }
+
+    // 运行摘要：GitHub 写 GITHUB_STEP_SUMMARY，GitCode 写 ATOMGIT_STEP_SUMMARY，统一使用 Markdown 表格
+    appendStepSummary(
+      buildSummaryMarkdown(
+        {
+          gitUrl,
+          branchName,
+          commitId,
+          pipelineRunId,
+          runNumber,
+          finishedAt: formatCstTime(new Date()),
+          detailLink,
+          detailTip
+        },
+        result
+      )
+    );
 
     core.info('Code metrics scan completed successfully');
     core.info(`Code scale: ${result.codeScale}`);
