@@ -26,7 +26,7 @@ function formatDateTime(date) {
 class MetricsScanner {
   constructor(config = {}) {
     this.config = config;
-    this.logger = new Logger({ verbose: config.verbose });
+    this.logger = new Logger();
     this.workingDir = config.workingDir || process.cwd();
 
     const allowedExtensions = config.allowedExtensions || [];

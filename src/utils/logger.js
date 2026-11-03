@@ -1,40 +1,25 @@
-const winston = require('winston');
+const core = require('@actions/core');
 
+/**
+ * 统一日志封装：直接使用 @actions/core。
+ * GitHub / GitCode 运行日志按 info / warning / error 级别展示；debug 仅在平台开启调试日志时输出。
+ */
 class Logger {
-  constructor(config = {}) {
-    this.verbose = config.verbose || false;
-    this.logger = winston.createLogger({
-      level: this.verbose ? 'debug' : 'info',
-      format: winston.format.combine(
-        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-        winston.format.colorize(),
-        winston.format.printf(({ timestamp, level, message }) => {
-          return `${timestamp} [${level}] ${message}`;
-        })
-      ),
-      transports: [
-        new winston.transports.Console()
-      ]
-    });
-  }
-
   // 支持多参数，拼接为一条消息
   debug(...args) {
-    if (this.verbose) {
-      this.logger.debug(args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' '));
-    }
+    core.debug(args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
   }
 
   info(message) {
-    this.logger.info(message);
+    core.info(message);
   }
 
   warn(message) {
-    this.logger.warn(message);
+    core.warning(message);
   }
 
   error(message) {
-    this.logger.error(message);
+    core.error(message);
   }
 }
 

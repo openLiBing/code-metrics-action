@@ -197,7 +197,6 @@ async function run() {
   try {
     // 源代码目录固定为当前目录（线上环境由 checkout 步骤决定扫描内容）
     const sourceDir = './';
-    const configFile = getInput('config-file');
     const excludeDirs = getInput('exclude-dirs')
       ? getInput('exclude-dirs').split(',').map(s => s.trim())
       : [];
@@ -290,13 +289,8 @@ async function run() {
     // pipelineName：流水线名称，供度量数据下钻页展示来源流水线
     const pipelineName = firstEnv('GITHUB_WORKFLOW', 'ATOMGIT_WORKFLOW');
 
-    // 加载配置
-    let config;
-    if (configFile) {
-      config = ConfigLoader.load(path.resolve(configFile));
-    } else {
-      config = ConfigLoader.load(null);
-    }
+    // 加载内置默认配置（配置文件能力已移除，运行参数统一由 action 输入覆盖）
+    const config = ConfigLoader.getDefaultConfig();
 
     // 用 action 输入覆盖配置
     config.sourceDir = path.resolve(sourceDir);
