@@ -1,18 +1,8 @@
 const axios = require('axios');
 const crypto = require('crypto');
-const { callApig, getCredentials, configure } = require('@openlibing/huaweicloud-oidc-client');
+const { callApig, getCredentials } = require('@openlibing/huaweicloud-oidc-client');
 const { IS_GITHUB } = require('../utils/ciContext');
 
-// OIDC 身份提供商与信任委托按平台区分：
-// - GitHub 平台在 IAM 注册的提供商为 GitHubActions，信任委托为 github-actions；
-// - GitCode 平台使用 SDK 内置默认值（GitCodeActions / gitcode-actions）。
-// 两者必须同时切换，否则 STS 会用默认委托 gitcode-actions 发起换证而失败。
-if (IS_GITHUB) {
-  configure({
-    oidcProviderName: 'GitHubActions',
-    agencyName: 'github-actions'
-  });
-}
 const ObsClient = require('esdk-obs-nodejs');
 const fs = require('fs');
 const os = require('os');

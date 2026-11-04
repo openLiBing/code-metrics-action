@@ -58827,19 +58827,9 @@ module.exports = {
 
 const axios = __nccwpck_require__(7269);
 const crypto = __nccwpck_require__(6982);
-const { callApig, getCredentials, configure } = __nccwpck_require__(6239);
+const { callApig, getCredentials } = __nccwpck_require__(6239);
 const { IS_GITHUB } = __nccwpck_require__(7496);
 
-// OIDC 身份提供商与信任委托按平台区分：
-// - GitHub 平台在 IAM 注册的提供商为 GitHubActions，信任委托为 github-actions；
-// - GitCode 平台使用 SDK 内置默认值（GitCodeActions / gitcode-actions）。
-// 两者必须同时切换，否则 STS 会用默认委托 gitcode-actions 发起换证而失败。
-if (IS_GITHUB) {
-  configure({
-    oidcProviderName: 'GitHubActions',
-    agencyName: 'github-actions'
-  });
-}
 const ObsClient = __nccwpck_require__(1728);
 const fs = __nccwpck_require__(9896);
 const os = __nccwpck_require__(857);
@@ -69076,7 +69066,7 @@ async function run() {
 
     // coderepo 服务地址硬编码到插件（部署时确定的固定值）；
     // 自家平台 APIG 网关端点，非第三方地址，登记白名单（合规例外）（Ref #22）
-    const coderepoUrl = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com'; // gitleaks:allow 自家平台 APIG 网关，功能必需
+    const coderepoUrl = 'https://apig.openlibing.com:443'; // gitleaks:allow 自家平台 APIG 网关，功能必需
     // 认证模式判定（OIDC 联邦认证标识）：workflow 声明 permissions: id-token: write 时，
     // runner 注入 ACTIONS_ID_TOKEN_REQUEST_URL，走新接口（/action-api/...）+ OIDC 免密认证；
     // 未声明时走旧接口（/openlibing-coderepo/...）+ AK/SK 签名，兼容尚未适配的存量脚本
