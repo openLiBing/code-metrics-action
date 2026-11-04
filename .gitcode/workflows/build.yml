@@ -1,0 +1,49 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push: # master 分支推送触发构建
+    branches:
+      - master
+  pull_request: # PR 触发构建验证
+    branches:
+      - "*"
+  pull_request_comment: # PR 评论 /build 触发构建验证
+    types: [created]
+    comments: ["/build"]
+    branches:
+      - "*"
+
+permissions:
+  repository: read # checkout 插件最低权限要求
+
+jobs:
+  build:
+    name: build
+    runs-on: ["self-hosted", "region=cn"]
+    steps:
+      - name: checkout
+        uses: checkout
+        with:
+          ref: ${{ atomgit.event.pull_request.merge_commit_sha || '' }} # PR 场景检出预合并 commit（验证合入默认分支后的最终状态），push/手动场景为空走默认检出
+          allow-unsafe-pr-checkout: true # 允许 fork PR 场景检出 PR 代码（平台默认拦截）
+
+      # setup-node 官方插件存在 tool cache 目录权限缺陷（/opt/tools/cache 无写权限时安装失败 EACCES），插件修复前在此临时规避
+      - name: bootstrap tool cache dir
+        run: |
+          if [ ! -d /opt/tools/cache ] || [ ! -w /opt/tools/cache ]; then
+            sudo mkdir -p /opt/tools/cache
+            sudo chown -R "$(id -u):$(id -g)" /opt/tools
+          fi
+
+      - name: setup-node
+        uses: setup-node
+        with:
+          node-version: 20
+          cache: true
+
+      # npm ci 按 lockfile 精确安装依赖后执行完整构建链（ncc 打包 + zip），验证产物可正常生成；依赖均为公共包，无需私仓凭证
+      - name: build
+        run: |
+          npm ci
+          npm run build
