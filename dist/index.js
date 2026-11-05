@@ -59588,7 +59588,8 @@ const ENV_KEYS = IS_GITHUB
     }
   : {
       eventName: 'ATOMGIT_EVENT_NAME',
-      baseRef: 'ATOMGIT_HEAD_REF',
+      // GitCode 的 ATOMGIT_HEAD_REF 是 PR 源分支，目标分支必须取 ATOMGIT_BASE_REF
+      baseRef: 'ATOMGIT_BASE_REF',
       refName: 'ATOMGIT_REF_NAME',
       runId: 'ATOMGIT_RUN_ID',
       runNumber: 'ATOMGIT_RUN_NUMBER',
