@@ -3261,18 +3261,22 @@ module.exports = { callApig };
  * 模块级单例 cfg 供 logger / http / oidc / credentials 共享。
  */
 
+// CI 平台判定：GitHub Actions 注入 GITHUB_ACTIONS=true；其余按 GitCode Actions 处理。
+// 默认 OIDC 提供商与信任委托随平台切换，插件接入后无需重复 configure；
+// configure() 显式传入的值仍优先。
+const IS_GITHUB_ACTIONS = process.env.GITHUB_ACTIONS === 'true';
+
 // 内置固定配置（openlibing 账号）
 const CONFIG = {
   // openlibing 华为云账号 ID
   accountId: '4d29a984c4fe4e6eb5d404a853d0084e',
   // OIDC 受众（申请 OIDC ID Token 的 audience，需与身份提供商注册的客户端 ID 一致）
   audience: 'huawei-cloud-service',
-  // IAM 信任委托名称
-  agencyName: 'gitcode-actions',
-  // OIDC 身份提供商名称（华为云侧按令牌签发平台分别注册：GitHub 平台为 GitHubActions，
-  // GitCode Actions 平台为 GitCodeActions）。取 configure() 配置值，
-  // 可通过显式 configure({ oidcProviderName }) 覆盖
-  oidcProviderName: 'GitCodeActions',
+  // IAM 信任委托名称：GitHub Actions 默认 github-actions，GitCode Actions 默认 gitcode-actions
+  agencyName: IS_GITHUB_ACTIONS ? 'github-actions' : 'gitcode-actions',
+  // OIDC 身份提供商名称：华为云侧按令牌签发平台分别注册
+  // （GitHub 平台 GitHubActions，GitCode Actions 平台 GitCodeActions），默认随 CI 平台自动选择
+  oidcProviderName: IS_GITHUB_ACTIONS ? 'GitHubActions' : 'GitCodeActions',
   // 区域（openlibing 账号固定区域，可显式覆盖）
   region: 'cn-southwest-2',
   // STS 换证路径
@@ -3288,6 +3292,17 @@ const CONFIG = {
 // 当前生效配置（可用 configure() 覆盖）
 const cfg = { ...CONFIG };
 
+// 配置变更监听器（如 credentials 模块注册：换证身份相关字段变更时使缓存凭证失效）
+const _listeners = [];
+
+/**
+ * 注册配置变更监听器（configure() 每次实际变更字段后同步回调，参数为变更字段名数组）。
+ * @param {(changedKeys: string[])} fn 监听回调
+ */
+function onConfigChange(fn) {
+  _listeners.push(fn);
+}
+
 /**
  * 覆盖内置配置（如更换账号 / 区域 / 受众 / 委托等）。
  * @param {Object} overrides 可覆盖字段：accountId/audience/agencyName/oidcProviderName/
@@ -3299,15 +3314,24 @@ function configure(overrides = {}) {
     'accountId', 'audience', 'agencyName', 'oidcProviderName',
     'region', 'stsAssumePath', 'durationSeconds', 'refreshBufferSeconds', 'debug'
   ];
+  // 换证身份相关字段：变更后已换发的临时凭证不再适用于新配置
+  const credentialKeys = [
+    'accountId', 'audience', 'agencyName', 'oidcProviderName',
+    'region', 'stsAssumePath', 'durationSeconds'
+  ];
+  const changed = credentialKeys.filter((k) => overrides[k] !== undefined && overrides[k] !== cfg[k]);
   for (const k of allowed) {
     if (overrides[k] !== undefined) {
       cfg[k] = overrides[k];
     }
   }
+  if (changed.length > 0) {
+    _listeners.forEach((fn) => fn(changed));
+  }
   return { ...cfg };
 }
 
-module.exports = { CONFIG, cfg, configure };
+module.exports = { CONFIG, cfg, configure, onConfigChange };
 
 
 /***/ }),
@@ -3324,13 +3348,22 @@ module.exports = { CONFIG, cfg, configure };
  * -> 华为云 STS AssumeAgencyWithOIDC，带缓存自动刷新、force 强制刷新、并发去重。
  */
 
-const { cfg } = __nccwpck_require__(3298);
+const { cfg, onConfigChange } = __nccwpck_require__(3298);
 const { info, debug, error, mask, maskBody } = __nccwpck_require__(9463);
 const { sendRequest } = __nccwpck_require__(5531);
 const { getOidcToken } = __nccwpck_require__(8790);
 
 let _credentials = null; // { accessKeyId, secretAccessKey, securityToken, expiresAt, expiresAtISO }
 let _credentialPromise = null; // 进行中的换证 Promise（并发去重）
+let _configGeneration = 0; // 换证身份相关配置代次：变更时递增，防止进行中的旧配置换证回写缓存
+
+// configure() 变更换证身份相关字段（账号/委托/提供商/区域等）时，缓存凭证不再适用于新配置，立即失效
+onConfigChange((changedKeys) => {
+  _configGeneration++;
+  _credentials = null;
+  _credentialPromise = null;
+  debug(`-- 检测到 configure() 变更换证相关配置（${changedKeys.join('/')}），已失效缓存凭证，下次获取将重新换证 --`);
+});
 
 /** 判断缓存凭证是否仍有效（未过期且留有缓冲时间）。 */
 function _isValid(cred) {
@@ -3373,6 +3406,15 @@ async function getCredentials(opts = {}) {
   };
 }
 
+/**
+ * 日志单行化：折叠换行与控制字符。
+ * region / providerName / agencyName 等可由 configure() 或环境变量注入，
+ * 直接拼接会破坏日志行结构（日志注入），此处统一折叠为单行。
+ */
+function _oneLine(value) {
+  return String(value).replace(/[\r\n\t\u0000-\u001f\u007f]/g, ' ');
+}
+
 /** 解析 OIDC Token payload 中的关键声明（失败返回 null）。 */
 function _parseTokenClaims(idToken) {
   try {
@@ -3404,11 +3446,12 @@ function _printTokenClaims(claims, logFn) {
  *                     securityToken: string, expiresAt: number, expiresAtISO: string}>}
  */
 async function _assumeAgencyWithOIDC() {
+  const generation = _configGeneration; // 换证发起时的配置代次，完成后仅代次未变才回写缓存
   const agencyUrn = `iam::${cfg.accountId}:agency:${cfg.agencyName}`;
   const stsEndpoint = `https://sts.${cfg.region}.myhuaweicloud.com${cfg.stsAssumePath}`;
 
   debug('=== 步骤1：申请 OIDC ID Token ===');
-  debug(`audience=${cfg.audience}`);
+  debug(`audience=${_oneLine(cfg.audience)}`);
   const idToken = await getOidcToken();
   if (!idToken) {
     throw new Error('获取 OIDC ID Token 为空（请确认流水线已声明 permissions: id-token: write）');
@@ -3429,11 +3472,11 @@ async function _assumeAgencyWithOIDC() {
     duration_seconds: cfg.durationSeconds
   };
 
-  info(`-- OIDC 免密换证开始：区域 ${cfg.region}，提供商 ${providerName}，委托 ${cfg.agencyName} --`);
+  info(`-- OIDC 免密换证开始：区域 ${_oneLine(cfg.region)}，提供商 ${_oneLine(providerName)}，委托 ${_oneLine(cfg.agencyName)} --`);
   debug('=== 步骤2：调用 STS AssumeAgencyWithOIDC ===');
-  debug(`provider_urn        : ${body.provider_urn}`);
-  debug(`agency_urn          : ${body.agency_urn}`);
-  debug(`agency_session_name : ${body.agency_session_name}`);
+  debug(`provider_urn        : ${_oneLine(body.provider_urn)}`);
+  debug(`agency_urn          : ${_oneLine(body.agency_urn)}`);
+  debug(`agency_session_name : ${_oneLine(body.agency_session_name)}`);
   debug(`duration_seconds    : ${body.duration_seconds}`);
 
   const res = await sendRequest('POST', stsEndpoint, { 'Content-Type': 'application/json' }, JSON.stringify(body));
@@ -3444,7 +3487,7 @@ async function _assumeAgencyWithOIDC() {
     error(`STS 失败详情 : ${maskBody(res.data)}`);
     // 失败定位：非调试模式下也补打 Token 声明与换证配置，供与信任策略逐项比对
     _printTokenClaims(claims, error);
-    error(`provider_urn : ${providerUrn}`);
+    error(`provider_urn : ${_oneLine(providerUrn)}`);
     error('=== 排查提示 ===');
     error('STS5.1001/403：多为信任策略条件不匹配，请将上方 OIDC Token 的 iss/aud/azp/sub 与华为云信任策略逐项比对。');
     error('  - iss 必须与所选 OIDC 提供商注册的颁发者 URL 严格一致（GitHub 平台为 https://token.actions.githubusercontent.com，GitCode Actions 平台以其流水线签发地址为准）');
@@ -3472,7 +3515,9 @@ async function _assumeAgencyWithOIDC() {
     expiresAt,
     expiresAtISO: cred.expiration
   };
-  _credentials = result;
+  if (generation === _configGeneration) {
+    _credentials = result;
+  }
   _credentialPromise = null;
   return result;
 }
@@ -3516,7 +3561,7 @@ module.exports = { getCredentials };
 const { debug, maskHeaders, maskBody, clip } = __nccwpck_require__(9463);
 
 // Node 18+ 有内置全局 fetch；在只支持 node16 运行时的 CI 平台（如 GitCode Action）下
-// 回退到 undici（作为 Action 产物时由 @actions/core 的传递依赖随 ncc 一并内联）。
+// 回退到 undici（SDK 直接依赖，固定 ^5 兼容 Node 16，随 ncc 构建内联进 Action 产物）。
 // 运行时动态判断而非模块加载时固化，保证测试拦截器替换全局 fetch 后仍生效。
 
 /**
@@ -3530,7 +3575,7 @@ const { debug, maskHeaders, maskBody, clip } = __nccwpck_require__(9463);
  *          JSON 解析失败时 data = { raw }
  */
 async function sendRequest(method, url, headers, body) {
-  debug(`--> ${String(method).toUpperCase()} ${url}`);
+  debug(`--> ${String(method).toUpperCase()} ${_safeUrlForLog(url)}`);
   debug(`--> 请求头: ${JSON.stringify(maskHeaders(headers))}`);
   if (body !== undefined && body !== null && body !== '') {
     debug(`--> 请求体: ${_describeBody(body)}`);
@@ -3545,7 +3590,7 @@ async function sendRequest(method, url, headers, body) {
       body: body || undefined
     });
   } catch (err) {
-    throw new Error(`网络请求失败 ${method} ${url}: ${err.message}`);
+    throw new Error(`网络请求失败 ${method} ${_safeUrlForLog(url)}: ${err.message}`);
   }
 
   const raw = await res.text();
@@ -3577,6 +3622,19 @@ function _describeBody(body) {
     return clip(maskBody(JSON.stringify(body)));
   } catch (e) {
     return '(对象，无法序列化)';
+  }
+}
+
+/**
+ * 异常消息中的 URL 展示：只保留协议 + host + path，去掉 query / fragment，
+ * 避免 URL 查询参数中的令牌或票据随异常消息进入日志。
+ */
+function _safeUrlForLog(url) {
+  try {
+    const u = new URL(String(url));
+    return u.origin + u.pathname;
+  } catch (e) {
+    return '(无法解析的 URL)';
   }
 }
 
@@ -3789,7 +3847,7 @@ module.exports = { info, debug, error, mask, maskText, maskDeep, maskHeaders, ma
  */
 
 const { cfg } = __nccwpck_require__(3298);
-const { info, error } = __nccwpck_require__(9463);
+const { info, error, maskBody } = __nccwpck_require__(9463);
 const { sendRequest } = __nccwpck_require__(5531);
 
 /** 申请 OIDC ID Token（自包含，不依赖 @actions/core，GitHub / GitCode Actions 流水线均适用）。 */
@@ -3832,7 +3890,7 @@ async function getOidcTokenFromActions() {
     'User-Agent': 'OpenlibingClient/1.0'
   }, '');
   if (res.status !== 200 || !res.data || !res.data.value) {
-    error(`OIDC Token 申请失败（HTTP ${res.status}）: ${JSON.stringify(res.data)}`);
+    error(`OIDC Token 申请失败（HTTP ${res.status}）: ${maskBody(res.data)}`);
     return null;
   }
   return res.data.value;
@@ -3980,6 +4038,20 @@ function canonicalHeaders(allHeaders, signedHeaders) {
   return arr.join('\n') + '\n';
 }
 
+/**
+ * 按头名大小写不敏感取值（与「是否已存在该头」的判断语义保持一致）。
+ * 调用方可能传入 X-SDK-Date / Host 等大写形式，若按精确小写 key 取值会得到 undefined。
+ */
+function getHeaderIgnoreCase(headers, name) {
+  const lowerName = name.toLowerCase();
+  for (const k of Object.keys(headers)) {
+    if (k.toLowerCase() === lowerName) {
+      return headers[k];
+    }
+  }
+  return undefined;
+}
+
 /** sha256 hex。 */
 function sha256Hex(str) {
   return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
@@ -4078,7 +4150,7 @@ class V11Signer {
 
     const canonicalRequestHash = sha256Hex(canonicalRequest);
 
-    const time = allHeaders['x-sdk-date'];
+    const time = getHeaderIgnoreCase(allHeaders, 'x-sdk-date');
     const formattedDate = time.substring(0, 8);
     const credentialScope = formattedDate + '/' + this.region + '/' + APIC_SERVICE;
 
