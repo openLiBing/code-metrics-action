@@ -5,8 +5,7 @@ on:
   push: # master 分支推送触发 UT
     branches:
       - master
-  # fork PR 跑 UT 需读取基仓库 secrets，pull_request 事件下 fork PR 无 secrets 权限，故使用 pull_request_target
-  pull_request_target: # PR 触发 UT
+  pull_request: # PR 触发 UT
     branches:
       - "*"
   pull_request_comment: # PR 评论 /ut 触发 UT
@@ -37,7 +36,6 @@ jobs:
         with:
           ref: ${{ atomgit.event.pull_request.merge_commit_sha || atomgit.event.pull_request.head.sha }} # PR 场景检出预合并 commit（验证合入默认分支后的最终状态），缺失时回退 PR head，push/手动场景为空走默认检出
           fetch-depth: 0 # 全量检出以生成基线分支远端 ref，供增量覆盖率比较
-          allow-unsafe-pr-checkout: true # 允许 fork PR 场景检出 PR 代码（平台默认拦截）
 
       # setup 插件在当前执行机上对 /opt/tools 无写权限时会安装失败，此处临时规避
       - name: bootstrap tool cache dir

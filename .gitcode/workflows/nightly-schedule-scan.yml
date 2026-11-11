@@ -21,7 +21,6 @@ stages:
           - name: Checkout repository
             uses: checkout
             with:
-              token: ${{ secrets.ROBOT_TOKEN }}
               ref: master
 
           - name: setup-go
@@ -56,4 +55,3 @@ stages:
             with:
               sarif_file: ${{ steps.pre-commit.outputs.sarif-files }}
               source_path: .
-              category: "pre-commit-report"

@@ -75,7 +75,7 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
-  obs-ak:
+  obs-ak: # gitleaks:allow
     description: "OBS 访问密钥 AK，仅 AK/SK 模式使用（全量上报文件上传到平台对应 OBS 桶：GitCode 为 openlibing-gitcode-action，GitHub 为 openlibing-github-action）。OIDC 模式使用 STS 临时凭证，无需传入"
     required: false
     default: ""
@@ -87,7 +87,7 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
-  obs-sk:
+  obs-sk: # gitleaks:allow
     description: "OBS 访问密钥 SK，与 obs-ak 配套，仅 AK/SK 模式使用"
     required: false
     default: ""
