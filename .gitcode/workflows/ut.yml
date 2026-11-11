@@ -60,8 +60,9 @@ jobs:
           version: 3.14.3
 
       # node 内置测试运行器（node --test）经 c8 采集 V8 覆盖率：json 供平台上报，cobertura 供 diff-cover 计算变更行覆盖率
+      # c8 统计口径由 .c8rc.json 统一配置（--all --src=src：未加载文件按 0% 纳入报告；action 入口 index.js 不计入）
       - name: ut
-        run: npx --yes c8@^10 --reporter=text --reporter=json --reporter=cobertura node --test
+        run: npx --yes c8@^10 node --test
 
       # 将ut报告上传至openlibing平台运营
       - name: upload ut report to openlibing

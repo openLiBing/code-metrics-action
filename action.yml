@@ -3,18 +3,6 @@ author: "openLiBing"
 version: 1.0.3
 description: "代码度量扫描插件 - 检测代码规模、平均函数代码行数、平均圈复杂度、代码重复率和文件重复率"
 inputs:
-  config-file:
-    description: "自定义配置文件路径（YAML，覆盖默认配置）。未配置时使用内置默认配置"
-    required: false
-    default: ""
-    layout:
-      type: "input"
-      label: "自定义配置文件路径"
-      extend_prop:
-        visible_conditions: []
-        disabled_conditions: []
-      validation:
-        required_message: ""
   min-lines:
     description: "重复代码检测阈值：连续代码块至少多少行才算一次重复（与华为云 cmetrics 官方定义对齐，默认 10）"
     required: false
@@ -87,8 +75,8 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
-  obs-ak:
-    description: "OBS 访问密钥 AK，仅 AK/SK 模式使用（全量上报文件上传到 openlibing-gitcode-action 桶）。OIDC 模式使用 STS 临时凭证，无需传入"
+  obs-ak: # gitleaks:allow
+    description: "OBS 访问密钥 AK，仅 AK/SK 模式使用（全量上报文件上传到平台对应 OBS 桶：GitCode 为 openlibing-gitcode-action，GitHub 为 openlibing-github-action）。OIDC 模式使用 STS 临时凭证，无需传入"
     required: false
     default: ""
     layout:
@@ -99,7 +87,7 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
-  obs-sk:
+  obs-sk: # gitleaks:allow
     description: "OBS 访问密钥 SK，与 obs-ak 配套，仅 AK/SK 模式使用"
     required: false
     default: ""
@@ -111,6 +99,19 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
+
+outputs:
+  code-scale:
+    description: "代码规模（有效代码行数）"
+  avg-function-loc:
+    description: "平均函数代码行数"
+  avg-cyclomatic-complexity:
+    description: "平均圈复杂度"
+  total-code-duplication-rate:
+    description: "总代码重复率（%）"
+  total-file-duplication-rate:
+    description: "总文件重复率（%）"
+
 runs:
   using: "node16"
   main: "dist/index.js"

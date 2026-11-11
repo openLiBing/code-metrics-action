@@ -38,7 +38,50 @@ Fortran  GDScript  Solidity  Structured Text  TTCN-3  Zig
 - **多文件相同重复块**：若 3 个文件都包含相同的 10 行重复代码，则总代码重复行数 +30（每个文件的 10 行均计入）。
 - **同文件多段重复取并集**：若 A 文件第 1-10 行与 B 文件重复，第 2-11 行与 C 文件重复，则 A 文件的重复代码行数取两段重复区间的并集，即第 1-11 行共 11 行；此时总代码重复行数为 31（A 的 11 行 + B 的 10 行 + C 的 10 行）。
 
-## 使用方式
+## GitHub Actions 接入（OIDC 免密）
+
+插件支持在 GitHub Actions 中运行，采用 **OIDC 免密认证**：插件向 GitHub Actions 申请 OIDC ID Token，再换取华为云临时凭证，仓库中无需配置任何长期密钥。
+
+引用方式：
+
+```yaml
+name: code-metrics-scan
+
+on:
+  # 三种触发方式可按需选择（可组合启用），示例默认只保留手动触发：
+  # 1) workflow_dispatch：手动触发，在 Actions 页面按需执行
+  workflow_dispatch:
+  # 2) push：代码推送触发，推送到指定分支时自动执行（按需启用，示例已注释）
+  # push:
+  #   branches:
+  #     - master
+  # 3) schedule：定时触发，按 cron 表达式定期执行（按需启用，示例已注释；GitHub 使用标准 5 段 cron）
+  # schedule:
+  #   - cron: "0 0 * * *"
+
+# OIDC 免密认证：必须声明 id-token: write，插件据此向平台申请 ID Token 换取华为云临时凭证
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  code-metrics-scan:
+    name: 代码度量检测
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: code-metrics-scan
+        uses: openlibing/code-metrics-action@v1.0.3
+        with:
+          # 可选：排除指定目录/文件，不传 exclude-dirs 时除内置排除目录外默认全量扫描
+          # exclude-dirs: "node_modules,target,dist,.git,.github,.mvn"
+          # 可选：指定扫描的文件扩展名（覆盖式：只扫指定扩展名 + 文件名特例，如 CMakeLists.txt / Makefile 始终放行）
+          # allowed-extensions: ".c,.cpp,.h"
+```
+
+## GitCode Actions 接入
 
 ```yaml
 name: code-metrics-scan

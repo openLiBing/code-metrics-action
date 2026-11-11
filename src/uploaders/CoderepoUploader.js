@@ -1,6 +1,8 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const { callApig, getCredentials } = require('@openlibing/huaweicloud-oidc-client');
+const { IS_GITHUB } = require('../utils/ciContext');
+
 const ObsClient = require('esdk-obs-nodejs');
 const fs = require('fs');
 const os = require('os');
@@ -260,11 +262,13 @@ class CoderepoUploader {
     this.useOidc = !!config.useOidc;
     this.apigAppKey = config.apigAppKey || '';
     this.apigAppSecret = config.apigAppSecret || '';
-    // OBS 上传凭证（AK/SK 模式使用）：复用 openlibing 平台 gitcode-action 统一桶（私有对象，供后端按 objectKey 下载）
+    // OBS 上传凭证（AK/SK 模式使用）：复用 openlibing 平台统一桶（私有对象，供后端按 objectKey 下载）
     this.obsAk = config.obsAk || '';
     this.obsSk = config.obsSk || '';
-    // 平台所有 gitcode-action 插件上报结果的统一桶，code-metrics-action 目录存放代码度量上报
-    this.obsBucket = config.obsBucket || 'openlibing-gitcode-action';
+    // OBS 桶按平台隔离：GitCode 上传到 openlibing-gitcode-action，GitHub 上传到 openlibing-github-action；
+    // 两个桶均用于插件上报结果中转，code-metrics-action/ 目录存放代码度量上报
+    this.obsBucket =
+      config.obsBucket || (IS_GITHUB ? 'openlibing-github-action' : 'openlibing-gitcode-action');
     // OBS 写/读 endpoint（华为云西南-贵阳一）
     this.obsEndpoint = config.obsEndpoint || 'obs.cn-southwest-2.myhuaweicloud.com';
   }
@@ -278,7 +282,8 @@ class CoderepoUploader {
    *
    * 流程（OBS 中转 + 单接口，彻底规避 APIG 12MB 请求体上限）：
    * 1. 组装全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences），写本地临时 json
-   * 2. 上传到 OBS（桶 openlibing-gitcode-action / code-metrics-action/ 前缀，私有对象）
+   * 2. 上传到平台对应的 OBS 桶（GitCode: openlibing-gitcode-action，GitHub: openlibing-github-action），
+   *    objectKey 统一为 code-metrics-action/ 前缀，私有对象
    * 3. 仅调一次 POST /metrics/code/report：只传元数据 + obsUrl（固定格式下载链接），后端按 objectKey 下载解析入库
    *
    * 兜底：即使第 3 步上报失败（网络原因），第 2 步 OBS 文件已完整上传，可通过平台保底定时任务
@@ -297,7 +302,7 @@ class CoderepoUploader {
       pipelineRunId: options.pipelineRunId,
       commitId: options.commitId,
       runNumber: options.runNumber,
-      // pipelineName：流水线名称（GitCode runner 注入的 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
+      // pipelineName：流水线名称（GitHub 取 GITHUB_WORKFLOW，GitCode 取 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
       pipelineName: options.pipelineName,
       metricsData: overallMetrics,
       detectionStartedAt: options.startTime,
@@ -456,6 +461,7 @@ class CoderepoUploader {
   /**
    * 构造 OBS 对象 key（固定格式，供后端/保底任务按 objectKey 下载解析入库）。
    * 规则：code-metrics-action/{owner}/{repo}/{pipelineRunId}/{ts}-metrics.json
+   * 平台差异由桶名区分（GitCode/GitHub 各一个桶），key 结构两平台保持一致，后端解析逻辑无需区分。
    * branchName 不进入路径（远端分支可能含 / 造成路径歧义），只放在文件内元数据中。
    */
   buildObjectKey(options) {

@@ -1,7 +1,8 @@
-const fs = require('fs');
-const path = require('path');
-const yaml = require('js-yaml');
-
+/**
+ * 默认配置模块。
+ * 说明：config-file（YAML/JSON 配置文件）能力无实际使用，已移除；
+ * 运行参数统一由 action 输入覆盖，仅保留内置默认值。
+ */
 const DEFAULT_CONFIG = {
   sourceDir: './',
   output: 'metrics.json',
@@ -19,71 +20,15 @@ const DEFAULT_CONFIG = {
     duplication: {
       enabled: true,
       // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块重复记为一次"
-      minLines: 10,
-      threshold: 0.3
+      minLines: 10
     }
   },
   uploader: {
-    enabled: true,
-    coderepoUrl: '',
-    timeout: 30
-  },
-  verbose: false,
-  parallel: true
+    enabled: true
+  }
 };
 
 class ConfigLoader {
-  static load(configPath) {
-    let config = { ...DEFAULT_CONFIG };
-
-    if (configPath && fs.existsSync(configPath)) {
-      try {
-        const fileContent = fs.readFileSync(configPath, 'utf8');
-        const ext = path.extname(configPath).toLowerCase();
-
-        let userConfig;
-        if (ext === '.yaml' || ext === '.yml') {
-          userConfig = yaml.load(fileContent);
-        } else if (ext === '.json') {
-          userConfig = JSON.parse(fileContent);
-        } else {
-          throw new Error(`Unsupported config file format: ${ext}`);
-        }
-
-        config = this.mergeConfig(config, userConfig);
-      } catch (error) {
-        console.warn(`Warning: Failed to load config file ${configPath}: ${error.message}`);
-      }
-    }
-
-    return config;
-  }
-
-  static mergeConfig(defaultConfig, userConfig) {
-    const merged = { ...defaultConfig };
-
-    for (const key of Object.keys(userConfig)) {
-      if (userConfig[key] === undefined || userConfig[key] === null) {
-        continue;
-      }
-
-      if (Array.isArray(userConfig[key])) {
-        // 如果用户配置了数组，完全替换默认值
-        merged[key] = [...userConfig[key]];
-      } else if (typeof userConfig[key] === 'object' && userConfig[key] !== null) {
-        if (typeof merged[key] === 'object' && merged[key] !== null) {
-          merged[key] = this.mergeConfig(merged[key], userConfig[key]);
-        } else {
-          merged[key] = userConfig[key];
-        }
-      } else {
-        merged[key] = userConfig[key];
-      }
-    }
-
-    return merged;
-  }
-
   static getDefaultConfig() {
     return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   }
