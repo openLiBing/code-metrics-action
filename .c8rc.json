@@ -1,0 +1,7 @@
+{
+  "all": true,
+  "src": ["src"],
+  "reporter": ["text", "json", "cobertura"],
+  "report-dir": "coverage",
+  "exclude": ["src/index.js", "src/bin/**", "test/**", "**/*.test.js"]
+}

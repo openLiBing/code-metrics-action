@@ -44,6 +44,23 @@ function resolveCiBranch() {
   return ciEnv('refName');
 }
 
+/**
+ * git 分支名兜底：游离 HEAD（字面量 HEAD）或空值时回落到平台上下文分支。
+ * GitHub PR 事件 checkout refs/pull/<n>/merge 后 `git rev-parse --abbrev-ref HEAD` 返回字面量 HEAD，
+ * 必须视为取不到分支，改用平台上下文（PR 事件即目标分支），避免上报 branch_name=HEAD。
+ *
+ * @param {string} gitBranch git 命令解析出的分支名（或 tag 名）
+ * @param {string} ciBranch 平台上下文给出的分支名
+ * @returns {string} 用于上报的分支名
+ */
+function resolveBranchName(gitBranch, ciBranch) {
+  const branch = String(gitBranch || '').trim();
+  if (!branch || branch === 'HEAD') {
+    return ciBranch || '';
+  }
+  return branch;
+}
+
 /** 仓库地址兜底：仅 GitHub 提供仓库环境变量，GitCode 主要由 git 命令获取 */
 function resolveRepoUrlFromEnv() {
   if (!IS_GITHUB) {
@@ -56,4 +73,4 @@ function resolveRepoUrlFromEnv() {
   return `${ciEnv('serverUrl') || 'https://github.com'}/${repository}`;
 }
 
-module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveRepoUrlFromEnv };
+module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv };

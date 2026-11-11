@@ -5,7 +5,8 @@ const fs = require('fs');
 const os = require('os');
 const { execSync, execFile, execFileSync } = require('child_process');
 const { sanitize } = require('./utils/sanitize');
-const { ciEnv, resolveCiBranch, resolveRepoUrlFromEnv } = require('./utils/ciContext');
+const { ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv } = require('./utils/ciContext');
+const { formatCstTime, buildSummaryMarkdown } = require('./utils/summary');
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
@@ -13,70 +14,6 @@ function getInput(name) {
   const hyphenKey = `INPUT_${name.toUpperCase().replace(/-/g, '-')}`;
   const underscoreKey = `INPUT_${name.toUpperCase().replace(/-/g, '_')}`;
   return process.env[hyphenKey] || process.env[underscoreKey] || core.getInput(name) || '';
-}
-
-/** Markdown 表格单元格转义：竖线必须转义，换行压平，避免撑破表格 */
-function escapeCell(value) {
-  return String(value === null || value === undefined || value === '' ? '-' : value)
-    .replace(/\|/g, '\\|')
-    .replace(/\r?\n/g, ' ');
-}
-
-/** 格式化为东八区时间（平台展示口径统一为 UTC+8） */
-function formatCstTime(date) {
-  const cst = new Date(date.getTime() + 8 * 3600 * 1000);
-  return `${cst.toISOString().replace('T', ' ').slice(0, 19)} (UTC+8)`;
-}
-
-/**
- * 生成运行摘要（Markdown 表格）。
- * GitHub Actions 没有 GitCode 那样的输出面板，只能在运行摘要页展示，故两个平台统一用摘要表呈现。
- *
- * @param {Object} ctx 扫描上下文（仓库、分支、提交、流水线、完成时间、详情链接）
- * @param {Object} result 扫描结果（5 项指标）
- * @returns {string} Markdown 文本
- */
-function buildSummaryMarkdown(ctx, result) {
-  const pipelineLabel = ctx.runNumber ? `#${ctx.runNumber}` : ctx.pipelineRunId || '-';
-  const repoBase = String(ctx.gitUrl || '').replace(/\.git$/, '');
-  const pipelineUrl = repoBase && ctx.pipelineRunId ? `${repoBase}/actions/runs/${ctx.pipelineRunId}` : '';
-  const pipelineCell = pipelineUrl ? `[${escapeCell(pipelineLabel)}](${pipelineUrl})` : escapeCell(pipelineLabel);
-
-  const scanRows = [
-    ['仓库', ctx.gitUrl],
-    ['分支', ctx.branchName],
-    ['提交', ctx.commitId ? String(ctx.commitId).slice(0, 8) : ''],
-    ['流水线', pipelineCell],
-    ['扫描完成时间', ctx.finishedAt]
-  ];
-  const metricRows = [
-    ['代码规模', `${result.codeScale} 行`, '有效代码行数（排除空行与注释）'],
-    ['平均函数代码行', `${result.avgFunctionLoc} 行`, '函数体有效代码行的算术平均值'],
-    ['平均圈复杂度', `${result.avgCyclomaticComplexity}`, '函数级圈复杂度的算术平均值'],
-    ['总代码重复率', `${result.totalCodeDuplicationRate}%`, '重复代码行占有效代码行的比例'],
-    ['总文件重复率', `${result.totalFileDuplicationRate}%`, '内容完全一致文件占总文件数的比例']
-  ];
-
-  const lines = [
-    '## 📊 代码度量指标扫描结果',
-    '',
-    '| 扫描信息 | 扫描值 |',
-    '|:--|:--|',
-    ...scanRows.map(([key, value]) => `| ${escapeCell(key)} | ${value === pipelineCell ? value : escapeCell(value)} |`),
-    '',
-    '### 指标概览',
-    '',
-    '| 指标 | 数值 | 说明 |',
-    '|:--|--:|:--|',
-    ...metricRows.map(([key, value, desc]) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
-    ''
-  ];
-  if (ctx.detailLink) {
-    lines.push(`> 查看详情：[代码度量指标扫描结果](${ctx.detailLink})`);
-  } else if (ctx.detailTip) {
-    lines.push(`> ${escapeCell(ctx.detailTip)}`);
-  }
-  return `${lines.join('\n')}\n`;
 }
 
 /**
@@ -246,9 +183,8 @@ async function run() {
     if (!gitUrl) {
       gitUrl = resolveRepoUrlFromEnv();
     }
-    if (!branchName) {
-      branchName = ciBranch;
-    }
+    // 游离 HEAD（GitHub PR 合并引用）与空值均回落到平台上下文分支（PR 事件为目标分支）
+    branchName = resolveBranchName(branchName, ciBranch);
 
     // repository 字段已移除：写死 source-dir 后，工作流所在仓 git_url 即扫描仓，
     // 后端从 gitUrl 提取 owner/repo 拼接流水线链接
@@ -441,4 +377,9 @@ async function run() {
   }
 }
 
-run();
+// 作为 action 入口直接执行时启动扫描；被单测 require 时不自动执行
+if (require.main === module) {
+  run();
+}
+
+module.exports = { run };
