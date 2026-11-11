@@ -1,6 +1,6 @@
 {
   "name": "openlibing-code-metrics-action",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Code metrics scan plugin - detect code scale, avg function LOC, avg cyclomatic complexity, code duplication rate and file duplication rate",
   "main": "dist/index.js",
   "scripts": {

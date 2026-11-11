@@ -45,6 +45,20 @@ test('globToRegExp：* 不跨目录、** 跨目录、? 与字符类', () => {
   assert.match('a9.js', FileCollector.globToRegExp('a[0-9].js'));
 });
 
+test('globToRegExp：非法字符类与超限规则返回 null，不抛异常', () => {
+  // 非法区间（[z-a]）不能让 new RegExp 抛异常中断扫描
+  assert.equal(FileCollector.globToRegExp('[z-a]'), null);
+  // 超长模式与 globstar 层数超限直接拒绝，兜底正则回溯风险
+  assert.equal(FileCollector.globToRegExp('a'.repeat(FileCollector.MAX_GLOB_PATTERN_LENGTH + 1)), null);
+  assert.equal(
+    FileCollector.globToRegExp(Array(FileCollector.MAX_GLOBSTAR_COUNT + 1).fill('**').join('/')),
+    null
+  );
+  // isExcluded 跳过非法规则，不影响其他合法规则命中
+  assert.equal(FileCollector.isExcluded('docs', 'docs', ['[z-a]']), false);
+  assert.equal(FileCollector.isExcluded('docs', 'docs', ['[z-a]', 'docs']), true);
+});
+
 test('collectFiles：递归收集并应用默认隐藏目录/排除目录/扩展名过滤', () => {
   const root = makeTempDir();
   try {

@@ -17,6 +17,29 @@ function formatCstTime(date) {
 }
 
 /**
+ * 链接 URL 安全处理（Ref #76）：仅放行 http/https，编码会破坏 Markdown 链接结构的字符。
+ * 非法协议或非法 URL 返回空串，由调用方降级为纯文本，避免 `)` 提前闭合链接目标后注入 Markdown。
+ */
+function safeLinkUrl(value) {
+  const url = String(value || '').trim();
+  if (!url) {
+    return '';
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return '';
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return '';
+  }
+  // 括号会提前闭合 Markdown 链接目标，空白/尖括号/引号可改变链接解析，统一百分号编码
+  // 注：encodeURIComponent 不编码 ( ) ! * '，此处按字符显式转 %XX
+  return url.replace(/[()<>\s"]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+}
+
+/**
  * 生成运行摘要（Markdown 表格）。
  * GitHub Actions 没有 GitCode 那样的输出面板，只能在运行摘要页展示，故两个平台统一用摘要表呈现。
  *
@@ -27,8 +50,9 @@ function formatCstTime(date) {
 function buildSummaryMarkdown(ctx, result) {
   const pipelineLabel = ctx.runNumber ? `#${ctx.runNumber}` : ctx.pipelineRunId || '-';
   const repoBase = String(ctx.gitUrl || '').replace(/\.git$/, '');
-  const pipelineUrl =
-    repoBase && ctx.pipelineRunId ? `${repoBase}/actions/runs/${ctx.pipelineRunId}` : '';
+  const pipelineUrl = safeLinkUrl(
+    repoBase && ctx.pipelineRunId ? `${repoBase}/actions/runs/${ctx.pipelineRunId}` : ''
+  );
   const pipelineCell = pipelineUrl
     ? `[${escapeCell(pipelineLabel)}](${pipelineUrl})`
     : escapeCell(pipelineLabel);
@@ -62,12 +86,14 @@ function buildSummaryMarkdown(ctx, result) {
     ...metricRows.map(([key, value, desc]) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
     ''
   ];
-  if (ctx.detailLink) {
-    lines.push(`> 查看详情：[代码度量指标扫描结果](${ctx.detailLink})`);
+  // 详情链接同样只放行合法 http(s) URL；非法链接降级为提示文本，不生成 Markdown 链接
+  const detailUrl = safeLinkUrl(ctx.detailLink);
+  if (detailUrl) {
+    lines.push(`> 查看详情：[代码度量指标扫描结果](${detailUrl})`);
   } else if (ctx.detailTip) {
     lines.push(`> ${escapeCell(ctx.detailTip)}`);
   }
   return `${lines.join('\n')}\n`;
 }
 
-module.exports = { escapeCell, formatCstTime, buildSummaryMarkdown };
+module.exports = { escapeCell, formatCstTime, safeLinkUrl, buildSummaryMarkdown };

@@ -65,3 +65,37 @@ test('buildSummaryMarkdown 无流水线 ID 时展示占位并转义提示文本'
   assert.match(md, /\| 流水线 \| - \|/);
   assert.match(md, /> no\\\|link line2/);
 });
+
+test('buildSummaryMarkdown 编码破坏链接结构的字符，非法协议降级为提示文本', () => {
+  const result = {
+    codeScale: 1,
+    avgFunctionLoc: 1,
+    avgCyclomaticComplexity: 1,
+    totalCodeDuplicationRate: 0,
+    totalFileDuplicationRate: 0
+  };
+  const baseCtx = {
+    gitUrl: 'https://gitcode.com/openlibing/code-metrics-action.git',
+    branchName: 'master',
+    commitId: '',
+    pipelineRunId: 'run-1',
+    runNumber: '7',
+    finishedAt: '2026-11-10 08:00:00 (UTC+8)'
+  };
+
+  // 右括号/空白必须编码，避免提前闭合链接目标后注入额外 Markdown
+  const injected = buildSummaryMarkdown(
+    { ...baseCtx, detailLink: 'https://example.com/a)(https://evil.example/a b' },
+    result
+  );
+  assert.match(injected, /查看详情：\[代码度量指标扫描结果\]\(https:\/\/example\.com\/a%29%28https:\/\/evil\.example\/a%20b\)/);
+  assert.doesNotMatch(injected, /\]\(https:\/\/evil\.example/);
+
+  // 非 http(s) 协议不生成链接，降级展示 detailTip
+  const jsScheme = buildSummaryMarkdown(
+    { ...baseCtx, detailLink: 'javascript:alert(1)', detailTip: '链接不可用' },
+    result
+  );
+  assert.doesNotMatch(jsScheme, /javascript:/);
+  assert.match(jsScheme, /> 链接不可用/);
+});
