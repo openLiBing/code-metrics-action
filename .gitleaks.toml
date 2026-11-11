@@ -1,0 +1,16 @@
+# gitleaks 配置：在默认规则基础上过滤生成产物与输入声明造成的误报
+[extend]
+useDefault = true
+
+# ncc 打包产物：内含第三方依赖源码（axios、OBS SDK 等）中的 accessKey/password 变量名
+# 与示例邮箱，均非本仓真实凭证；本仓源码仍由 src/ 正常扫描
+[[allowlists]]
+description = "ncc bundle output (third-party dependencies)"
+paths = ['''^dist/index\.js$''']
+
+# action.yml 中 obs-ak / obs-sk 是 action 输入名称声明，不是真实凭证
+[[allowlists]]
+description = "action input names obs-ak/obs-sk"
+paths = ['''^action\.yml$''']
+regexTarget = "line"
+regexes = ['''obs-ak''', '''obs-sk''']
