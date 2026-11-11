@@ -73,7 +73,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: code-metrics-scan
-        uses: openlibing/code-metrics-action@v1.0.3
+        uses: openlibing/code-metrics-action@v1.0.4
         with:
           # 可选：排除指定目录/文件，不传 exclude-dirs 时除内置排除目录外默认全量扫描
           # exclude-dirs: "node_modules,target,dist,.git,.github,.mvn"
@@ -112,7 +112,7 @@ jobs:
         uses: checkout
 
       - name: code-metrics-scan
-        uses: openlibing/code-metrics-action@v1.0.3
+        uses: openlibing/code-metrics-action@v1.0.4
         with:
           # 可选：排除指定目录/文件，不传 exclude-dirs 时除内置排除目录外默认全量扫描
           # exclude-dirs: "node_modules,target,dist,.git,.gitcode,.mvn,.trae,vendor"

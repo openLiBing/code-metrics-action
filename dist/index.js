@@ -60080,6 +60080,12 @@ class FileCollector {
   // 使本地收集范围（重复率分子）小于 scc 全量扫描范围（分母），重复率被系统性低估。
   static DEFAULT_EXCLUDED_DIRS = ['.git', '.svn', '.hg', '.idea', '.vscode'];
 
+  // glob 规则防护上限：超长或 globstar 层数过多的模式存在正则回溯爆炸风险，直接拒绝
+  static MAX_GLOB_PATTERN_LENGTH = 256;
+  static MAX_GLOBSTAR_COUNT = 16;
+  // 已告警的非法/超限规则，避免目录遍历时重复刷日志
+  static _warnedGlobs = new Set();
+
   /**
    * 判断目录是否属于默认跳过的隐藏目录（版本控制/IDE 私有目录）
    *
@@ -60139,12 +60145,14 @@ class FileCollector {
       const hasWildcard = d.indexOf('*') >= 0 || d.indexOf('?') >= 0 || d.indexOf('[') >= 0;
       if (hasSlash) {
         // 路径规则：锚定扫描根，匹配相对路径
-        if (FileCollector.globToRegExp(d).test(rel)) {
+        const re = FileCollector.globToRegExp(d);
+        if (re && re.test(rel)) {
           return true;
         }
       } else if (hasWildcard) {
         // 裸名称 + 通配符：任意层级匹配条目名
-        if (FileCollector.globToRegExp(d).test(name)) {
+        const re = FileCollector.globToRegExp(d);
+        if (re && re.test(name)) {
           return true;
         }
       } else if (d === rel) {
@@ -60179,18 +60187,37 @@ class FileCollector {
     return false;
   }
 
+  /**
+   * 记录并跳过非法/超限 glob 规则（同一规则只告警一次，避免遍历中刷屏）
+   */
+  static _warnInvalidGlob(pattern, reason) {
+    if (FileCollector._warnedGlobs.has(pattern)) {
+      return;
+    }
+    FileCollector._warnedGlobs.add(pattern);
+    console.warn(`[WARN] exclude-dirs 规则已跳过: ${pattern}（${reason}）`);
+  }
+
   // 将单个 glob 模式转为锚定整串匹配的正则（大小写敏感）。
   // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
   // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
+  // 非法或超限模式返回 null，由调用方跳过，避免中断整个扫描。
   static globToRegExp(glob) {
+    const pattern = String(glob || '');
+    // 长度与 globstar 层数上限：兜底超长/深度嵌套模式的正则回溯风险
+    if (pattern.length > FileCollector.MAX_GLOB_PATTERN_LENGTH
+        || (pattern.match(/\*\*/g) || []).length > FileCollector.MAX_GLOBSTAR_COUNT) {
+      FileCollector._warnInvalidGlob(pattern, '超出长度或 globstar 层数上限');
+      return null;
+    }
     let re = '^';
-    for (let i = 0; i < glob.length; i++) {
-      const c = glob[i];
+    for (let i = 0; i < pattern.length; i++) {
+      const c = pattern[i];
       if (c === '*') {
         // 连续 * 合并为 **（跨目录分隔符）
-        if (glob[i + 1] === '*') {
-          while (glob[i + 1] === '*') i++;
-          if (glob[i + 1] === '/') {
+        if (pattern[i + 1] === '*') {
+          while (pattern[i + 1] === '*') i++;
+          if (pattern[i + 1] === '/') {
             // **/：匹配 0 层或多层目录，顶层与任意深层均命中
             re += '(?:.*/)?';
             i++;
@@ -60207,20 +60234,20 @@ class FileCollector {
         // 字符类：[abc]、[a-z]、[!abc]（或 [^abc]）；未闭合的 [ 当作普通字符
         let j = i + 1;
         let negate = false;
-        if (glob[j] === '!' || glob[j] === '^') {
+        if (pattern[j] === '!' || pattern[j] === '^') {
           negate = true;
           j++;
         }
         let cls = '';
         let closed = false;
         let first = true;
-        while (j < glob.length) {
-          if (glob[j] === ']' && !first) {
+        while (j < pattern.length) {
+          if (pattern[j] === ']' && !first) {
             closed = true;
             break;
           }
           first = false;
-          cls += glob[j];
+          cls += pattern[j];
           j++;
         }
         if (closed) {
@@ -60234,7 +60261,13 @@ class FileCollector {
         re += '\\^$.|+(){}'.indexOf(c) >= 0 ? '\\' + c : c;
       }
     }
-    return new RegExp(re + '$');
+    try {
+      return new RegExp(re + '$');
+    } catch (error) {
+      // 字符类内容按 glob 语义原样拼接，非法区间（如 [z-a]）在此兜底
+      FileCollector._warnInvalidGlob(pattern, error.message);
+      return null;
+    }
   }
 
   /**
@@ -60472,6 +60505,29 @@ function formatCstTime(date) {
 }
 
 /**
+ * 链接 URL 安全处理（Ref #76）：仅放行 http/https，编码会破坏 Markdown 链接结构的字符。
+ * 非法协议或非法 URL 返回空串，由调用方降级为纯文本，避免 `)` 提前闭合链接目标后注入 Markdown。
+ */
+function safeLinkUrl(value) {
+  const url = String(value || '').trim();
+  if (!url) {
+    return '';
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return '';
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return '';
+  }
+  // 括号会提前闭合 Markdown 链接目标，空白/尖括号/引号可改变链接解析，统一百分号编码
+  // 注：encodeURIComponent 不编码 ( ) ! * '，此处按字符显式转 %XX
+  return url.replace(/[()<>\s"]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+}
+
+/**
  * 生成运行摘要（Markdown 表格）。
  * GitHub Actions 没有 GitCode 那样的输出面板，只能在运行摘要页展示，故两个平台统一用摘要表呈现。
  *
@@ -60482,8 +60538,9 @@ function formatCstTime(date) {
 function buildSummaryMarkdown(ctx, result) {
   const pipelineLabel = ctx.runNumber ? `#${ctx.runNumber}` : ctx.pipelineRunId || '-';
   const repoBase = String(ctx.gitUrl || '').replace(/\.git$/, '');
-  const pipelineUrl =
-    repoBase && ctx.pipelineRunId ? `${repoBase}/actions/runs/${ctx.pipelineRunId}` : '';
+  const pipelineUrl = safeLinkUrl(
+    repoBase && ctx.pipelineRunId ? `${repoBase}/actions/runs/${ctx.pipelineRunId}` : ''
+  );
   const pipelineCell = pipelineUrl
     ? `[${escapeCell(pipelineLabel)}](${pipelineUrl})`
     : escapeCell(pipelineLabel);
@@ -60517,15 +60574,17 @@ function buildSummaryMarkdown(ctx, result) {
     ...metricRows.map(([key, value, desc]) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
     ''
   ];
-  if (ctx.detailLink) {
-    lines.push(`> 查看详情：[代码度量指标扫描结果](${ctx.detailLink})`);
+  // 详情链接同样只放行合法 http(s) URL；非法链接降级为提示文本，不生成 Markdown 链接
+  const detailUrl = safeLinkUrl(ctx.detailLink);
+  if (detailUrl) {
+    lines.push(`> 查看详情：[代码度量指标扫描结果](${detailUrl})`);
   } else if (ctx.detailTip) {
     lines.push(`> ${escapeCell(ctx.detailTip)}`);
   }
   return `${lines.join('\n')}\n`;
 }
 
-module.exports = { escapeCell, formatCstTime, buildSummaryMarkdown };
+module.exports = { escapeCell, formatCstTime, safeLinkUrl, buildSummaryMarkdown };
 
 
 /***/ }),
