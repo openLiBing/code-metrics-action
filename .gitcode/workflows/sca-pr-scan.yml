@@ -1,0 +1,23 @@
+name: sca-pr-scan
+
+on:
+  pull_request_target: ## 使用 pull_request_target 确保 PR 流水线始终读取默认分支的最新配置文件
+    branches:
+      - "*"
+  pull_request_comment: ## PR 评论事件：当用户在 PR 中发表评论时触发
+    types: [created]
+    comments: ["/sca-pr-scan"]
+    branches:
+      - "*"
+
+permissions:
+  repository: read
+  id-token: write # 必须声明此权限，否则无法申请 OIDC JWT（这不是 secret，是流水线平台的权限声明）
+
+jobs:
+  sca-pr-scan:
+    name: sca-pr-scan
+    runs-on: ["self-hosted", "region=cn"]
+    steps:
+      - name: Run sca-pr-action
+        uses: openlibing/sca-action/sca-pr-action@v1.0.0
