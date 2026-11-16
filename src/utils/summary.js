@@ -68,7 +68,10 @@ const SUMMARY_TEXT = {
       }
     ],
     detailPrefix: '> View details: ',
-    detailText: 'Code Metrics Scan Result'
+    detailText: 'Code Metrics Scan Result',
+    // 服务端返回的 detailTip 为中文，英文模式下替换为通用英文提示，保证摘要全英文
+    detailFallback:
+      'Detail link is unavailable. Make sure the repository and branch are registered on the openLiBing platform.'
   }
 };
 
@@ -168,7 +171,8 @@ function buildSummaryMarkdown(ctx, result, options = {}) {
   if (detailUrl) {
     lines.push(`${text.detailPrefix}[${text.detailText}](${detailUrl})`);
   } else if (ctx.detailTip) {
-    lines.push(`> ${escapeCell(ctx.detailTip)}`);
+    // GitHub 摘要要求全英文：服务端提示为中文，英文模式下替换为通用英文提示
+    lines.push(`> ${escapeCell(options.english ? text.detailFallback : ctx.detailTip)}`);
   }
   return `${lines.join('\n')}\n`;
 }
