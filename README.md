@@ -187,11 +187,6 @@ permissions:
 | total-code-duplication-rate | 代码重复率（%）          |
 | total-file-duplication-rate | 文件重复率（%）          |
 
-### 运行摘要（Step Summary）
-
-- GitHub Actions：写入 `GITHUB_STEP_SUMMARY`，摘要表固定为英文（Code Metrics Scan Result / Metrics Overview）；
-- GitCode Actions：写入 `ATOMGIT_STEP_SUMMARY`，摘要表保持中文。
-
 ### 概览输出（ATOMGIT_OUTPUT）
 
 扫描完成后，插件会将每项指标通过 `ATOMGIT_OUTPUT` 输出为独立的键值对，便于工作流页面直接查看概览（不含明细）。每项指标的标识为 中文名（英文名），按顺序排列为：代码规模（codeScale）、平均代码行数（avgFunctionLoc）、平均圈复杂度（avgCyclomaticComplexity）、总代码重复率（totalCodeDuplicationRate）、总文件重复率（totalFileDuplicationRate）。重复率指标为带 `%` 的百分数。
