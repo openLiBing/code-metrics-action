@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const { execSync, execFile, execFileSync } = require('child_process');
 const { sanitize } = require('./utils/sanitize');
-const { ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv } = require('./utils/ciContext');
+const { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv } = require('./utils/ciContext');
 const { formatCstTime, buildSummaryMarkdown } = require('./utils/summary');
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
@@ -349,6 +349,7 @@ async function run() {
     }
 
     // 运行摘要：GitHub 写 GITHUB_STEP_SUMMARY，GitCode 写 ATOMGIT_STEP_SUMMARY，统一使用 Markdown 表格
+    // GitHub 平台摘要固定输出全英文，GitCode 保持原有中文文案
     appendStepSummary(
       buildSummaryMarkdown(
         {
@@ -361,7 +362,8 @@ async function run() {
           detailLink,
           detailTip
         },
-        result
+        result,
+        { english: IS_GITHUB }
       )
     );
 

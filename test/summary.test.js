@@ -99,3 +99,56 @@ test('buildSummaryMarkdown 编码破坏链接结构的字符，非法协议降�
   assert.doesNotMatch(jsScheme, /javascript:/);
   assert.match(jsScheme, /> 链接不可用/);
 });
+
+test('buildSummaryMarkdown GitHub 平台输出全英文摘要', () => {
+  const md = buildSummaryMarkdown(
+    {
+      gitUrl: 'https://github.com/openlibing-test/openlibing-metrics-test.git',
+      branchName: 'main',
+      commitId: 'abcdef1234567890',
+      pipelineRunId: 'run-1',
+      runNumber: '7',
+      finishedAt: '2026-11-10 08:00:00 (UTC+8)',
+      detailLink: 'https://example.com/detail',
+      detailTip: 'detail unavailable'
+    },
+    {
+      codeScale: 100,
+      avgFunctionLoc: 10,
+      avgCyclomaticComplexity: 2.5,
+      totalCodeDuplicationRate: 1.2,
+      totalFileDuplicationRate: 3.4
+    },
+    { english: true }
+  );
+  assert.match(md, /## 📊 Code Metrics Scan Result/);
+  assert.match(md, /\| Repository \| https:\/\/github\.com\/openlibing-test\/openlibing-metrics-test\.git \|/);
+  assert.match(md, /\| Code Scale \| 100 lines \|/);
+  assert.match(md, /### Metrics Overview/);
+  assert.match(md, /> View details: \[Code Metrics Scan Result\]\(https:\/\/example\.com\/detail\)/);
+  // GitHub 摘要中不应出现任何中文
+  assert.doesNotMatch(md, /[\u4e00-\u9fa5]/);
+
+  // 服务端中文提示在英文模式下替换为通用英文提示
+  const fallbackMd = buildSummaryMarkdown(
+    {
+      gitUrl: 'https://github.com/openlibing-test/openlibing-metrics-test.git',
+      branchName: 'main',
+      commitId: '',
+      pipelineRunId: '',
+      runNumber: '',
+      finishedAt: '2026-11-10 08:00:00 (UTC+8)',
+      detailTip: '当前仓未录入openLiBing平台'
+    },
+    {
+      codeScale: 1,
+      avgFunctionLoc: 1,
+      avgCyclomaticComplexity: 1,
+      totalCodeDuplicationRate: 0,
+      totalFileDuplicationRate: 0
+    },
+    { english: true }
+  );
+  assert.match(fallbackMd, /> Detail link is unavailable/);
+  assert.doesNotMatch(fallbackMd, /[\u4e00-\u9fa5]/);
+});

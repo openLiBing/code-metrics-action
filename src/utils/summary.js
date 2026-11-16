@@ -1,7 +1,79 @@
 /**
  * 运行摘要（Markdown）构建工具。
  * 从 src/index.js 抽出为无副作用模块，便于单测覆盖；GitHub/GitCode 两个平台统一使用摘要表展示。
+ * GitHub Actions 侧摘要固定使用英文（平台面向国际用户），GitCode 侧保持中文不变。
  */
+
+/** 摘要文案字典：zh 为 GitCode 现有文案，en 为 GitHub 侧全英文文案 */
+const SUMMARY_TEXT = {
+  zh: {
+    title: '## 📊 代码度量指标扫描结果',
+    scanTableHeader: '| 扫描信息 | 扫描值 |',
+    labels: {
+      repo: '仓库',
+      branch: '分支',
+      commit: '提交',
+      pipeline: '流水线',
+      finishedAt: '扫描完成时间'
+    },
+    overviewTitle: '### 指标概览',
+    metricTableHeader: '| 指标 | 数值 | 说明 |',
+    metrics: [
+      { name: '代码规模', unit: ' 行', desc: '有效代码行数（排除空行与注释）' },
+      { name: '平均函数代码行', unit: ' 行', desc: '函数体有效代码行的算术平均值' },
+      { name: '平均圈复杂度', unit: '', desc: '函数级圈复杂度的算术平均值' },
+      { name: '总代码重复率', unit: '%', desc: '重复代码行占有效代码行的比例' },
+      { name: '总文件重复率', unit: '%', desc: '内容完全一致文件占总文件数的比例' }
+    ],
+    detailPrefix: '> 查看详情：',
+    detailText: '代码度量指标扫描结果'
+  },
+  en: {
+    title: '## 📊 Code Metrics Scan Result',
+    scanTableHeader: '| Scan Info | Value |',
+    labels: {
+      repo: 'Repository',
+      branch: 'Branch',
+      commit: 'Commit',
+      pipeline: 'Pipeline',
+      finishedAt: 'Scan Completed At'
+    },
+    overviewTitle: '### Metrics Overview',
+    metricTableHeader: '| Metric | Value | Description |',
+    metrics: [
+      {
+        name: 'Code Scale',
+        unit: ' lines',
+        desc: 'Effective lines of code (excluding blank lines and comments)'
+      },
+      {
+        name: 'Avg Function LOC',
+        unit: ' lines',
+        desc: 'Arithmetic mean of effective lines of code per function'
+      },
+      {
+        name: 'Avg Cyclomatic Complexity',
+        unit: '',
+        desc: 'Arithmetic mean of function-level cyclomatic complexity'
+      },
+      {
+        name: 'Total Code Duplication Rate',
+        unit: '%',
+        desc: 'Percentage of duplicated lines among effective lines of code'
+      },
+      {
+        name: 'Total File Duplication Rate',
+        unit: '%',
+        desc: 'Percentage of identical files among all files'
+      }
+    ],
+    detailPrefix: '> View details: ',
+    detailText: 'Code Metrics Scan Result',
+    // 服务端返回的 detailTip 为中文，英文模式下替换为通用英文提示，保证摘要全英文
+    detailFallback:
+      'Detail link is unavailable. Make sure the repository and branch are registered on the openLiBing platform.'
+  }
+};
 
 /** Markdown 表格单元格转义：竖线必须转义，换行压平，避免撑破表格 */
 function escapeCell(value) {
@@ -45,9 +117,11 @@ function safeLinkUrl(value) {
  *
  * @param {Object} ctx 扫描上下文（仓库、分支、提交、流水线、完成时间、详情链接）
  * @param {Object} result 扫描结果（5 项指标）
+ * @param {Object} [options] 展示选项；english=true 时输出全英文摘要（GitHub 平台）
  * @returns {string} Markdown 文本
  */
-function buildSummaryMarkdown(ctx, result) {
+function buildSummaryMarkdown(ctx, result, options = {}) {
+  const text = options.english ? SUMMARY_TEXT.en : SUMMARY_TEXT.zh;
   const pipelineLabel = ctx.runNumber ? `#${ctx.runNumber}` : ctx.pipelineRunId || '-';
   const repoBase = String(ctx.gitUrl || '').replace(/\.git$/, '');
   const pipelineUrl = safeLinkUrl(
@@ -58,30 +132,36 @@ function buildSummaryMarkdown(ctx, result) {
     : escapeCell(pipelineLabel);
 
   const scanRows = [
-    ['仓库', ctx.gitUrl],
-    ['分支', ctx.branchName],
-    ['提交', ctx.commitId ? String(ctx.commitId).slice(0, 8) : ''],
-    ['流水线', pipelineCell],
-    ['扫描完成时间', ctx.finishedAt]
+    [text.labels.repo, ctx.gitUrl],
+    [text.labels.branch, ctx.branchName],
+    [text.labels.commit, ctx.commitId ? String(ctx.commitId).slice(0, 8) : ''],
+    [text.labels.pipeline, pipelineCell],
+    [text.labels.finishedAt, ctx.finishedAt]
   ];
-  const metricRows = [
-    ['代码规模', `${result.codeScale} 行`, '有效代码行数（排除空行与注释）'],
-    ['平均函数代码行', `${result.avgFunctionLoc} 行`, '函数体有效代码行的算术平均值'],
-    ['平均圈复杂度', `${result.avgCyclomaticComplexity}`, '函数级圈复杂度的算术平均值'],
-    ['总代码重复率', `${result.totalCodeDuplicationRate}%`, '重复代码行占有效代码行的比例'],
-    ['总文件重复率', `${result.totalFileDuplicationRate}%`, '内容完全一致文件占总文件数的比例']
+  // 指标值按字典顺序对应：代码规模、平均函数代码行、平均圈复杂度、总代码重复率、总文件重复率
+  const metricValues = [
+    result.codeScale,
+    result.avgFunctionLoc,
+    result.avgCyclomaticComplexity,
+    result.totalCodeDuplicationRate,
+    result.totalFileDuplicationRate
   ];
+  const metricRows = text.metrics.map((metric, index) => [
+    metric.name,
+    `${metricValues[index]}${metric.unit}`,
+    metric.desc
+  ]);
 
   const lines = [
-    '## 📊 代码度量指标扫描结果',
+    text.title,
     '',
-    '| 扫描信息 | 扫描值 |',
+    text.scanTableHeader,
     '|:--|:--|',
     ...scanRows.map(([key, value]) => `| ${escapeCell(key)} | ${value === pipelineCell ? value : escapeCell(value)} |`),
     '',
-    '### 指标概览',
+    text.overviewTitle,
     '',
-    '| 指标 | 数值 | 说明 |',
+    text.metricTableHeader,
     '|:--|--:|:--|',
     ...metricRows.map(([key, value, desc]) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
     ''
@@ -89,9 +169,10 @@ function buildSummaryMarkdown(ctx, result) {
   // 详情链接同样只放行合法 http(s) URL；非法链接降级为提示文本，不生成 Markdown 链接
   const detailUrl = safeLinkUrl(ctx.detailLink);
   if (detailUrl) {
-    lines.push(`> 查看详情：[代码度量指标扫描结果](${detailUrl})`);
+    lines.push(`${text.detailPrefix}[${text.detailText}](${detailUrl})`);
   } else if (ctx.detailTip) {
-    lines.push(`> ${escapeCell(ctx.detailTip)}`);
+    // GitHub 摘要要求全英文：服务端提示为中文，英文模式下替换为通用英文提示
+    lines.push(`> ${escapeCell(options.english ? text.detailFallback : ctx.detailTip)}`);
   }
   return `${lines.join('\n')}\n`;
 }
