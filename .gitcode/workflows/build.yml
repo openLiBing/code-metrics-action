@@ -41,8 +41,26 @@ jobs:
           node-version: 20
           cache: true
 
-      # npm ci 按 lockfile 精确安装依赖后执行完整构建链（ncc 打包 + zip），验证产物可正常生成；依赖均为公共包，无需私仓凭证
+      # npm ci 按 lockfile 精确安装依赖；随后依次执行格式检查、静态检查与完整构建链（ncc 打包 + 复制二进制）
+      - name: install dependencies
+        run: npm ci
+
+      - name: format check
+        run: npm run format:check
+
+      - name: lint
+        run: npm run lint
+
       - name: build
+        run: npm run build
+
+      # dist 与源码一致性门禁：src 改动后忘记重建并提交 dist 时直接失败，避免发布旧逻辑
+      # 忽略行尾空白差异：构建产物在不同平台/钩子下可能有纯空白差异，只拦截实质内容漂移与新增文件
+      - name: check dist in sync
         run: |
-          npm ci
-          npm run build
+          if ! git diff --ignore-space-at-eol --exit-code -- dist || [ -n "$(git ls-files --others --exclude-standard -- dist)" ]; then
+            echo "dist 与源码不一致，请本地执行 npm run build 并提交 dist 变更：" >&2
+            git diff --stat -- dist
+            git ls-files --others --exclude-standard -- dist
+            exit 1
+          fi

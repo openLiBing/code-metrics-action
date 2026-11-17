@@ -52,7 +52,7 @@ jobs:
           cache: true
 
       - name: install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci
 
       - name: setup-python (diff-cover)
         uses: setup-python

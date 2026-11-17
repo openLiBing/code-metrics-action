@@ -1,2 +1,4 @@
 node_modules/
 coverage/
+.idea/
+tmp_pre-commit-reports/
