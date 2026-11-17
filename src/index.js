@@ -332,10 +332,12 @@ async function run() {
     }
 
     // GitCode 输出面板：保持原有键值对输出（概览 + 详情链接），供流水线结果面板展示
+    // 无函数（分母为 0）时两个均值指标为 null，统一展示 -- 而不是 null
+    const displayValue = (value) => (value === null || value === undefined ? '--' : String(value));
     const overviewDisplay = [
       ['codeScale', '代码规模（codeScale）', String(result.codeScale)],
-      ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', String(result.avgFunctionLoc)],
-      ['avgCyclomaticComplexity', '平均圈复杂度（avgCyclomaticComplexity）', String(result.avgCyclomaticComplexity)],
+      ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', displayValue(result.avgFunctionLoc)],
+      ['avgCyclomaticComplexity', '平均圈复杂度（avgCyclomaticComplexity）', displayValue(result.avgCyclomaticComplexity)],
       ['totalCodeDuplicationRate', '总代码重复率（totalCodeDuplicationRate）', `${result.totalCodeDuplicationRate}%`],
       ['totalFileDuplicationRate', '总文件重复率（totalFileDuplicationRate）', `${result.totalFileDuplicationRate}%`]
     ];
@@ -369,8 +371,8 @@ async function run() {
 
     core.info('Code metrics scan completed successfully');
     core.info(`Code scale: ${result.codeScale}`);
-    core.info(`Avg function LOC: ${result.avgFunctionLoc}`);
-    core.info(`Avg cyclomatic complexity: ${result.avgCyclomaticComplexity}`);
+    core.info(`Avg function LOC: ${displayValue(result.avgFunctionLoc)}`);
+    core.info(`Avg cyclomatic complexity: ${displayValue(result.avgCyclomaticComplexity)}`);
     core.info(`Code duplication rate: ${result.totalCodeDuplicationRate}%`);
     core.info(`File duplication rate: ${result.totalFileDuplicationRate}%`);
 

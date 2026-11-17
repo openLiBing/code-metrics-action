@@ -41,8 +41,9 @@ class MetricsCalculator {
         loc: detail.loc || 0,
         commentLines: detail.commentLines || 0,
         functionCount: 0,
-        avgFunctionLoc: 0,
-        avgCyclomaticComplexity: 0,
+        // 无函数文件两个均值指标不适用，保持 null（0 会被误读为函数代码行很短/复杂度很低）
+        avgFunctionLoc: null,
+        avgCyclomaticComplexity: null,
         functionDetails: [],
         duplicationRate: 0,
         duplicationLineCount: 0,
@@ -55,8 +56,8 @@ class MetricsCalculator {
       const existing = fileMap.get(detail.filePath);
       if (existing) {
         existing.functionCount = detail.functionCount || 0;
-        existing.avgFunctionLoc = detail.avgFunctionLoc || 0;
-        existing.avgCyclomaticComplexity = detail.avgCyclomaticComplexity || 0;
+        existing.avgFunctionLoc = detail.avgFunctionLoc ?? null;
+        existing.avgCyclomaticComplexity = detail.avgCyclomaticComplexity ?? null;
         existing.functionDetails = detail.functionDetails || [];
       } else {
         fileMap.set(detail.filePath, {
@@ -65,8 +66,8 @@ class MetricsCalculator {
           loc: 0,
           commentLines: 0,
           functionCount: detail.functionCount || 0,
-          avgFunctionLoc: detail.avgFunctionLoc || 0,
-          avgCyclomaticComplexity: detail.avgCyclomaticComplexity || 0,
+          avgFunctionLoc: detail.avgFunctionLoc ?? null,
+          avgCyclomaticComplexity: detail.avgCyclomaticComplexity ?? null,
           functionDetails: detail.functionDetails || [],
           duplicationRate: 0,
           duplicationLineCount: 0,
@@ -94,8 +95,8 @@ class MetricsCalculator {
           loc: detail.totalLines || 0,
           commentLines: 0,
           functionCount: 0,
-          avgFunctionLoc: 0,
-          avgCyclomaticComplexity: 0,
+          avgFunctionLoc: null,
+          avgCyclomaticComplexity: null,
           functionDetails: [],
           duplicationRate: detail.duplicationRate || 0,
           duplicationLineCount: detail.duplicationLineCount || 0,
@@ -109,21 +110,41 @@ class MetricsCalculator {
   }
 
   static validate(metrics) {
+    // 4 项全局指标必须有数值
     const required = [
       'codeScale',
-      'averageFunctionLoc',
-      'averageCyclomaticComplexity',
       'totalCodeDuplicationRate',
       'totalFileDuplicationRate'
     ];
-
     for (const key of required) {
       if (metrics[key] === undefined || metrics[key] === null) {
         throw new Error(`Missing required metric: ${key}`);
       }
     }
+    // 两个函数均值在函数总数为 0 时允许为 null（无数据），但键必须存在，
+    // 以区分"探测器未执行/未配置"与"无函数"
+    const nullableRequired = ['averageFunctionLoc', 'averageCyclomaticComplexity'];
+    for (const key of nullableRequired) {
+      if (metrics[key] === undefined) {
+        throw new Error(`Missing required metric: ${key}`);
+      }
+    }
 
     return true;
+  }
+
+  /**
+   * 数值指标归一化：缺失或非法值返回 null（无数据），避免 0 被当作真实指标上报
+   *
+   * @param {*} value 原始值
+   * @returns {number|null} 数值或 null
+   */
+  static toOptionalNumber(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    const num = Number(value);
+    return Number.isNaN(num) ? null : num;
   }
 
   static formatForReport(metrics) {
@@ -147,8 +168,10 @@ class MetricsCalculator {
       duplicatedBlocks: Number(overallMetrics.duplicatedBlocks) || 0,
       // 重复代码行数量：Σ 每文件重复行数（totalCodeDuplicationRate 的分子）
       duplicatedLines: Number(overallMetrics.duplicatedLines) || 0,
-      avgFunctionLoc: Number(overallMetrics.averageFunctionLoc) || 0,
-      avgCyclomaticComplexity: Number(overallMetrics.averageCyclomaticComplexity) || 0,
+      // 平均函数代码行/平均圈复杂度：分母（函数总数）为 0 时无数据，保持 null 上报，
+      // 不能兜底为 0（0 会被前端当作真实指标展示与排序）
+      avgFunctionLoc: MetricsCalculator.toOptionalNumber(overallMetrics.averageFunctionLoc),
+      avgCyclomaticComplexity: MetricsCalculator.toOptionalNumber(overallMetrics.averageCyclomaticComplexity),
       totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,
       totalFileDuplicationRate: Number(overallMetrics.totalFileDuplicationRate) || 0,
       fileDetails: fileDetails || [],

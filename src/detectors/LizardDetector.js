@@ -48,16 +48,13 @@ class LizardDetector extends BaseDetector {
     // 按文件聚合函数数据，计算文件级指标
     const fileDetails = this.aggregateFileDetails(lizardResult.functions, sources);
 
+    // 到达此处 totalFunctions 必然大于 0（为 0 时已提前返回 getEmptyResult）
     return {
       totalFunctions,
       totalNloc,
-      averageFunctionLoc: totalFunctions > 0
-        ? parseFloat((totalNloc / totalFunctions).toFixed(2))
-        : 0,
+      averageFunctionLoc: parseFloat((totalNloc / totalFunctions).toFixed(2)),
       totalCyclomaticComplexity: totalCC,
-      averageCyclomaticComplexity: totalFunctions > 0
-        ? parseFloat((totalCC / totalFunctions).toFixed(2))
-        : 0,
+      averageCyclomaticComplexity: parseFloat((totalCC / totalFunctions).toFixed(2)),
       // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（区别于方法维度的 averageCyclomaticComplexity）
       cyclomaticComplexityPerFile: fileDetails.length > 0
         ? parseFloat((totalCC / fileDetails.length).toFixed(2))
@@ -191,12 +188,14 @@ class LizardDetector extends BaseDetector {
   }
 
   getEmptyResult() {
+    // 函数总数为 0（lizard 不支持的语言、纯配置/文本仓等）时两个均值指标不适用，
+    // 返回 null 表示无数据，避免 0 被当成真实指标展示与排序
     return {
       totalFunctions: 0,
       totalNloc: 0,
-      averageFunctionLoc: 0,
+      averageFunctionLoc: null,
       totalCyclomaticComplexity: 0,
-      averageCyclomaticComplexity: 0,
+      averageCyclomaticComplexity: null,
       cyclomaticComplexityPerFile: 0,
       fileDetails: []
     };
