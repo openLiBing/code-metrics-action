@@ -58650,7 +58650,7 @@ const fs = __nccwpck_require__(9896);
 const os = __nccwpck_require__(857);
 const { execSync, execFile, execFileSync } = __nccwpck_require__(5317);
 const { sanitize } = __nccwpck_require__(9900);
-const { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv } = __nccwpck_require__(7496);
+const { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput } = __nccwpck_require__(7496);
 const { formatCstTime, buildSummaryMarkdown } = __nccwpck_require__(3111);
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
@@ -58955,12 +58955,12 @@ async function run() {
       pipelineName: pipelineName
     });
 
-    // 设置输出
-    core.setOutput('code-scale', result.codeScale);
-    core.setOutput('avg-function-loc', result.avgFunctionLoc);
-    core.setOutput('avg-cyclomatic-complexity', result.avgCyclomaticComplexity);
-    core.setOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
-    core.setOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
+    // 设置输出（平台自适应：GitHub 走 core.setOutput，GitCode 写 ATOMGIT_OUTPUT）
+    setCiOutput('code-scale', result.codeScale);
+    setCiOutput('avg-function-loc', result.avgFunctionLoc);
+    setCiOutput('avg-cyclomatic-complexity', result.avgCyclomaticComplexity);
+    setCiOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
+    setCiOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
 
     // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥）
     // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出
@@ -59958,7 +59958,10 @@ module.exports = CoderepoUploader;
 /***/ }),
 
 /***/ 7496:
-/***/ ((module) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const fs = __nccwpck_require__(9896);
+const core = __nccwpck_require__(7484);
 
 /**
  * CI 平台上下文适配。
@@ -60035,7 +60038,32 @@ function resolveRepoUrlFromEnv() {
   return `${ciEnv('serverUrl') || 'https://github.com'}/${repository}`;
 }
 
-module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv };
+/**
+ * 平台自适应写 step output。
+ * GitCode 不识别 GitHub 的 ::set-output 协议（core.setOutput 在 GitCode 下不生效），
+ * 必须显式写 ATOMGIT_OUTPUT；GitHub 继续走 core.setOutput。
+ *
+ * @param {string} name 输出名
+ * @param {string|number} value 输出值
+ */
+function setCiOutput(name, value) {
+  if (IS_GITHUB) {
+    core.setOutput(name, value);
+    return;
+  }
+  const outputFile = process.env.ATOMGIT_OUTPUT;
+  if (!outputFile) {
+    core.warning(`ATOMGIT_OUTPUT 未设置，无法写入 step output: ${name}`);
+    return;
+  }
+  try {
+    fs.appendFileSync(outputFile, `${name}=${String(value)}\n`, 'utf8');
+  } catch (e) {
+    core.warning(`写入 step output 失败（${name}）: ${e.message}`);
+  }
+}
+
+module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput };
 
 
 /***/ }),
