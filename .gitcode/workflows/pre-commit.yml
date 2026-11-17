@@ -26,7 +26,6 @@ jobs:
         uses: checkout
         with:
           ref: ${{ atomgit.event.pull_request.merge_commit_sha || atomgit.event.pull_request.head.sha }} # 使用预合并后的 commit SHA 进行检出，确保 CI 检查的是 PR 与目标分支合并后的最终代码状态
-          allow-unsafe-pr-checkout: true # 关闭 fork PR 检出拦截，避免流水线在 fork PR 场景失败
 
       - name: setup-node
         uses: setup-node
