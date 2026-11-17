@@ -43,10 +43,9 @@ stages:
 
           - name: run pre-commit
             id: pre-commit
-            uses: openlibing/pre-commit-action@v1.0.2
+            uses: openlibing/pre-commit-action@v1.1.0
             with:
               extra_args: "--all-files"
-              gc_token: ${{ secrets.ROBOT_TOKEN }}
               report-dir: ./tmp_pre-commit-reports/
 
           - name: upload sarif reports
