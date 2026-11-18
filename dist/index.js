@@ -60071,8 +60071,10 @@ function resolveRepoUrlFromEnv() {
  * @param {string|number} value 输出值
  */
 function setCiOutput(name, value) {
+  // 无函数场景均值为 null：按 README 约定统一输出空字符串，避免 String(null) 落盘为字面量 null
+  const normalized = value === null || value === undefined ? '' : value;
   if (IS_GITHUB) {
-    core.setOutput(name, value);
+    core.setOutput(name, normalized);
     return;
   }
   const outputFile = process.env.ATOMGIT_OUTPUT;
@@ -60081,7 +60083,7 @@ function setCiOutput(name, value) {
     return;
   }
   try {
-    fs.appendFileSync(outputFile, `${name}=${String(value)}\n`, 'utf8');
+    fs.appendFileSync(outputFile, `${name}=${String(normalized)}\n`, 'utf8');
   } catch (e) {
     core.warning(`写入 step output 失败（${name}）: ${e.message}`);
   }
