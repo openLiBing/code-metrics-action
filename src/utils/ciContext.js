@@ -1,3 +1,6 @@
+const fs = require('fs');
+const core = require('@actions/core');
+
 /**
  * CI 平台上下文适配。
  * 进程启动时一次性判定平台，之后只读取该平台的变量，不跨平台混用：
@@ -73,4 +76,29 @@ function resolveRepoUrlFromEnv() {
   return `${ciEnv('serverUrl') || 'https://github.com'}/${repository}`;
 }
 
-module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv };
+/**
+ * 平台自适应写 step output。
+ * GitCode 不识别 GitHub 的 ::set-output 协议（core.setOutput 在 GitCode 下不生效），
+ * 必须显式写 ATOMGIT_OUTPUT；GitHub 继续走 core.setOutput。
+ *
+ * @param {string} name 输出名
+ * @param {string|number} value 输出值
+ */
+function setCiOutput(name, value) {
+  if (IS_GITHUB) {
+    core.setOutput(name, value);
+    return;
+  }
+  const outputFile = process.env.ATOMGIT_OUTPUT;
+  if (!outputFile) {
+    core.warning(`ATOMGIT_OUTPUT 未设置，无法写入 step output: ${name}`);
+    return;
+  }
+  try {
+    fs.appendFileSync(outputFile, `${name}=${String(value)}\n`, 'utf8');
+  } catch (e) {
+    core.warning(`写入 step output 失败（${name}）: ${e.message}`);
+  }
+}
+
+module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput };

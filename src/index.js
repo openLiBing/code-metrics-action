@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const { execSync, execFile, execFileSync } = require('child_process');
 const { sanitize } = require('./utils/sanitize');
-const { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv } = require('./utils/ciContext');
+const { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput } = require('./utils/ciContext');
 const { formatCstTime, buildSummaryMarkdown } = require('./utils/summary');
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
@@ -310,12 +310,12 @@ async function run() {
       pipelineName: pipelineName
     });
 
-    // 设置输出
-    core.setOutput('code-scale', result.codeScale);
-    core.setOutput('avg-function-loc', result.avgFunctionLoc);
-    core.setOutput('avg-cyclomatic-complexity', result.avgCyclomaticComplexity);
-    core.setOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
-    core.setOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
+    // 设置输出（平台自适应：GitHub 走 core.setOutput，GitCode 写 ATOMGIT_OUTPUT）
+    setCiOutput('code-scale', result.codeScale);
+    setCiOutput('avg-function-loc', result.avgFunctionLoc);
+    setCiOutput('avg-cyclomatic-complexity', result.avgCyclomaticComplexity);
+    setCiOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
+    setCiOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
 
     // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥）
     // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出

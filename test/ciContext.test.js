@@ -4,6 +4,9 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const MODULE_PATH = require.resolve('../src/utils/ciContext');
 
@@ -108,4 +111,37 @@ test('resolveBranchName 将游离 HEAD 与空值回落平台分支', () => {
     assert.equal(mod.resolveBranchName(null, ''), '');
     assert.equal(mod.resolveBranchName(' feature ', 'main'), 'feature');
   });
+});
+
+test('GitCode 平台把 step output 写入 ATOMGIT_OUTPUT', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-output-'));
+  const outputFile = path.join(dir, 'atomegit_output');
+  fs.writeFileSync(outputFile, '');
+  try {
+    withCiEnv({ ATOMGIT_OUTPUT: outputFile }, (mod) => {
+      assert.equal(mod.IS_GITHUB, false);
+      mod.setCiOutput('code-scale', 116109);
+      assert.match(fs.readFileSync(outputFile, 'utf8'), /^code-scale=116109$/m);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GitHub 平台仍通过 GITHUB_OUTPUT 写 step output', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-output-'));
+  const outputFile = path.join(dir, 'github_output');
+  fs.writeFileSync(outputFile, '');
+  try {
+    withCiEnv({ GITHUB_ACTIONS: 'true', GITHUB_OUTPUT: outputFile }, (mod) => {
+      assert.equal(mod.IS_GITHUB, true);
+      mod.setCiOutput('code-scale', 116109);
+      // @actions/core 使用 heredoc 格式写入（name<<delimiter），只断言名称与值存在
+      const content = fs.readFileSync(outputFile, 'utf8');
+      assert.match(content, /^code-scale<</m);
+      assert.match(content, /^116109$/m);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
