@@ -113,7 +113,7 @@ test('resolveBranchName 将游离 HEAD 与空值回落平台分支', () => {
   });
 });
 
-test('GitCode 平台把 step output 写入 ATOMGIT_OUTPUT', () => {
+test('GitCode 平台不写英文 step output（避免与中文概览重复）', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-output-'));
   const outputFile = path.join(dir, 'atomegit_output');
   fs.writeFileSync(outputFile, '');
@@ -121,25 +121,8 @@ test('GitCode 平台把 step output 写入 ATOMGIT_OUTPUT', () => {
     withCiEnv({ ATOMGIT_OUTPUT: outputFile }, (mod) => {
       assert.equal(mod.IS_GITHUB, false);
       mod.setCiOutput('code-scale', 116109);
-      assert.match(fs.readFileSync(outputFile, 'utf8'), /^code-scale=116109$/m);
-    });
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('GitCode 平台把 null/undefined 输出归一为空字符串', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-output-'));
-  const outputFile = path.join(dir, 'atomegit_output');
-  fs.writeFileSync(outputFile, '');
-  try {
-    withCiEnv({ ATOMGIT_OUTPUT: outputFile }, (mod) => {
       mod.setCiOutput('avg-function-loc', null);
-      mod.setCiOutput('avg-cyclomatic-complexity', undefined);
-      const content = fs.readFileSync(outputFile, 'utf8');
-      assert.match(content, /^avg-function-loc=$/m);
-      assert.match(content, /^avg-cyclomatic-complexity=$/m);
-      assert.doesNotMatch(content, /null/);
+      assert.equal(fs.readFileSync(outputFile, 'utf8'), '');
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

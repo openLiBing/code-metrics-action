@@ -180,6 +180,10 @@ permissions:
 
 ## 输出
 
+**action outputs（仅 GitHub Actions）**
+
+GitHub Actions 下通过 `core.setOutput` 输出以下键，可在后续步骤以 `steps.<id>.outputs.<name>` 引用。GitCode 不输出这些英文键，避免与下方中文概览行在结果面板重复展示。
+
 | 输出                        | 说明                     |
 | --------------------------- | ------------------------ |
 | code-scale                  | 代码规模（有效代码行数） |
@@ -192,7 +196,9 @@ permissions:
 
 扫描完成后，插件会将每项指标通过 `ATOMGIT_OUTPUT` 输出为独立的键值对，便于工作流页面直接查看概览（不含明细）。每项指标的标识为 中文名（英文名），按顺序排列为：代码规模（codeScale）、平均代码行数（avgFunctionLoc）、平均圈复杂度（avgCyclomaticComplexity）、总代码重复率（totalCodeDuplicationRate）、总文件重复率（totalFileDuplicationRate）。重复率指标为带 `%` 的百分数。
 
-当被测代码没有可识别的函数（lizard 不支持的语言、纯配置/文本仓等，函数总数为 0）时，「平均代码行数」与「平均圈复杂度」属于不适用指标，概览输出、运行摘要与平台分支管理页统一展示 `--`，不会输出 `0`；对应 action 输出 `avg-function-loc` / `avg-cyclomatic-complexity` 为空字符串。
+GitCode Actions 只写上述中文概览键与下方「扫描结果链接」，不再写 `code-scale` 等英文 action outputs 键。
+
+当被测代码没有可识别的函数（lizard 不支持的语言、纯配置/文本仓等，函数总数为 0）时，「平均代码行数」与「平均圈复杂度」属于不适用指标，概览输出、运行摘要与平台分支管理页统一展示 `--`，不会输出 `0`；GitHub 对应的 action 输出 `avg-function-loc` / `avg-cyclomatic-complexity` 为空字符串。
 
 | 输出标识                                   | 值     |
 | ------------------------------------------ | ------ |
