@@ -139,6 +139,7 @@ function buildSummaryMarkdown(ctx, result, options = {}) {
     [text.labels.finishedAt, ctx.finishedAt]
   ];
   // 指标值按字典顺序对应：代码规模、平均函数代码行、平均圈复杂度、总代码重复率、总文件重复率
+  // 无函数（分母为 0）时两个均值指标为 null，展示 -- 表示无数据
   const metricValues = [
     result.codeScale,
     result.avgFunctionLoc,
@@ -146,11 +147,11 @@ function buildSummaryMarkdown(ctx, result, options = {}) {
     result.totalCodeDuplicationRate,
     result.totalFileDuplicationRate
   ];
-  const metricRows = text.metrics.map((metric, index) => [
-    metric.name,
-    `${metricValues[index]}${metric.unit}`,
-    metric.desc
-  ]);
+  const metricRows = text.metrics.map((metric, index) => {
+    const value = metricValues[index];
+    const display = value === null || value === undefined ? '--' : value;
+    return [metric.name, `${display}${metric.unit}`, metric.desc];
+  });
 
   const lines = [
     text.title,

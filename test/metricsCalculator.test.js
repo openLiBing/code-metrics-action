@@ -59,6 +59,20 @@ test('mergeResults 合并总体指标并保留明细数组', () => {
   assert.deepEqual(result.duplicationOccurrences, [{ groupId: 'g' }]);
 });
 
+test('mergeFileDetails 无函数文件的两个均值指标保持 null', () => {
+  const merged = MetricsCalculator.mergeFileDetails(
+    [{ filePath: 'readme.yaml', language: 'YAML', loc: 10, commentLines: 0 }],
+    [],
+    [{ filePath: 'config.json', totalLines: 5, duplicationRate: 0, duplicationLineCount: 0 }]
+  );
+
+  for (const detail of merged) {
+    assert.equal(detail.functionCount, 0);
+    assert.equal(detail.avgFunctionLoc, null);
+    assert.equal(detail.avgCyclomaticComplexity, null);
+  }
+});
+
 test('validate 校验 5 项必需指标', () => {
   const metrics = {
     codeScale: 1,
@@ -69,6 +83,28 @@ test('validate 校验 5 项必需指标', () => {
   };
   assert.equal(MetricsCalculator.validate(metrics), true);
   assert.throws(() => MetricsCalculator.validate({}), /Missing required metric/);
+});
+
+test('validate 允许无函数时两个均值指标为 null，但键缺失仍报错', () => {
+  const metrics = {
+    codeScale: 1,
+    averageFunctionLoc: null,
+    averageCyclomaticComplexity: null,
+    totalCodeDuplicationRate: 0,
+    totalFileDuplicationRate: 0
+  };
+  assert.equal(MetricsCalculator.validate(metrics), true);
+
+  // 键缺失（探测器未执行）仍按配置错误拦截
+  assert.throws(
+    () =>
+      MetricsCalculator.validate({
+        codeScale: 1,
+        totalCodeDuplicationRate: 0,
+        totalFileDuplicationRate: 0
+      }),
+    /Missing required metric: averageFunctionLoc/
+  );
 });
 
 test('formatForReport 归一化数值并映射平台字段', () => {
@@ -103,9 +139,12 @@ test('formatForReport 归一化数值并映射平台字段', () => {
   assert.deepEqual(formatted.duplicationOccurrences, []);
 });
 
-test('formatForReport 缺失字段回退为 0/空数组', () => {
+test('formatForReport 缺失字段回退为 0/空数组，均值指标回退为 null', () => {
   const formatted = MetricsCalculator.formatForReport({});
   assert.equal(formatted.codeScale, 0);
   assert.equal(formatted.codeLineTotal, 0);
+  // 分母为 0 时均值指标无数据，不能回退为 0
+  assert.equal(formatted.avgFunctionLoc, null);
+  assert.equal(formatted.avgCyclomaticComplexity, null);
   assert.deepEqual(formatted.fileDetails, []);
 });

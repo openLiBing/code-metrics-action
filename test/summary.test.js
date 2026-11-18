@@ -66,6 +66,29 @@ test('buildSummaryMarkdown 无流水线 ID 时展示占位并转义提示文本'
   assert.match(md, /> no\\\|link line2/);
 });
 
+test('buildSummaryMarkdown 无函数时均值指标展示 -- 而不是 null', () => {
+  const md = buildSummaryMarkdown(
+    {
+      gitUrl: 'https://gitcode.com/openlibing/code-metrics-action.git',
+      branchName: 'master',
+      commitId: '',
+      pipelineRunId: '',
+      runNumber: '',
+      finishedAt: '2026-11-10 08:00:00 (UTC+8)'
+    },
+    {
+      codeScale: 100,
+      avgFunctionLoc: null,
+      avgCyclomaticComplexity: null,
+      totalCodeDuplicationRate: 0,
+      totalFileDuplicationRate: 0
+    }
+  );
+  assert.match(md, /\| 平均函数代码行 \| -- 行 \|/);
+  assert.match(md, /\| 平均圈复杂度 \| -- \|/);
+  assert.doesNotMatch(md, /null/);
+});
+
 test('buildSummaryMarkdown 编码破坏链接结构的字符，非法协议降级为提示文本', () => {
   const result = {
     codeScale: 1,

@@ -93,10 +93,11 @@ test('parseTextOutput 解析 lizard 文本输出', () => {
   }
 });
 
-test('getEmptyResult 返回全零指标', () => {
+test('getEmptyResult 函数总数为 0 时两个均值指标为 null', () => {
   const result = new LizardDetector().getEmptyResult();
   assert.equal(result.totalFunctions, 0);
-  assert.equal(result.averageFunctionLoc, 0);
-  assert.equal(result.averageCyclomaticComplexity, 0);
+  // 分母为 0 时均值指标不适用，必须为 null，不能是 0
+  assert.equal(result.averageFunctionLoc, null);
+  assert.equal(result.averageCyclomaticComplexity, null);
   assert.deepEqual(result.fileDetails, []);
 });

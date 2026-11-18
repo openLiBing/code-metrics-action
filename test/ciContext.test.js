@@ -128,6 +128,40 @@ test('GitCode 平台把 step output 写入 ATOMGIT_OUTPUT', () => {
   }
 });
 
+test('GitCode 平台把 null/undefined 输出归一为空字符串', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-output-'));
+  const outputFile = path.join(dir, 'atomegit_output');
+  fs.writeFileSync(outputFile, '');
+  try {
+    withCiEnv({ ATOMGIT_OUTPUT: outputFile }, (mod) => {
+      mod.setCiOutput('avg-function-loc', null);
+      mod.setCiOutput('avg-cyclomatic-complexity', undefined);
+      const content = fs.readFileSync(outputFile, 'utf8');
+      assert.match(content, /^avg-function-loc=$/m);
+      assert.match(content, /^avg-cyclomatic-complexity=$/m);
+      assert.doesNotMatch(content, /null/);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GitHub 平台把 null 输出归一为空字符串', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-output-'));
+  const outputFile = path.join(dir, 'github_output');
+  fs.writeFileSync(outputFile, '');
+  try {
+    withCiEnv({ GITHUB_ACTIONS: 'true', GITHUB_OUTPUT: outputFile }, (mod) => {
+      mod.setCiOutput('avg-function-loc', null);
+      const content = fs.readFileSync(outputFile, 'utf8');
+      assert.match(content, /^avg-function-loc<</m);
+      assert.doesNotMatch(content, /null/);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('GitHub 平台仍通过 GITHUB_OUTPUT 写 step output', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-output-'));
   const outputFile = path.join(dir, 'github_output');

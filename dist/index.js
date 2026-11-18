@@ -56550,8 +56550,9 @@ class MetricsCalculator {
         loc: detail.loc || 0,
         commentLines: detail.commentLines || 0,
         functionCount: 0,
-        avgFunctionLoc: 0,
-        avgCyclomaticComplexity: 0,
+        // 无函数文件两个均值指标不适用，保持 null（0 会被误读为函数代码行很短/复杂度很低）
+        avgFunctionLoc: null,
+        avgCyclomaticComplexity: null,
         functionDetails: [],
         duplicationRate: 0,
         duplicationLineCount: 0,
@@ -56564,8 +56565,8 @@ class MetricsCalculator {
       const existing = fileMap.get(detail.filePath);
       if (existing) {
         existing.functionCount = detail.functionCount || 0;
-        existing.avgFunctionLoc = detail.avgFunctionLoc || 0;
-        existing.avgCyclomaticComplexity = detail.avgCyclomaticComplexity || 0;
+        existing.avgFunctionLoc = detail.avgFunctionLoc ?? null;
+        existing.avgCyclomaticComplexity = detail.avgCyclomaticComplexity ?? null;
         existing.functionDetails = detail.functionDetails || [];
       } else {
         fileMap.set(detail.filePath, {
@@ -56574,8 +56575,8 @@ class MetricsCalculator {
           loc: 0,
           commentLines: 0,
           functionCount: detail.functionCount || 0,
-          avgFunctionLoc: detail.avgFunctionLoc || 0,
-          avgCyclomaticComplexity: detail.avgCyclomaticComplexity || 0,
+          avgFunctionLoc: detail.avgFunctionLoc ?? null,
+          avgCyclomaticComplexity: detail.avgCyclomaticComplexity ?? null,
           functionDetails: detail.functionDetails || [],
           duplicationRate: 0,
           duplicationLineCount: 0,
@@ -56603,8 +56604,8 @@ class MetricsCalculator {
           loc: detail.totalLines || 0,
           commentLines: 0,
           functionCount: 0,
-          avgFunctionLoc: 0,
-          avgCyclomaticComplexity: 0,
+          avgFunctionLoc: null,
+          avgCyclomaticComplexity: null,
           functionDetails: [],
           duplicationRate: detail.duplicationRate || 0,
           duplicationLineCount: detail.duplicationLineCount || 0,
@@ -56618,21 +56619,41 @@ class MetricsCalculator {
   }
 
   static validate(metrics) {
+    // 4 项全局指标必须有数值
     const required = [
       'codeScale',
-      'averageFunctionLoc',
-      'averageCyclomaticComplexity',
       'totalCodeDuplicationRate',
       'totalFileDuplicationRate'
     ];
-
     for (const key of required) {
       if (metrics[key] === undefined || metrics[key] === null) {
         throw new Error(`Missing required metric: ${key}`);
       }
     }
+    // 两个函数均值在函数总数为 0 时允许为 null（无数据），但键必须存在，
+    // 以区分"探测器未执行/未配置"与"无函数"
+    const nullableRequired = ['averageFunctionLoc', 'averageCyclomaticComplexity'];
+    for (const key of nullableRequired) {
+      if (metrics[key] === undefined) {
+        throw new Error(`Missing required metric: ${key}`);
+      }
+    }
 
     return true;
+  }
+
+  /**
+   * 数值指标归一化：缺失或非法值返回 null（无数据），避免 0 被当作真实指标上报
+   *
+   * @param {*} value 原始值
+   * @returns {number|null} 数值或 null
+   */
+  static toOptionalNumber(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    const num = Number(value);
+    return Number.isNaN(num) ? null : num;
   }
 
   static formatForReport(metrics) {
@@ -56656,8 +56677,10 @@ class MetricsCalculator {
       duplicatedBlocks: Number(overallMetrics.duplicatedBlocks) || 0,
       // 重复代码行数量：Σ 每文件重复行数（totalCodeDuplicationRate 的分子）
       duplicatedLines: Number(overallMetrics.duplicatedLines) || 0,
-      avgFunctionLoc: Number(overallMetrics.averageFunctionLoc) || 0,
-      avgCyclomaticComplexity: Number(overallMetrics.averageCyclomaticComplexity) || 0,
+      // 平均函数代码行/平均圈复杂度：分母（函数总数）为 0 时无数据，保持 null 上报，
+      // 不能兜底为 0（0 会被前端当作真实指标展示与排序）
+      avgFunctionLoc: MetricsCalculator.toOptionalNumber(overallMetrics.averageFunctionLoc),
+      avgCyclomaticComplexity: MetricsCalculator.toOptionalNumber(overallMetrics.averageCyclomaticComplexity),
       totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,
       totalFileDuplicationRate: Number(overallMetrics.totalFileDuplicationRate) || 0,
       fileDetails: fileDetails || [],
@@ -57952,16 +57975,13 @@ class LizardDetector extends BaseDetector {
     // 按文件聚合函数数据，计算文件级指标
     const fileDetails = this.aggregateFileDetails(lizardResult.functions, sources);
 
+    // 到达此处 totalFunctions 必然大于 0（为 0 时已提前返回 getEmptyResult）
     return {
       totalFunctions,
       totalNloc,
-      averageFunctionLoc: totalFunctions > 0
-        ? parseFloat((totalNloc / totalFunctions).toFixed(2))
-        : 0,
+      averageFunctionLoc: parseFloat((totalNloc / totalFunctions).toFixed(2)),
       totalCyclomaticComplexity: totalCC,
-      averageCyclomaticComplexity: totalFunctions > 0
-        ? parseFloat((totalCC / totalFunctions).toFixed(2))
-        : 0,
+      averageCyclomaticComplexity: parseFloat((totalCC / totalFunctions).toFixed(2)),
       // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（区别于方法维度的 averageCyclomaticComplexity）
       cyclomaticComplexityPerFile: fileDetails.length > 0
         ? parseFloat((totalCC / fileDetails.length).toFixed(2))
@@ -58095,12 +58115,14 @@ class LizardDetector extends BaseDetector {
   }
 
   getEmptyResult() {
+    // 函数总数为 0（lizard 不支持的语言、纯配置/文本仓等）时两个均值指标不适用，
+    // 返回 null 表示无数据，避免 0 被当成真实指标展示与排序
     return {
       totalFunctions: 0,
       totalNloc: 0,
-      averageFunctionLoc: 0,
+      averageFunctionLoc: null,
       totalCyclomaticComplexity: 0,
-      averageCyclomaticComplexity: 0,
+      averageCyclomaticComplexity: null,
       cyclomaticComplexityPerFile: 0,
       fileDetails: []
     };
@@ -58977,10 +58999,12 @@ async function run() {
     }
 
     // GitCode 输出面板：保持原有键值对输出（概览 + 详情链接），供流水线结果面板展示
+    // 无函数（分母为 0）时两个均值指标为 null，统一展示 -- 而不是 null
+    const displayValue = (value) => (value === null || value === undefined ? '--' : String(value));
     const overviewDisplay = [
       ['codeScale', '代码规模（codeScale）', String(result.codeScale)],
-      ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', String(result.avgFunctionLoc)],
-      ['avgCyclomaticComplexity', '平均圈复杂度（avgCyclomaticComplexity）', String(result.avgCyclomaticComplexity)],
+      ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', displayValue(result.avgFunctionLoc)],
+      ['avgCyclomaticComplexity', '平均圈复杂度（avgCyclomaticComplexity）', displayValue(result.avgCyclomaticComplexity)],
       ['totalCodeDuplicationRate', '总代码重复率（totalCodeDuplicationRate）', `${result.totalCodeDuplicationRate}%`],
       ['totalFileDuplicationRate', '总文件重复率（totalFileDuplicationRate）', `${result.totalFileDuplicationRate}%`]
     ];
@@ -59014,8 +59038,8 @@ async function run() {
 
     core.info('Code metrics scan completed successfully');
     core.info(`Code scale: ${result.codeScale}`);
-    core.info(`Avg function LOC: ${result.avgFunctionLoc}`);
-    core.info(`Avg cyclomatic complexity: ${result.avgCyclomaticComplexity}`);
+    core.info(`Avg function LOC: ${displayValue(result.avgFunctionLoc)}`);
+    core.info(`Avg cyclomatic complexity: ${displayValue(result.avgCyclomaticComplexity)}`);
     core.info(`Code duplication rate: ${result.totalCodeDuplicationRate}%`);
     core.info(`File duplication rate: ${result.totalFileDuplicationRate}%`);
 
@@ -60047,8 +60071,10 @@ function resolveRepoUrlFromEnv() {
  * @param {string|number} value 输出值
  */
 function setCiOutput(name, value) {
+  // 无函数场景均值为 null：按 README 约定统一输出空字符串，避免 String(null) 落盘为字面量 null
+  const normalized = value === null || value === undefined ? '' : value;
   if (IS_GITHUB) {
-    core.setOutput(name, value);
+    core.setOutput(name, normalized);
     return;
   }
   const outputFile = process.env.ATOMGIT_OUTPUT;
@@ -60057,7 +60083,7 @@ function setCiOutput(name, value) {
     return;
   }
   try {
-    fs.appendFileSync(outputFile, `${name}=${String(value)}\n`, 'utf8');
+    fs.appendFileSync(outputFile, `${name}=${String(normalized)}\n`, 'utf8');
   } catch (e) {
     core.warning(`写入 step output 失败（${name}）: ${e.message}`);
   }
@@ -60657,6 +60683,7 @@ function buildSummaryMarkdown(ctx, result, options = {}) {
     [text.labels.finishedAt, ctx.finishedAt]
   ];
   // 指标值按字典顺序对应：代码规模、平均函数代码行、平均圈复杂度、总代码重复率、总文件重复率
+  // 无函数（分母为 0）时两个均值指标为 null，展示 -- 表示无数据
   const metricValues = [
     result.codeScale,
     result.avgFunctionLoc,
@@ -60664,11 +60691,11 @@ function buildSummaryMarkdown(ctx, result, options = {}) {
     result.totalCodeDuplicationRate,
     result.totalFileDuplicationRate
   ];
-  const metricRows = text.metrics.map((metric, index) => [
-    metric.name,
-    `${metricValues[index]}${metric.unit}`,
-    metric.desc
-  ]);
+  const metricRows = text.metrics.map((metric, index) => {
+    const value = metricValues[index];
+    const display = value === null || value === undefined ? '--' : value;
+    return [metric.name, `${display}${metric.unit}`, metric.desc];
+  });
 
   const lines = [
     text.title,
