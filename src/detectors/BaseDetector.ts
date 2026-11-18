@@ -1,9 +1,11 @@
 class BaseDetector {
-  constructor(config = {}) {
+  config: any;
+
+  constructor(config: any = {}) {
     this.config = config;
   }
 
-  async detect(sourceDir) {
+  async detect(sourceDir: any) {
     throw new Error('Method detect() must be implemented');
   }
 
@@ -13,3 +15,5 @@ class BaseDetector {
 }
 
 module.exports = BaseDetector;
+
+export {};

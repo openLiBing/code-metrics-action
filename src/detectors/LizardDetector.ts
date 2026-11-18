@@ -6,19 +6,22 @@ const BaseDetector = require('./BaseDetector');
 const FileCollector = require('../utils/fileCollector');
 
 class LizardDetector extends BaseDetector {
-  constructor(config = {}) {
+  tempJsonFile: string;
+  allowedExtensions: string[];
+
+  constructor(config: any = {}) {
     super(config);
     this.tempJsonFile = './lizard_output.json';
     this.allowedExtensions = config.allowedExtensions || [];
   }
 
-  async detect(source) {
+  async detect(source: any) {
     // 支持单个路径或多个路径
     const sources = Array.isArray(source) ? source : [source];
     const excludeDirs = this.config.excludeDirs || [];
 
     // 收集所有文件
-    const allFiles = [];
+    const allFiles: any[] = [];
     for (const src of sources) {
       const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
       allFiles.push(...files);
@@ -32,7 +35,7 @@ class LizardDetector extends BaseDetector {
     }
 
     // Lizard 处理所有文件，统一获取函数数、函数代码行数和圈复杂度
-    let lizardResult = { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+    let lizardResult: any = { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
     if (uniqueFiles.length > 0) {
       lizardResult = this.runLizard(uniqueFiles);
     }
@@ -64,13 +67,13 @@ class LizardDetector extends BaseDetector {
   }
 
   // 将文件列表写入临时文件，供 lizard 的 -f 参数读取
-  writeInputFile(files) {
+  writeInputFile(files: any) {
     const tempInputPath = path.join(os.tmpdir(), `lizard_input_${Date.now()}.txt`);
     fs.writeFileSync(tempInputPath, files.join('\n'), 'utf8');
     return tempInputPath;
   }
 
-  runLizard(files) {
+  runLizard(files: any) {
     const tempJsonPath = path.resolve(this.tempJsonFile);
     let tempInputPath = null;
 
@@ -112,7 +115,7 @@ class LizardDetector extends BaseDetector {
       } else {
         return this.parseTextOutput(content);
       }
-    } catch (error) {
+    } catch (error: any) {
       if (tempInputPath && fs.existsSync(tempInputPath)) {
         fs.unlinkSync(tempInputPath);
         tempInputPath = null;
@@ -128,7 +131,7 @@ class LizardDetector extends BaseDetector {
               return this.parseTextOutput(content);
             }
           }
-        } catch (parseError) {
+        } catch (parseError: any) {
           console.warn(`Failed to parse lizard output: ${parseError.message}`);
         }
       }
@@ -137,11 +140,11 @@ class LizardDetector extends BaseDetector {
     }
   }
 
-  parseTextOutput(content) {
+  parseTextOutput(content: any) {
     let totalFunctions = 0;
     let totalNloc = 0;
     let totalCC = 0;
-    const functions = [];
+    const functions: any[] = [];
 
     const lines = content.split('\n');
     for (const line of lines) {
@@ -165,7 +168,7 @@ class LizardDetector extends BaseDetector {
           const fileContent = fs.readFileSync(filePath, 'utf8');
           const defLines = this.countDefinitionLines(fileContent, startLine);
           bodyNloc = this.calculateBodyNloc(fileContent, startLine, endLine, defLines);
-        } catch (e) {
+        } catch (e: any) {
           // 读取源文件失败时，回退到 nloc - 1
           bodyNloc = Math.max(0, bodyNloc - 1);
         }
@@ -202,7 +205,7 @@ class LizardDetector extends BaseDetector {
   }
 
   // 根据源文件内容，计算函数定义占用的行数
-  countDefinitionLines(fileContent, startLine) {
+  countDefinitionLines(fileContent: any, startLine: any) {
     const lines = fileContent.split('\n');
     const startIndex = startLine - 1;
     if (startIndex < 0 || startIndex >= lines.length) return 1;
@@ -224,7 +227,7 @@ class LizardDetector extends BaseDetector {
   }
 
   // 判断一行是否为有效代码行（非空行、非纯注释行）
-  static isSourceLine(line) {
+  static isSourceLine(line: any) {
     const trimmed = line.trim();
     if (trimmed.length === 0) return false;
     if (trimmed.startsWith('#')) return false;
@@ -234,7 +237,7 @@ class LizardDetector extends BaseDetector {
   }
 
   // 从源文件中精确计算函数体的有效代码行数（排除定义行）
-  calculateBodyNloc(fileContent, startLine, endLine, defLines) {
+  calculateBodyNloc(fileContent: any, startLine: any, endLine: any, defLines: any) {
     const lines = fileContent.split('\n');
     let bodyNloc = 0;
 
@@ -250,11 +253,11 @@ class LizardDetector extends BaseDetector {
     return bodyNloc;
   }
 
-  calculateMetricsFromLizard(results) {
+  calculateMetricsFromLizard(results: any) {
     let totalFunctions = 0;
     let totalNloc = 0;
     let totalCC = 0;
-    const functions = [];
+    const functions: any[] = [];
 
     if (results && results.functions) {
       for (const func of results.functions) {
@@ -268,7 +271,7 @@ class LizardDetector extends BaseDetector {
             const fileContent = fs.readFileSync(func.filename, 'utf8');
             const defLines = this.countDefinitionLines(fileContent, func.start_line);
             bodyNloc = this.calculateBodyNloc(fileContent, func.start_line, func.end_line, defLines);
-          } catch (e) {
+          } catch (e: any) {
             bodyNloc = Math.max(0, (func.nloc || 0) - 1);
           }
         } else {
@@ -291,7 +294,7 @@ class LizardDetector extends BaseDetector {
   }
 
   // 按文件聚合函数数据，保留每个函数的明细（函数名、行数、开始行、结束行）
-  aggregateFileDetails(functions, sources) {
+  aggregateFileDetails(functions: any, sources: any) {
     if (!functions || functions.length === 0) return [];
 
     // 按文件名分组
@@ -305,11 +308,11 @@ class LizardDetector extends BaseDetector {
       fileMap.get(filename).push(func);
     }
 
-    const fileDetails = [];
+    const fileDetails: any[] = [];
     for (const [filename, funcs] of fileMap) {
       const functionCount = funcs.length;
-      const totalNloc = funcs.reduce((sum, f) => sum + (f.nloc || 0), 0);
-      const totalCC = funcs.reduce((sum, f) => sum + (f.cc || 0), 0);
+      const totalNloc = funcs.reduce((sum: any, f: any) => sum + (f.nloc || 0), 0);
+      const totalCC = funcs.reduce((sum: any, f: any) => sum + (f.cc || 0), 0);
 
       // 将绝对路径转为相对路径
       let filePath = filename;
@@ -326,7 +329,7 @@ class LizardDetector extends BaseDetector {
       filePath = filePath.replace(/\\/g, '/');
 
       // 保留每个函数的明细信息
-      const functionDetails = funcs.map(f => ({
+      const functionDetails = funcs.map((f: any) => ({
         functionName: f.name || '',
         functionLoc: f.nloc || 0,
         startLine: f.startLine || 0,
@@ -351,3 +354,5 @@ class LizardDetector extends BaseDetector {
 }
 
 module.exports = LizardDetector;
+
+export {};

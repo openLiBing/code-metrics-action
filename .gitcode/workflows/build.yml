@@ -37,6 +37,10 @@ jobs:
       - name: lint
         run: npm run lint
 
+      # TypeScript strict 类型检查：与 ncc 构建解耦，类型错误直接判红
+      - name: type check
+        run: npm run typecheck
+
       - name: build
         run: npm run build
 

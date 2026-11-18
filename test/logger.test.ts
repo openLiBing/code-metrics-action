@@ -27,3 +27,5 @@ test('Logger 将 info/warn/error/debug 转发到 @actions/core', () => {
     jestGlobals.restoreAllMocks();
   }
 });
+
+export {};

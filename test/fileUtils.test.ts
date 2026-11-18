@@ -54,3 +54,5 @@ test('isDirectoryExcluded 支持目录名与路径片段匹配', () => {
   expect(FileUtils.isDirectoryExcluded('/repo/src/target', ['target'])).toBe(true);
   expect(FileUtils.isDirectoryExcluded('/repo/src', ['target'])).toBe(false);
 });
+
+export {};

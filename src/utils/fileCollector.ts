@@ -49,7 +49,7 @@ class FileCollector {
    * @param {string} dirName 目录名（不含路径）
    * @return {boolean} 命中默认跳过名单返回 true，否则返回 false
    */
-  static isDefaultExcludedDir(dirName) {
+  static isDefaultExcludedDir(dirName: any) {
     return FileCollector.DEFAULT_EXCLUDED_DIRS.includes(String(dirName || '').toLowerCase());
   }
 
@@ -59,12 +59,12 @@ class FileCollector {
    * 扫描范围 = 用户指定的扩展名 + 文件名特例（如指定 .h,.cpp 则只扫这两类 + CMakeLists.txt 等），
    * 不再叠加缺省白名单。
    */
-  static isAllowedFile(fileName, allowedExtensions) {
+  static isAllowedFile(fileName: any, allowedExtensions: any) {
     const lower = (fileName || '').toLowerCase();
     if (FileCollector.SPECIAL_FILE_NAMES.includes(lower)) {
       return true;
     }
-    const normalized = (allowedExtensions || []).map(e => String(e).toLowerCase());
+    const normalized = (allowedExtensions || []).map((e: any) => String(e).toLowerCase());
     const list = normalized.length > 0 ? normalized : FileCollector.DEFAULT_CODE_EXTENSIONS;
     const ext = path.extname(lower);
     return list.includes(ext);
@@ -82,7 +82,7 @@ class FileCollector {
    * 通配符：*（单段不含 /）、**（跨目录）、?（单字符）、[abc]/[!abc]（字符类）。
    * 目录与文件统一适用同一条规则，不按类型区分。
    */
-  static isExcluded(name, relPath, excludeDirs) {
+  static isExcluded(name: any, relPath: any, excludeDirs: any) {
     if (!excludeDirs || excludeDirs.length === 0) {
       return false;
     }
@@ -130,7 +130,7 @@ class FileCollector {
    *   - cpp/part_dup1.cpp：自身命中 cpp/** → 排除
    *   - src/go/x.go：go 非顶层，不命中 go/ → 保留
    */
-  static isPathExcluded(relPath, excludeDirs) {
+  static isPathExcluded(relPath: any, excludeDirs: any) {
     const p = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
     if (!p) return false;
     const parts = p.split('/');
@@ -147,7 +147,7 @@ class FileCollector {
   /**
    * 记录并跳过非法/超限 glob 规则（同一规则只告警一次，避免遍历中刷屏）
    */
-  static _warnInvalidGlob(pattern, reason) {
+  static _warnInvalidGlob(pattern: any, reason: any) {
     if (FileCollector._warnedGlobs.has(pattern)) {
       return;
     }
@@ -159,7 +159,7 @@ class FileCollector {
   // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
   // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
   // 非法或超限模式返回 null，由调用方跳过，避免中断整个扫描。
-  static globToRegExp(glob) {
+  static globToRegExp(glob: any) {
     const pattern = String(glob || '');
     // 长度与 globstar 层数上限：兜底超长/深度嵌套模式的正则回溯风险
     if (pattern.length > FileCollector.MAX_GLOB_PATTERN_LENGTH
@@ -220,7 +220,7 @@ class FileCollector {
     }
     try {
       return new RegExp(re + '$');
-    } catch (error) {
+    } catch (error: any) {
       // 字符类内容按 glob 语义原样拼接，非法区间（如 [z-a]）在此兜底
       FileCollector._warnInvalidGlob(pattern, error.message);
       return null;
@@ -234,8 +234,8 @@ class FileCollector {
    * @param {string[]} allowedExtensions - 允许的文件扩展名列表（配置后完全覆盖缺省白名单）
    * @returns {string[]} 文件路径列表
    */
-  static collectFiles(source, excludeDirs = [], allowedExtensions = []) {
-    const files = [];
+  static collectFiles(source: any, excludeDirs: any = [], allowedExtensions: any = []) {
+    const files: any[] = [];
 
     // 支持传入单个路径或路径数组
     const sources = Array.isArray(source) ? source : [source];
@@ -276,11 +276,11 @@ class FileCollector {
 
   // 递归遍历目录，根据排除规则和扩展名过滤文件。
   // relPrefix：当前目录相对扫描根的路径（用于路径式排除匹配），根目录本身为 ''
-  static _walkDir(dir, relPrefix, excludeDirs, allowedExtensions, files) {
+  static _walkDir(dir: any, relPrefix: any, excludeDirs: any, allowedExtensions: any, files: any) {
     let entries;
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch (error) {
+    } catch (error: any) {
       return;
     }
 
@@ -313,3 +313,5 @@ class FileCollector {
 }
 
 module.exports = FileCollector;
+
+export {};

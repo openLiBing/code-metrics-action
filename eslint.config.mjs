@@ -18,8 +18,6 @@ export default [
       sourceType: "commonjs",
       globals: {
         ...globals.node,
-        // ncc 注入的运行时全局：源码以 typeof 探测，仅 bundle 形态下存在
-        __nccwpck_require__: "readonly",
       },
     },
     rules: {
@@ -33,6 +31,31 @@ export default [
       "no-redeclare": ["error", { builtinGlobals: false }],
       "no-console": "off",
       "no-undef": "error",
+    },
+  },
+  {
+    // TypeScript 源码：类型检查由 tsc --noEmit 负责，ESLint 只保留风格与潜在缺陷规则
+    files: ["**/*.ts"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "commonjs",
+      globals: {
+        ...globals.node,
+        // ncc 注入的运行时全局：源码以 typeof 探测，仅 bundle 形态下存在
+        __nccwpck_require__: "readonly",
+      },
+    },
+    rules: {
+      "no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": "warn",
+      // 迁移期允许显式 any 标注外部输入/第三方无类型模块边界
+      "@typescript-eslint/no-explicit-any": "off",
+      // 本仓为 CommonJS，require() 是标准写法
+      "@typescript-eslint/no-require-imports": "off",
+      eqeqeq: ["error", "always", { null: "ignore" }],
+      "no-redeclare": ["error", { builtinGlobals: false }],
+      "no-console": "off",
+      "no-undef": "off",
     },
   },
 ];

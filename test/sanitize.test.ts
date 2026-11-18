@@ -15,3 +15,5 @@ test('sanitize 折叠控制字符、压缩空白并截断超长输出，非字�
   expect(truncated.length).toBe(2048 + '...(truncated)'.length);
   expect(truncated.endsWith('...(truncated)')).toBe(true);
 });
+
+export {};

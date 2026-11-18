@@ -34,7 +34,7 @@ test('buildSourceLineMap 剔除行注释、块注释与空行', () => {
   expect(result.lineMap.get(3)).toBe(false);
   expect(result.lineMap.get(4)).toBe(false);
   expect(result.lineMap.get(5)).toBe(true);
-  expect(result.sourceLines.map((l) => l.lineNum)).toEqual([1, 5]);
+  expect(result.sourceLines.map((l: any) => l.lineNum)).toEqual([1, 5]);
 });
 
 test('buildSourceLineMap 区分 Python docstring（注释）与行中三引号字符串（代码）', () => {
@@ -51,7 +51,7 @@ test('buildSourceLineMap 区分 Python docstring（注释）与行中三引号�
 
   // docstring 整体不计入；行中三引号字符串整块计入代码行
   expect(result.sourceCount).toBe(3);
-  expect(result.sourceLines.map((l) => l.lineNum)).toEqual([4, 5, 6]);
+  expect(result.sourceLines.map((l: any) => l.lineNum)).toEqual([4, 5, 6]);
 });
 
 test('buildSourceLineMap 支持 CMake 方括号块注释且预处理行计入代码', () => {
@@ -118,7 +118,7 @@ test('calculateIdenticalFileDetails 每组只输出一条记录', () => {
 
 test('buildContextSegments 生成 ±上下文快照并 Base64 编码', () => {
   const detector = new DuplicationDetector();
-  const content = Array.from({ length: 10 }, (_, i) => `line${i + 1}`).join('\n');
+  const content = Array.from({ length: 10 }, (_: any, i: any) => `line${i + 1}`).join('\n');
   const fileDetails = [{ filePath: 'a.js', duplicationLineCount: 2 }];
   const occurrences = [{ filePath: 'a.js', startLine: 4, endLine: 5 }];
 
@@ -155,7 +155,7 @@ test('isBinaryFile 通过 NUL 字节嗅探识别二进制文件', () => {
 test('detectWithLineLevel 标记跨文件重复的源代码行', () => {
   const detector = new DuplicationDetector({ minLines: 3 });
   const makeSourceLines = () =>
-    Array.from({ length: 12 }, (_, i) => ({ lineNum: i + 1, text: `code_${i + 1};` }));
+    Array.from({ length: 12 }, (_: any, i: any) => ({ lineNum: i + 1, text: `code_${i + 1};` }));
   const fileSourceLineMaps = new Map([
     ['/repo/a.js', { lineMap: new Map(), sourceCount: 12, sourceLines: makeSourceLines() }],
     ['/repo/b.js', { lineMap: new Map(), sourceCount: 12, sourceLines: makeSourceLines() }]
@@ -176,3 +176,5 @@ test('getEmptyResult 返回全零指标', () => {
   expect(result.fileDetails).toEqual([]);
   expect(result.duplicationOccurrences).toEqual([]);
 });
+
+export {};

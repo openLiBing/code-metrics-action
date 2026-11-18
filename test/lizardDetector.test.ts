@@ -49,7 +49,7 @@ test('aggregateFileDetails 按文件聚合函数数与平均指标', () => {
   expect(details[0].functionCount).toBe(2);
   expect(details[0].avgFunctionLoc).toBe(5);
   expect(details[0].avgCyclomaticComplexity).toBe(3);
-  expect(details[0].functionDetails.map((f) => f.functionName)).toEqual(['a', 'b']);
+  expect(details[0].functionDetails.map((f: any) => f.functionName)).toEqual(['a', 'b']);
 });
 
 test('calculateMetricsFromLizard 从 lizard JSON 计算函数体有效行', () => {
@@ -100,3 +100,5 @@ test('getEmptyResult 函数总数为 0 时两个均值指标为 null', () => {
   expect(result.averageCyclomaticComplexity).toBeNull();
   expect(result.fileDetails).toEqual([]);
 });
+
+export {};

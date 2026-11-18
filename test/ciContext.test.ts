@@ -16,8 +16,8 @@ const MODULE_PATH = require.resolve('../src/utils/ciContext');
  * @param {Object} env 本次用例注入的 CI 环境变量
  * @param {Function} fn 断言回调，入参为刚加载的模块
  */
-function withCiEnv(env, fn) {
-  const saved = {};
+function withCiEnv(env: any, fn: any) {
+  const saved: Record<string, string | undefined> = {};
   for (const key of Object.keys(process.env)) {
     if (key.startsWith('GITHUB_') || key.startsWith('ATOMGIT_')) {
       saved[key] = process.env[key];
@@ -54,7 +54,7 @@ test('GitHub 平台读取 GITHUB_* 上下文并拼接仓库地址', () => {
       GITHUB_REPOSITORY: 'openlibing/code-metrics-action',
       GITHUB_SERVER_URL: 'https://github.com'
     },
-    (mod) => {
+    (mod: any) => {
       expect(mod.IS_GITHUB).toBe(true);
       expect(mod.ciEnv('eventName')).toBe('push');
       expect(mod.ciEnv('refName')).toBe('main');
@@ -75,7 +75,7 @@ test('GitCode 平台读取 ATOMGIT_* 上下文且无仓库地址兜底', () => {
       ATOMGIT_REF_NAME: 'feature',
       ATOMGIT_RUN_ID: '9'
     },
-    (mod) => {
+    (mod: any) => {
       expect(mod.IS_GITHUB).toBe(false);
       expect(mod.ciEnv('baseRef')).toBe('release_20261116_iter1');
       expect(mod.ciEnv('runId')).toBe('9');
@@ -87,11 +87,11 @@ test('GitCode 平台读取 ATOMGIT_* 上下文且无仓库地址兜底', () => {
 test('PR 事件取目标分支，push 取当前 ref', () => {
   withCiEnv(
     { ATOMGIT_EVENT_NAME: 'MR', ATOMGIT_BASE_REF: 'main', ATOMGIT_REF_NAME: 'feature' },
-    (mod) => expect(mod.resolveCiBranch()).toBe('main')
+    (mod: any) => expect(mod.resolveCiBranch()).toBe('main')
   );
   withCiEnv(
     { ATOMGIT_EVENT_NAME: 'Push', ATOMGIT_BASE_REF: '', ATOMGIT_REF_NAME: 'dev' },
-    (mod) => expect(mod.resolveCiBranch()).toBe('dev')
+    (mod: any) => expect(mod.resolveCiBranch()).toBe('dev')
   );
   withCiEnv(
     {
@@ -100,12 +100,12 @@ test('PR 事件取目标分支，push 取当前 ref', () => {
       GITHUB_BASE_REF: 'release',
       GITHUB_REF_NAME: '123/merge'
     },
-    (mod) => expect(mod.resolveCiBranch()).toBe('release')
+    (mod: any) => expect(mod.resolveCiBranch()).toBe('release')
   );
 });
 
 test('resolveBranchName 将游离 HEAD 与空值回落平台分支', () => {
-  withCiEnv({}, (mod) => {
+  withCiEnv({}, (mod: any) => {
     expect(mod.resolveBranchName('HEAD', 'main')).toBe('main');
     expect(mod.resolveBranchName('', 'dev')).toBe('dev');
     expect(mod.resolveBranchName(null, '')).toBe('');
@@ -118,7 +118,7 @@ test('GitCode 平台不写英文 step output（避免与中文概览重复）', 
   const outputFile = path.join(dir, 'atomegit_output');
   fs.writeFileSync(outputFile, '');
   try {
-    withCiEnv({ ATOMGIT_OUTPUT: outputFile }, (mod) => {
+    withCiEnv({ ATOMGIT_OUTPUT: outputFile }, (mod: any) => {
       expect(mod.IS_GITHUB).toBe(false);
       mod.setCiOutput('avg-function-loc', null);
       expect(fs.readFileSync(outputFile, 'utf8')).toBe('');
@@ -133,7 +133,7 @@ test('GitHub 平台把 null 输出归一为空字符串', () => {
   const outputFile = path.join(dir, 'github_output');
   fs.writeFileSync(outputFile, '');
   try {
-    withCiEnv({ GITHUB_ACTIONS: 'true', GITHUB_OUTPUT: outputFile }, (mod) => {
+    withCiEnv({ GITHUB_ACTIONS: 'true', GITHUB_OUTPUT: outputFile }, (mod: any) => {
       mod.setCiOutput('avg-function-loc', null);
       const content = fs.readFileSync(outputFile, 'utf8');
       expect(content).toMatch(/^avg-function-loc<</m);
@@ -149,7 +149,7 @@ test('GitHub 平台仍通过 GITHUB_OUTPUT 写 step output', () => {
   const outputFile = path.join(dir, 'github_output');
   fs.writeFileSync(outputFile, '');
   try {
-    withCiEnv({ GITHUB_ACTIONS: 'true', GITHUB_OUTPUT: outputFile }, (mod) => {
+    withCiEnv({ GITHUB_ACTIONS: 'true', GITHUB_OUTPUT: outputFile }, (mod: any) => {
       expect(mod.IS_GITHUB).toBe(true);
       mod.setCiOutput('code-scale', 116109);
       // @actions/core 使用 heredoc 格式写入（name<<delimiter），只断言名称与值存在
@@ -161,3 +161,5 @@ test('GitHub 平台仍通过 GITHUB_OUTPUT 写 step output', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+export {};

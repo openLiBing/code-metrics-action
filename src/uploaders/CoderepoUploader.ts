@@ -21,7 +21,10 @@ const AKSK_API_PREFIX = '/openlibing-coderepo';
  * 签名流程：CanonicalRequest → StringToSign → HMAC-SHA256 → Authorization
  */
 class ApigSigner {
-  constructor(ak, sk) {
+  ak: string;
+  sk: string;
+
+  constructor(ak: any, sk: any) {
     this.ak = ak;
     this.sk = sk;
   }
@@ -30,14 +33,14 @@ class ApigSigner {
    * 对请求进行签名，返回包含签名头的完整 headers
    * 与官方 SDK 的 Signer.prototype.Sign() 方法对齐
    */
-  sign({ method, url, headers = {}, body = '' }) {
+  sign({ method, url, headers = {}, body = '' }: any) {
     // 解析 URL，提取 host、pathname、查询参数
     const parsed = new URL(url);
     const host = parsed.host;
 
     // 解析 URI 和查询参数（与官方 SDK 的 HttpRequest 构造函数对齐）
     const uri = decodeURIComponent(parsed.pathname);
-    const query = {};
+    const query: Record<string, string[]> = {};
     if (parsed.search) {
       const searchStr = parsed.search.substring(1);
       for (const pair of searchStr.split('&')) {
@@ -84,7 +87,7 @@ class ApigSigner {
     }
 
     // 获取参与签名的 header 列表（所有 header 名称小写排序）
-    const signedHeaderNames = Object.keys(headers).map(k => k.toLowerCase()).sort();
+    const signedHeaderNames = Object.keys(headers).map((k: any) => k.toLowerCase()).sort();
 
     // 构造规范化 URI：每段 URL 编码后用 / 拼接，末尾强制补 /
     const canonicalUri = this._canonicalUri(uri);
@@ -93,12 +96,12 @@ class ApigSigner {
     const canonicalQs = this._canonicalQueryString(query);
 
     // 构造规范化 Headers
-    const lowerHeaders = {};
+    const lowerHeaders: Record<string, any> = {};
     for (const [k, v] of Object.entries(headers)) {
       lowerHeaders[k.toLowerCase()] = v;
     }
     const canonicalHeaders = signedHeaderNames
-      .map(name => `${name}:${lowerHeaders[name].trim()}`)
+      .map((name: any) => `${name}:${lowerHeaders[name].trim()}`)
       .join('\n') + '\n';
 
     const signedHeadersStr = signedHeaderNames.join(';');
@@ -147,10 +150,10 @@ class ApigSigner {
    * 构造规范化 URI：每段用 SDK 的 urlEncode 编码，末尾强制补 /
    * 与官方 SDK 的 CanonicalURI() 函数完全对齐
    */
-  _canonicalUri(uri) {
+  _canonicalUri(uri: any) {
     if (!uri || uri === '') return '/';
     const parts = uri.split('/');
-    const encoded = parts.map(s => this._urlEncode(s));
+    const encoded = parts.map((s: any) => this._urlEncode(s));
     let urlpath = encoded.join('/');
     // 末尾强制补 /（官方 SDK 规范，APIG 网关签名校验要求）
     if (urlpath[urlpath.length - 1] !== '/') {
@@ -163,10 +166,10 @@ class ApigSigner {
    * 构造规范化查询字符串
    * 与官方 SDK 的 CanonicalQueryString() 函数对齐
    */
-  _canonicalQueryString(query) {
+  _canonicalQueryString(query: any) {
     const keys = Object.keys(query).sort();
     if (keys.length === 0) return '';
-    const parts = [];
+    const parts: any[] = [];
     for (const key of keys) {
       const k = this._urlEncode(key);
       const values = Array.isArray(query[key]) ? [...query[key]].sort() : [query[key]];
@@ -182,12 +185,12 @@ class ApigSigner {
    * 不编码字符：A-Z a-z 0-9 - . _ ~
    * 与 encodeURIComponent 的区别：! * ' ( ) 会被编码（encodeURIComponent 不编码这些）
    */
-  _urlEncode(str) {
+  _urlEncode(str: any) {
     if (typeof str !== 'string') {
       if (typeof str === 'object') str = String(str);
       else str += '';
     }
-    const hexTable = [];
+    const hexTable: any[] = [];
     for (let i = 0; i < 256; ++i) {
       hexTable[i] = '%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase();
     }
@@ -238,21 +241,31 @@ class ApigSigner {
 
   _getDateTime() {
     const now = new Date();
-    const p = (n) => String(n).padStart(2, '0');
+    const p = (n: any) => String(n).padStart(2, '0');
     return `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}T${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}Z`;
   }
 
-  _sha256Hex(data) {
+  _sha256Hex(data: any) {
     return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
   }
 
-  _hmacSha256Hex(key, data) {
+  _hmacSha256Hex(key: any, data: any) {
     return crypto.createHmac('sha256', key).update(data, 'utf8').digest('hex');
   }
 }
 
 class CoderepoUploader {
-  constructor(config = {}) {
+  baseUrl: string;
+  timeout: number;
+  useOidc: boolean;
+  apigAppKey: string;
+  apigAppSecret: string;
+  obsAk: string;
+  obsSk: string;
+  obsBucket: string;
+  obsEndpoint: string;
+
+  constructor(config: any = {}) {
     // coderepoUrl 由调用方恒传（src/index.js 部署固定常量），无 localhost 死 fallback
     // （Ref #51，与 sec-comp #26/#31 同款：原 fallback 在真实调用链下不可达，删除即等价加固）
     this.baseUrl = config.coderepoUrl;
@@ -291,12 +304,12 @@ class CoderepoUploader {
    *
    * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
    */
-  async upload(metricsData, options = {}) {
+  async upload(metricsData: any, options: any = {}) {
     // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
     const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
 
     // 1. 组装全量上报文件：元数据 + 全部指标明细（含 snapshotData / contentB64 等大 payload）
-    const fullPayload = {
+    const fullPayload: any = {
       gitUrl: options.gitUrl,
       branchName: options.branchName,
       pipelineRunId: options.pipelineRunId,
@@ -324,7 +337,7 @@ class CoderepoUploader {
     }
 
     // 3. 单次 /report：只传元数据 + obsUrl（body 恒定极小，远低于 APIG 12MB 上限）
-    const payload = {
+    const payload: any = {
       gitUrl: options.gitUrl,
       branchName: options.branchName,
       pipelineRunId: options.pipelineRunId,
@@ -369,13 +382,13 @@ class CoderepoUploader {
    * - OIDC 模式：getCredentials 获取 STS 临时凭证（短时效，仅本次流水线运行有效）
    * - AK/SK 模式：workflow 传入的 obs-ak / obs-sk 静态凭证
    */
-  async uploadFullPayloadToOBS(fullPayload, options) {
+  async uploadFullPayloadToOBS(fullPayload: any, options: any) {
     let cred;
     if (this.useOidc) {
       try {
         // 获取 STS 临时凭证（SDK 内部缓存，同一次流水线运行内只换证一次）
         cred = await getCredentials();
-      } catch (e) {
+      } catch (e: any) {
         return { success: false, error: `获取 OIDC 临时凭证失败: ${e.message}` };
       }
     } else if (!this.obsAk || !this.obsSk) {
@@ -393,13 +406,13 @@ class CoderepoUploader {
       const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
       console.log(`[upload] OBS uploaded: ${sanitize(obsUrl)}`);
       return { success: true, obsUrl: obsUrl, objectKey: objectKey };
-    } catch (e) {
+    } catch (e: any) {
       return { success: false, error: `OBS 上传失败: ${e.message}` };
     } finally {
       // 清理本地临时文件，避免在 runner 上残留大文件
       try {
         fs.unlinkSync(tmpFile);
-      } catch (e) {
+      } catch (e: any) {
         // 忽略清理失败
       }
     }
@@ -419,7 +432,7 @@ class CoderepoUploader {
    * 下载/解压/执行行为不复存在）与 obsutil 执行日志（Ref #47：掩码不完整的
    * -i/-k/-t 命令行打印随之消失）。
    */
-  async uploadToOBS(cred, localFilePath, objectKey) {
+  async uploadToOBS(cred: any, localFilePath: any, objectKey: any) {
     const server = `https://${this.obsEndpoint}`;
     const client = this.useOidc
       ? new ObsClient({
@@ -452,7 +465,7 @@ class CoderepoUploader {
     } finally {
       try {
         await client.close();
-      } catch (e) {
+      } catch (e: any) {
         // 忽略关闭异常
       }
     }
@@ -464,7 +477,7 @@ class CoderepoUploader {
    * 平台差异由桶名区分（GitCode/GitHub 各一个桶），key 结构两平台保持一致，后端解析逻辑无需区分。
    * branchName 不进入路径（远端分支可能含 / 造成路径歧义），只放在文件内元数据中。
    */
-  buildObjectKey(options) {
+  buildObjectKey(options: any) {
     const ownerRepo = this.extractOwnerRepo(options.gitUrl) || 'unknown';
     const pipelineRunId = options.pipelineRunId || 'manual';
     const ts = this.formatDateTime(new Date());
@@ -474,7 +487,7 @@ class CoderepoUploader {
   /**
    * 从 gitUrl 提取 owner/repo（形如 git@host:owner/repo 或 https://host/owner/repo）。
    */
-  extractOwnerRepo(gitUrl) {
+  extractOwnerRepo(gitUrl: any) {
     if (!gitUrl) {
       return '';
     }
@@ -486,8 +499,8 @@ class CoderepoUploader {
   /**
    * 格式化时间为 yyyyMMddHHmmss（OBS 对象 key 用，UTC）。
    */
-  formatDateTime(date) {
-    const p = (n) => String(n).padStart(2, '0');
+  formatDateTime(date: any) {
+    const p = (n: any) => String(n).padStart(2, '0');
     return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}`;
   }
 
@@ -497,8 +510,8 @@ class CoderepoUploader {
    * 重复块内容完整编码不做截断：全量上报文件上传 OBS（不受 APIG body 限制），
    * 入库 code_metrics_duplication_block.content_b64 为 LONGTEXT 可承载。
    */
-  encodeOccurrences(occurrences) {
-    return occurrences.map(occ => {
+  encodeOccurrences(occurrences: any) {
+    return occurrences.map((occ: any) => {
       return {
         groupId: occ.groupId,
         contentHash: occ.contentHash,
@@ -517,7 +530,7 @@ class CoderepoUploader {
    * 仅用于本地 metrics.json 输出文件的防护性裁剪（防 V8 单字符串上限）；
    * 上报链路（encodeOccurrences）不截断，完整内容上传 OBS。
    */
-  clipOversizeContent(content, maxChars) {
+  clipOversizeContent(content: any, maxChars: any) {
     if (typeof content !== 'string' || content.length <= maxChars) {
       return content;
     }
@@ -568,14 +581,14 @@ class CoderepoUploader {
    * Base64 编码字符串（UTF-8）。
    * 已编码数据（通过回检判定）跳过，防二次编码。
    */
-  encodeB64(str) {
+  encodeB64(str: any) {
     if (!str) return '';
     // 简单回检：若解码后重新编码与原值一致，视为已编码
     try {
       const decoded = Buffer.from(str, 'base64').toString('utf8');
       const reEncoded = Buffer.from(decoded, 'utf8').toString('base64');
       if (reEncoded === str) return str;
-    } catch (e) {
+    } catch (e: any) {
       // 解码失败说明是明文，继续编码
     }
     return Buffer.from(str, 'utf8').toString('base64');
@@ -586,7 +599,7 @@ class CoderepoUploader {
    * - OIDC 模式：/action-api/metrics/code/report
    * - AK/SK 模式：/openlibing-coderepo/metrics/code/report
    */
-  buildUrl(path) {
+  buildUrl(path: any) {
     const prefix = this.useOidc ? OIDC_API_PREFIX : AKSK_API_PREFIX;
     return this.baseUrl.replace(/\/+$/, '') + prefix + path;
   }
@@ -598,7 +611,7 @@ class CoderepoUploader {
    * - AK/SK 模式：ApigSigner SDK-HMAC-SHA256 签名（原有方式）
    * 返回 { success, recordId?, detailLink?, tip?, error? }
    */
-  async report(url, body) {
+  async report(url: any, body: any) {
     try {
       let resData;
       if (this.useOidc) {
@@ -649,7 +662,7 @@ class CoderepoUploader {
       const tip = typeof resData?.data?.tip === 'string' ? resData.data.tip : '';
 
       return { success: true, recordId: recordId, detailLink: detailLink, tip: tip };
-    } catch (error) {
+    } catch (error: any) {
       // 输出详细错误信息以便排查网络问题
       console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
       const resData = error.response?.data;
@@ -660,3 +673,5 @@ class CoderepoUploader {
 }
 
 module.exports = CoderepoUploader;
+
+export {};

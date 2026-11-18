@@ -71,7 +71,7 @@ test('collectFiles：递归收集并应用默认隐藏目录/排除目录/扩展
     fs.writeFileSync(path.join(root, 'docs', 'readme.md'), '# readme\n');
 
     const files = FileCollector.collectFiles(root, ['node_modules', 'docs'], ['.js']);
-    expect(files.map((f) => path.basename(f))).toEqual(['a.js']);
+    expect(files.map((f: any) => path.basename(f))).toEqual(['a.js']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -88,3 +88,5 @@ test('isDefaultExcludedDir 仅排除版本控制与 IDE 私有目录', () => {
   expect(FileCollector.isDefaultExcludedDir('.gitcode')).toBe(false);
   expect(FileCollector.isDefaultExcludedDir('src')).toBe(false);
 });
+
+export {};

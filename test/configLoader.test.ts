@@ -26,3 +26,5 @@ test('getDefaultConfig 每次返回深拷贝，调用方修改不污染内置默
   expect(second.detectors.duplication.minLines).toBe(10);
   expect(second.excludeDirs).toEqual([]);
 });
+
+export {};

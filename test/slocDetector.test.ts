@@ -82,3 +82,5 @@ test('detect 在 scc 路径缺失时自动回退本地统计', async () => {
 test('getName 返回 sloc', () => {
   expect(new SlocDetector({}).getName()).toBe('sloc');
 });
+
+export {};

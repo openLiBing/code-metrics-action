@@ -35,3 +35,5 @@ class ConfigLoader {
 }
 
 module.exports = ConfigLoader;
+
+export {};

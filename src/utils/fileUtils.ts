@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 class FileUtils {
-  static writeJsonFile(filePath, data, pretty = true) {
+  static writeJsonFile(filePath: any, data: any, pretty: any = true) {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -12,18 +12,18 @@ class FileUtils {
     fs.writeFileSync(filePath, content, 'utf8');
   }
 
-  static ensureDirectory(dirPath) {
+  static ensureDirectory(dirPath: any) {
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
     }
     return dirPath;
   }
 
-  static getExtension(filePath) {
+  static getExtension(filePath: any) {
     return path.extname(filePath);
   }
 
-  static isFileAllowed(filePath, allowedExtensions) {
+  static isFileAllowed(filePath: any, allowedExtensions: any) {
     if (!allowedExtensions || allowedExtensions.length === 0) {
       return true;
     }
@@ -31,15 +31,17 @@ class FileUtils {
     return allowedExtensions.includes(ext);
   }
 
-  static isDirectoryExcluded(dirPath, excludeDirs) {
+  static isDirectoryExcluded(dirPath: any, excludeDirs: any) {
     if (!excludeDirs || excludeDirs.length === 0) {
       return false;
     }
     const dirName = path.basename(dirPath);
-    return excludeDirs.some(exclude => {
+    return excludeDirs.some((exclude: any) => {
       return dirName === exclude || dirPath.includes(`/${exclude}/`);
     });
   }
 }
 
 module.exports = FileUtils;
+
+export {};

@@ -10,7 +10,7 @@ const { formatCstTime, buildSummaryMarkdown } = require('./utils/summary');
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
-function getInput(name) {
+function getInput(name: any) {
   const hyphenKey = `INPUT_${name.toUpperCase().replace(/-/g, '-')}`;
   const underscoreKey = `INPUT_${name.toUpperCase().replace(/-/g, '_')}`;
   return process.env[hyphenKey] || process.env[underscoreKey] || core.getInput(name) || '';
@@ -21,28 +21,28 @@ function getInput(name) {
  * - GitHub Actions 写 GITHUB_STEP_SUMMARY；
  * - GitCode Actions 写 ATOMGIT_STEP_SUMMARY（流水线 summary 页面）。
  */
-function appendStepSummary(markdown) {
+function appendStepSummary(markdown: any) {
   const targets = new Set(
     [process.env.GITHUB_STEP_SUMMARY, process.env.ATOMGIT_STEP_SUMMARY].filter(Boolean)
   );
   for (const file of targets) {
     try {
       fs.appendFileSync(file, markdown, 'utf8');
-    } catch (e) {
+    } catch (e: any) {
       core.warning(`写入运行摘要失败: ${e.message}`);
     }
   }
 }
 
 /** 写入 GitCode 输出面板（ATOMGIT_OUTPUT，键值对） */
-function appendAtomgitOutput(lines, logLabel) {
+function appendAtomgitOutput(lines: any, logLabel: any) {
   const outputFile = process.env.ATOMGIT_OUTPUT;
   if (!outputFile) {
     return;
   }
   try {
     fs.appendFileSync(outputFile, lines.join('\n') + '\n', 'utf8');
-  } catch (e) {
+  } catch (e: any) {
     core.warning(`写入${logLabel}失败: ${e.message}`);
   }
 }
@@ -59,9 +59,9 @@ const PIP_SPEED_TEST_TIMEOUT = 5;
 // 探测索引源首字节耗时（毫秒），超时或不可达返回 -1。
 // 只请求该索引下 lizard 单包页面的首个字节（-r 0-0 + time_starttransfer）：
 // 整个 simple 索引页面体积很大，5 秒内拉不完会被误判为不可达，导致测速失去区分度
-function testUrlSpeed(indexUrl) {
+function testUrlSpeed(indexUrl: any) {
   const probeUrl = `${indexUrl.replace(/\/$/, '')}/lizard/`;
-  return new Promise((resolve) => {
+  return new Promise<number>((resolve) => {
     execFile(
       'curl',
       [
@@ -70,7 +70,7 @@ function testUrlSpeed(indexUrl) {
         '-r', '0-0', probeUrl
       ],
       { encoding: 'utf8', timeout: (PIP_SPEED_TEST_TIMEOUT + 2) * 1000 },
-      (err, stdout) => {
+      (err: any, stdout: any) => {
         // 镜像忽略 Range 返回全量时会被 --max-time 截断（err 非空），
         // 但首字节耗时已由 -w 写出，仍可据此比较，故 err 非空也尝试解析
         const seconds = parseFloat((stdout || '').trim());
@@ -109,10 +109,10 @@ async function run() {
     // 源代码目录固定为当前目录（线上环境由 checkout 步骤决定扫描内容）
     const sourceDir = './';
     const excludeDirs = getInput('exclude-dirs')
-      ? getInput('exclude-dirs').split(',').map(s => s.trim())
+      ? getInput('exclude-dirs').split(',').map((s: any) => s.trim())
       : [];
     const allowedExtensions = getInput('allowed-extensions')
-      ? getInput('allowed-extensions').split(',').map(s => s.trim())
+      ? getInput('allowed-extensions').split(',').map((s: any) => s.trim())
       : [];
     // 重复检测阈值：与华为云 cmetrics 官方定义对齐
     // 官方定义："连续超过 10 行代码块在其他地方重复记为一次重复"
@@ -143,7 +143,7 @@ async function run() {
     // 沿目录树向上查找包含 .git 的目录。.git 既可能是目录（普通仓库），
     // 也可能是文件（worktree/submodule 指向真正的 git dir），fs.existsSync 对二者均返回 true。
     // 设置向上查找最大深度为 8 层，避免异常文件系统结构下死循环或越界。
-    function findGitRoot(startDir) {
+    function findGitRoot(startDir: any) {
       let cur = path.resolve(startDir);
       const root = path.parse(cur).root; // Windows: "D:\", Linux: "/"
       for (let i = 0; i < 8 && cur && cur !== root; i++) {
@@ -172,11 +172,11 @@ async function run() {
       if (branchName === 'HEAD') {
         try {
           branchName = execSync('git describe --tags --exact-match', { encoding: 'utf8', cwd: gitCwd }).trim();
-        } catch (e) {
+        } catch (e: any) {
           core.warning('当前为 detached HEAD 且无法获取 tag 名');
         }
       }
-    } catch (e) {
+    } catch (e: any) {
       core.warning(`从 git 命令获取仓库信息失败: ${e.message}`);
     }
     // GitHub 兜底：git 命令不可用时（如浅克隆异常），用平台上下文拼仓库地址
@@ -255,7 +255,7 @@ async function run() {
           cwd: pipCwd
         });
         supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
-      } catch (e) {
+      } catch (e: any) {
         // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
         core.debug(`pip install --help probe failed: ${e.message}`);
       }
@@ -273,7 +273,7 @@ async function run() {
           cwd: pipCwd
         });
         core.info('Python dependencies installed successfully');
-      } catch (e) {
+      } catch (e: any) {
         // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
         core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
       }
@@ -281,7 +281,7 @@ async function run() {
       // 清理临时目录，不在 runner 上残留
       try {
         fs.rmSync(pipCwd, { recursive: true, force: true });
-      } catch (e) {
+      } catch (e: any) {
         // 忽略清理失败
       }
     }
@@ -333,7 +333,7 @@ async function run() {
 
     // GitCode 输出面板：保持原有键值对输出（概览 + 详情链接），供流水线结果面板展示
     // 无函数（分母为 0）时两个均值指标为 null，统一展示 -- 而不是 null
-    const displayValue = (value) => (value === null || value === undefined ? '--' : String(value));
+    const displayValue = (value: unknown) => (value === null || value === undefined ? '--' : String(value));
     const overviewDisplay = [
       ['codeScale', '代码规模（codeScale）', String(result.codeScale)],
       ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', displayValue(result.avgFunctionLoc)],
@@ -341,7 +341,7 @@ async function run() {
       ['totalCodeDuplicationRate', '总代码重复率（totalCodeDuplicationRate）', `${result.totalCodeDuplicationRate}%`],
       ['totalFileDuplicationRate', '总文件重复率（totalFileDuplicationRate）', `${result.totalFileDuplicationRate}%`]
     ];
-    appendAtomgitOutput(overviewDisplay.map(item => `${item[1]}=${item[2]}`), '概览结果');
+    appendAtomgitOutput(overviewDisplay.map((item: any) => `${item[1]}=${item[2]}`), '概览结果');
     if (detailLink || detailTip) {
       // 链接行 key 以 url 结尾：GitCode 按 key 末尾小写 url 判定 type=link 渲染为可点击链接
       appendAtomgitOutput(
@@ -376,14 +376,12 @@ async function run() {
     core.info(`Code duplication rate: ${result.totalCodeDuplicationRate}%`);
     core.info(`File duplication rate: ${result.totalFileDuplicationRate}%`);
 
-  } catch (error) {
+  } catch (error: any) {
     core.setFailed(`Action failed with error: ${error.message}`);
   }
 }
 
-// 作为 action 入口直接执行时启动扫描；被单测 require 时不自动执行
-if (require.main === module) {
-  run();
-}
-
+// 业务主流程由入口壳 src/index.ts 调用；此处导出 run 供入口与调试复用
 module.exports = { run };
+
+export {};

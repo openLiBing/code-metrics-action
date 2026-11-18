@@ -8,7 +8,7 @@ const core = require('@actions/core');
  */
 const IS_GITHUB = process.env.GITHUB_ACTIONS === 'true';
 
-const ENV_KEYS = IS_GITHUB
+const ENV_KEYS: Record<string, string> = IS_GITHUB
   ? {
       eventName: 'GITHUB_EVENT_NAME',
       baseRef: 'GITHUB_BASE_REF',
@@ -32,7 +32,7 @@ const ENV_KEYS = IS_GITHUB
     };
 
 /** 读取当前平台的环境变量（未定义时返回空串） */
-function ciEnv(key) {
+function ciEnv(key: string) {
   const envKey = ENV_KEYS[key];
   return envKey ? String(process.env[envKey] || '').trim() : '';
 }
@@ -55,7 +55,7 @@ function resolveCiBranch() {
  * @param {string} ciBranch 平台上下文给出的分支名
  * @returns {string} 用于上报的分支名
  */
-function resolveBranchName(gitBranch, ciBranch) {
+function resolveBranchName(gitBranch: any, ciBranch: any) {
   const branch = String(gitBranch || '').trim();
   if (!branch || branch === 'HEAD') {
     return ciBranch || '';
@@ -83,7 +83,7 @@ function resolveRepoUrlFromEnv() {
  * @param {string} name 输出名
  * @param {string|number} value 输出值
  */
-function setCiOutput(name, value) {
+function setCiOutput(name: any, value: any) {
   if (!IS_GITHUB) {
     return;
   }
@@ -92,3 +92,5 @@ function setCiOutput(name, value) {
 }
 
 module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput };
+
+export {};

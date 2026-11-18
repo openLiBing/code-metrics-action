@@ -23,7 +23,7 @@ test('mergeFileDetails 以 sloc 为基础合并 lizard/duplication 文件明细'
   );
 
   expect(merged.length).toBe(2);
-  const a = merged.find((d) => d.filePath === 'a.js');
+  const a = merged.find((d: any) => d.filePath === 'a.js');
   expect(a.language).toBe('JavaScript');
   expect(a.loc).toBe(10);
   expect(a.functionCount).toBe(1);
@@ -31,7 +31,7 @@ test('mergeFileDetails 以 sloc 为基础合并 lizard/duplication 文件明细'
   expect(a.duplicatedFiles).toEqual(['b.js']);
 
   // duplication 独有文件：loc 用 totalLines 兜底
-  const b = merged.find((d) => d.filePath === 'b.prelds');
+  const b = merged.find((d: any) => d.filePath === 'b.prelds');
   expect(b.loc).toBe(12);
   expect(b.language).toBe('');
   expect(b.duplicationLineCount).toBe(6);
@@ -66,9 +66,9 @@ test('mergeFileDetails 无函数文件的两个均值指标保持 null', () => {
   );
 
   for (const detail of merged) {
-    assert.equal(detail.functionCount, 0);
-    assert.equal(detail.avgFunctionLoc, null);
-    assert.equal(detail.avgCyclomaticComplexity, null);
+    expect(detail.functionCount).toBe(0);
+    expect(detail.avgFunctionLoc).toBeNull();
+    expect(detail.avgCyclomaticComplexity).toBeNull();
   }
 });
 
@@ -92,18 +92,16 @@ test('validate 允许无函数时两个均值指标为 null，但键缺失仍报
     totalCodeDuplicationRate: 0,
     totalFileDuplicationRate: 0
   };
-  assert.equal(MetricsCalculator.validate(metrics), true);
+  expect(MetricsCalculator.validate(metrics)).toBe(true);
 
   // 键缺失（探测器未执行）仍按配置错误拦截
-  assert.throws(
-    () =>
-      MetricsCalculator.validate({
-        codeScale: 1,
-        totalCodeDuplicationRate: 0,
-        totalFileDuplicationRate: 0
-      }),
-    /Missing required metric: averageFunctionLoc/
-  );
+  expect(() =>
+    MetricsCalculator.validate({
+      codeScale: 1,
+      totalCodeDuplicationRate: 0,
+      totalFileDuplicationRate: 0
+    })
+  ).toThrow(/Missing required metric: averageFunctionLoc/);
 });
 
 test('formatForReport 归一化数值并映射平台字段', () => {
@@ -147,3 +145,5 @@ test('formatForReport 缺失字段回退为 0/空数组，均值指标回退为 
   expect(formatted.avgCyclomaticComplexity).toBeNull();
   expect(formatted.fileDetails).toEqual([]);
 });
+
+export {};

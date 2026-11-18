@@ -11,7 +11,7 @@ const path = require('path');
 const { sanitize } = require('./utils/sanitize');
 
 // 将日期格式化为 yyyy-MM-dd HH:mm:ss
-function formatDateTime(date) {
+function formatDateTime(date: any) {
   // 固定按东八区输出：CI runner 容器时区多为 UTC，用本地组件取值会使检测时间比实际早 8 小时
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai',
@@ -24,7 +24,15 @@ function formatDateTime(date) {
 }
 
 class MetricsScanner {
-  constructor(config = {}) {
+  config: any;
+  logger: any;
+  workingDir: string;
+  slocDetector: any;
+  lizardDetector: any;
+  duplicationDetector: any;
+  uploader: any;
+
+  constructor(config: any = {}) {
     this.config = config;
     this.logger = new Logger();
     this.workingDir = config.workingDir || process.cwd();
@@ -62,14 +70,14 @@ class MetricsScanner {
     });
   }
 
-  async scan(options = {}) {
+  async scan(options: any = {}) {
     const startTime = new Date();
     const startTimeFormatted = formatDateTime(startTime);
     this.logger.info('Starting code metrics scan...');
 
     const sourceInput = options.sourceDir || this.config.sourceDir;
     const sources = Array.isArray(sourceInput) ? sourceInput : [sourceInput];
-    const resolvedSources = sources.map(src =>
+    const resolvedSources = sources.map((src: any) =>
       path.isAbsolute(src) ? src : path.resolve(this.workingDir, src)
     );
 
@@ -81,7 +89,7 @@ class MetricsScanner {
     let slocResult = {};
     let lizardResult = {};
     let duplicationResult = {};
-    let status = 0;
+    const status = 0;
 
     try {
       if (this.config.detectors?.sloc?.enabled !== false) {
@@ -149,13 +157,13 @@ class MetricsScanner {
         //   本地保留 groupId/filePath/起止行等元数据即可
         const compactResult = {
           ...result,
-          fileDetails: (result.fileDetails || []).map(fd => {
+          fileDetails: (result.fileDetails || []).map((fd: any) => {
             const { snapshotData, ...rest } = fd;
             return rest;
           }),
           // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
           // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
-          duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
+          duplicationOccurrences: (result.duplicationOccurrences || []).map((occ: any) => {
             const MAX_CONTENT_CHARS = 15 * 1024;
             if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
               return {
@@ -204,7 +212,7 @@ class MetricsScanner {
 
       return result;
 
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Scan failed: ${error.message}`);
       if (error && error.stack) {
         // 输出堆栈头部，辅助定位是哪个 JSON.stringify / 哪个阶段抛错
@@ -227,7 +235,7 @@ class MetricsScanner {
             status: 1,
             errorMessage: error.message
           });
-        } catch (uploadError) {
+        } catch (uploadError: any) {
           this.logger.error(`Failed to upload error report: ${uploadError.message}`);
         }
       }
@@ -245,3 +253,5 @@ module.exports = {
   DuplicationDetector,
   MetricsCalculator
 };
+
+export {};

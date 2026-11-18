@@ -14,7 +14,7 @@
 /** 日志/输出行最大长度（字符） */
 const MAX_LOG_LINE_LEN = 2048;
 
-function sanitize(value, maxLen = MAX_LOG_LINE_LEN) {
+function sanitize(value: any, maxLen: any = MAX_LOG_LINE_LEN) {
   if (typeof value !== 'string') {
     return value;
   }
@@ -29,3 +29,5 @@ function sanitize(value, maxLen = MAX_LOG_LINE_LEN) {
 }
 
 module.exports = { sanitize };
+
+export {};

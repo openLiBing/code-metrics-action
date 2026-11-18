@@ -60,7 +60,7 @@ test('clipOversizeContent 超长内容按行省略并保留首尾', () => {
   const uploader = new CoderepoUploader({ coderepoUrl: 'https://api.example.com' });
   expect(uploader.clipOversizeContent('short', 100)).toBe('short');
 
-  const content = Array.from({ length: 40 }, (_, i) => `line_${i + 1}_abcdefghij`).join('\n');
+  const content = Array.from({ length: 40 }, (_: any, i: any) => `line_${i + 1}_abcdefghij`).join('\n');
   const clipped = uploader.clipOversizeContent(content, 100);
   expect(clipped.length).toBeLessThanOrEqual(content.length);
   expect(clipped).toMatch(/lines omitted/);
@@ -81,3 +81,5 @@ test('obsBucket 支持显式配置覆盖平台默认桶', () => {
   expect(uploader.obsBucket).toBe('custom-bucket');
   expect(uploader.obsEndpoint).toBe('obs.cn-southwest-2.myhuaweicloud.com');
 });
+
+export {};

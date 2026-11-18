@@ -83,9 +83,9 @@ test('buildSummaryMarkdown 无函数时均值指标展示 -- 而不是 null', ()
       totalFileDuplicationRate: 0
     }
   );
-  assert.match(md, /\| 平均函数代码行 \| -- 行 \|/);
-  assert.match(md, /\| 平均圈复杂度 \| -- \|/);
-  assert.doesNotMatch(md, /null/);
+  expect(md).toMatch(/\| 平均函数代码行 \| -- 行 \|/);
+  expect(md).toMatch(/\| 平均圈复杂度 \| -- \|/);
+  expect(md).not.toMatch(/null/);
 });
 
 test('buildSummaryMarkdown 编码破坏链接结构的字符，非法协议降级为提示文本', () => {
@@ -174,3 +174,5 @@ test('buildSummaryMarkdown GitHub 平台输出全英文摘要', () => {
   expect(fallbackMd).toMatch(/> Detail link is unavailable/);
   expect(fallbackMd).not.toMatch(/[\u4e00-\u9fa5]/);
 });
+
+export {};

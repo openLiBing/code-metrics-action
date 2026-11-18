@@ -26,7 +26,8 @@ const SUMMARY_TEXT = {
       { name: '总文件重复率', unit: '%', desc: '内容完全一致文件占总文件数的比例' }
     ],
     detailPrefix: '> 查看详情：',
-    detailText: '代码度量指标扫描结果'
+    detailText: '代码度量指标扫描结果',
+    detailFallback: ''
   },
   en: {
     title: '## 📊 Code Metrics Scan Result',
@@ -76,14 +77,14 @@ const SUMMARY_TEXT = {
 };
 
 /** Markdown 表格单元格转义：竖线必须转义，换行压平，避免撑破表格 */
-function escapeCell(value) {
+function escapeCell(value: any) {
   return String(value === null || value === undefined || value === '' ? '-' : value)
     .replace(/\|/g, '\\|')
     .replace(/\r?\n/g, ' ');
 }
 
 /** 格式化为东八区时间（平台展示口径统一为 UTC+8） */
-function formatCstTime(date) {
+function formatCstTime(date: any) {
   const cst = new Date(date.getTime() + 8 * 3600 * 1000);
   return `${cst.toISOString().replace('T', ' ').slice(0, 19)} (UTC+8)`;
 }
@@ -92,7 +93,7 @@ function formatCstTime(date) {
  * 链接 URL 安全处理（Ref #76）：仅放行 http/https，编码会破坏 Markdown 链接结构的字符。
  * 非法协议或非法 URL 返回空串，由调用方降级为纯文本，避免 `)` 提前闭合链接目标后注入 Markdown。
  */
-function safeLinkUrl(value) {
+function safeLinkUrl(value: any) {
   const url = String(value || '').trim();
   if (!url) {
     return '';
@@ -108,7 +109,7 @@ function safeLinkUrl(value) {
   }
   // 括号会提前闭合 Markdown 链接目标，空白/尖括号/引号可改变链接解析，统一百分号编码
   // 注：encodeURIComponent 不编码 ( ) ! * '，此处按字符显式转 %XX
-  return url.replace(/[()<>\s"]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+  return url.replace(/[()<>\s"]/g, (c: any) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
 }
 
 /**
@@ -120,7 +121,7 @@ function safeLinkUrl(value) {
  * @param {Object} [options] 展示选项；english=true 时输出全英文摘要（GitHub 平台）
  * @returns {string} Markdown 文本
  */
-function buildSummaryMarkdown(ctx, result, options = {}) {
+function buildSummaryMarkdown(ctx: any, result: any, options: any = {}) {
   const text = options.english ? SUMMARY_TEXT.en : SUMMARY_TEXT.zh;
   const pipelineLabel = ctx.runNumber ? `#${ctx.runNumber}` : ctx.pipelineRunId || '-';
   const repoBase = String(ctx.gitUrl || '').replace(/\.git$/, '');
@@ -147,8 +148,9 @@ function buildSummaryMarkdown(ctx, result, options = {}) {
     result.totalCodeDuplicationRate,
     result.totalFileDuplicationRate
   ];
-  const metricRows = text.metrics.map((metric, index) => {
+  const metricRows = text.metrics.map((metric: any, index: any) => {
     const value = metricValues[index];
+    // 无函数（分母为 0）时两个均值指标为 null，展示 -- 表示无数据
     const display = value === null || value === undefined ? '--' : value;
     return [metric.name, `${display}${metric.unit}`, metric.desc];
   });
@@ -158,13 +160,13 @@ function buildSummaryMarkdown(ctx, result, options = {}) {
     '',
     text.scanTableHeader,
     '|:--|:--|',
-    ...scanRows.map(([key, value]) => `| ${escapeCell(key)} | ${value === pipelineCell ? value : escapeCell(value)} |`),
+    ...scanRows.map(([key, value]: any) => `| ${escapeCell(key)} | ${value === pipelineCell ? value : escapeCell(value)} |`),
     '',
     text.overviewTitle,
     '',
     text.metricTableHeader,
     '|:--|--:|:--|',
-    ...metricRows.map(([key, value, desc]) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
+    ...metricRows.map(([key, value, desc]: any) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
     ''
   ];
   // 详情链接同样只放行合法 http(s) URL；非法链接降级为提示文本，不生成 Markdown 链接
@@ -179,3 +181,5 @@ function buildSummaryMarkdown(ctx, result, options = {}) {
 }
 
 module.exports = { escapeCell, formatCstTime, safeLinkUrl, buildSummaryMarkdown };
+
+export {};

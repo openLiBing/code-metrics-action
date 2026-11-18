@@ -16,7 +16,7 @@ function getSccPath() {
   // 1. bundle 根 + bin/（标准 ncc 打包形态，asset 随目录分发）
   // 2. bundle 根根目录平铺（部分平台分发时把 asset 平铺到 dist/ 根）
   // 3. 源码结构：__dirname=src/detectors，上溯一层为 src/（即 src/bin/scc）
-  const candidates = [];
+  const candidates: any[] = [];
   if (bundleRoot) {
     candidates.push(path.join(bundleRoot, 'bin', 'scc'));
     candidates.push(path.join(bundleRoot, 'scc'));
@@ -29,7 +29,7 @@ function getSccPath() {
       // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755，保证可执行
       try {
         fs.chmodSync(candidate, 0o755);
-      } catch (e) {
+      } catch (e: any) {
         console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
       }
       return candidate;
@@ -40,20 +40,23 @@ function getSccPath() {
   try {
     execSync('command -v scc', { stdio: 'ignore' });
     return 'scc';
-  } catch (e) {
+  } catch (e: any) {
     console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
     return null;
   }
 }
 
 class SlocDetector extends BaseDetector {
-  constructor(config = {}) {
+  allowedExtensions: string[];
+  sccPath: string | null;
+
+  constructor(config: any = {}) {
     super(config);
     this.allowedExtensions = config.allowedExtensions || [];
     this.sccPath = getSccPath();
   }
 
-  async detect(source) {
+  async detect(source: any) {
     const sources = Array.isArray(source) ? source : [source];
     const excludeDirs = this.config.excludeDirs || [];
 
@@ -68,14 +71,14 @@ class SlocDetector extends BaseDetector {
     try {
       const result = this.runScc(sccArgs, sources);
       return result;
-    } catch (error) {
+    } catch (error: any) {
       console.warn(`[WARN] scc 执行失败: ${error.message}，回退到逐文件统计`);
       return this.fallbackDetect(sources, excludeDirs);
     }
   }
 
   // 构建 scc 命令行参数
-  buildSccArgs(sources, excludeDirs) {
+  buildSccArgs(sources: any, excludeDirs: any) {
     const args = ['-f', 'json', '--no-cocomo', '--no-size', '--by-file'];
 
     // 不再向 scc 传 --exclude-dir：scc 自身的排除规则不支持 ** 等 glob 通配符，
@@ -85,7 +88,7 @@ class SlocDetector extends BaseDetector {
     // 限制文件扩展名
     if (this.allowedExtensions.length > 0) {
       const exts = this.allowedExtensions
-        .map(e => e.replace(/^\./, ''))
+        .map((e: any) => e.replace(/^\./, ''))
         .join(',');
       args.push('--include-ext', exts);
     }
@@ -102,7 +105,7 @@ class SlocDetector extends BaseDetector {
   // execFileSync 参数数组直传，不经 shell 解析（Ref #49 #57 #29，与 pre-commit-action #26 同款）：
   // 消除 sources / --include-ext（来自 allowed-extensions input）等外部输入包含
   // shell 特殊字符（; ` $() 等）时的命令注入面
-  runScc(args, sources) {
+  runScc(args: any, sources: any) {
     const output = execFileSync(this.sccPath, args, {
       encoding: 'utf8',
       maxBuffer: 100 * 1024 * 1024,
@@ -123,7 +126,7 @@ class SlocDetector extends BaseDetector {
     let totalFiles = 0;
 
     // 收集文件级指标
-    const fileDetails = [];
+    const fileDetails: any[] = [];
 
     for (const lang of sccResult) {
       // 注意：不再累加语言级汇总（含被 exclude-dirs 排除的文件），改为逐文件统计并
@@ -152,7 +155,7 @@ class SlocDetector extends BaseDetector {
             continue;
           }
           // 将绝对路径转为相对路径
-          let filePath = this.toRelativePath(fileName, sources);
+          const filePath = this.toRelativePath(fileName, sources);
           // 后置过滤：用 FileCollector 的目录剪枝语义排除命中 exclude-dirs 的文件，
           // 保证与 FileCollector / lizard / duplication 收集的文件范围完全一致
           if (excludeDirs.length > 0 && FileCollector.isPathExcluded(filePath, excludeDirs)) {
@@ -189,7 +192,7 @@ class SlocDetector extends BaseDetector {
       console.log('[DEBUG] scc --by-file 未产出文件明细，回退到逐文件统计');
       const FileCollector = require('../utils/fileCollector');
       const excludeDirs = this.config.excludeDirs || [];
-      const allFiles = [];
+      const allFiles: any[] = [];
       for (const src of sources) {
         const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
         allFiles.push(...files);
@@ -211,7 +214,7 @@ class SlocDetector extends BaseDetector {
           }
           const filePath = this.toRelativePath(file, sources);
           const ext = path.extname(file).toLowerCase();
-          const langMap = {
+          const langMap: Record<string, string> = {
             '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
             '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
             '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
@@ -224,7 +227,7 @@ class SlocDetector extends BaseDetector {
             loc: sourceCount,
             commentLines: commentCount
           });
-        } catch (e) {
+        } catch (e: any) {
           // 只输出文件基名，不落 runner 绝对路径（Ref #60）
           console.warn(`[WARN] 跳过文件 ${path.basename(file)}: ${e.message}`);
         }
@@ -243,14 +246,14 @@ class SlocDetector extends BaseDetector {
   }
 
   // 判断 Name 是否为文件路径（而非语言名）
-  isFilePath(name) {
+  isFilePath(name: any) {
     if (!name) return false;
     // 文件路径应包含扩展名（含点号）或路径分隔符
     return name.includes('.') || name.includes('/') || name.includes('\\');
   }
 
   // 将绝对路径转为相对路径（统一使用 / 分隔符）
-  toRelativePath(filePath, sources) {
+  toRelativePath(filePath: any, sources: any) {
     if (sources && sources.length > 0) {
       for (const src of sources) {
         const normalizedSrc = src.replace(/\\/g, '/');
@@ -265,9 +268,9 @@ class SlocDetector extends BaseDetector {
   }
 
   // 回退方案：当 scc 不可用时，逐文件读取并统计行数
-  fallbackDetect(sources, excludeDirs) {
+  fallbackDetect(sources: any, excludeDirs: any) {
     const FileCollector = require('../utils/fileCollector');
-    const allFiles = [];
+    const allFiles: any[] = [];
     for (const src of sources) {
       const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
       allFiles.push(...files);
@@ -284,7 +287,7 @@ class SlocDetector extends BaseDetector {
     let totalEmpty = 0;
 
     // 收集文件级指标
-    const fileDetails = [];
+    const fileDetails: any[] = [];
 
     for (const file of uniqueFiles) {
       try {
@@ -331,7 +334,7 @@ class SlocDetector extends BaseDetector {
 
         // 根据扩展名推断语言
         const ext = path.extname(file).toLowerCase();
-        const langMap = {
+        const langMap: Record<string, string> = {
           '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
           '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
           '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
@@ -345,7 +348,7 @@ class SlocDetector extends BaseDetector {
           loc: fileSourceLines,
           commentLines: fileCommentLines
         });
-      } catch (e) {
+      } catch (e: any) {
         // 只输出文件基名，不落 runner 绝对路径（Ref #60）
         console.warn(`[WARN] 跳过文件 ${path.basename(file)}: ${e.message}`);
       }
@@ -371,3 +374,5 @@ class SlocDetector extends BaseDetector {
 }
 
 module.exports = SlocDetector;
+
+export {};

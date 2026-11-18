@@ -43,3 +43,5 @@ test('MetricsScanner 构造时按配置创建检测器与上报器', () => {
   expect(scanner.duplicationDetector.minLines).toBe(10);
   expect(path.isAbsolute(scanner.workingDir)).toBe(true);
 });
+
+export {};

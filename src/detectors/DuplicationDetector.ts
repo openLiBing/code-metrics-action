@@ -5,7 +5,10 @@ const BaseDetector = require('./BaseDetector');
 const FileCollector = require('../utils/fileCollector');
 
 class DuplicationDetector extends BaseDetector {
-  constructor(config = {}) {
+  minLines: number;
+  allowedExtensions: string[];
+
+  constructor(config: any = {}) {
     super(config);
     // 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
     // - minLines=10：连续源代码行至少 10 行才算一次重复
@@ -13,7 +16,7 @@ class DuplicationDetector extends BaseDetector {
     this.allowedExtensions = config.allowedExtensions || [];
   }
 
-  async detect(source, slocResult = null) {
+  async detect(source: any, slocResult: any = null) {
     // 支持单个路径或多个路径
     const sources = Array.isArray(source) ? source : [source];
     const excludeDirs = this.config.excludeDirs || [];
@@ -35,7 +38,7 @@ class DuplicationDetector extends BaseDetector {
     }
 
     // 收集所有文件
-    const allFiles = [];
+    const allFiles: any[] = [];
     for (const src of sources) {
       const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
       allFiles.push(...files);
@@ -52,7 +55,7 @@ class DuplicationDetector extends BaseDetector {
     // 与 cmetrics "≥10 个有效代码行才算重复"的定义对齐。
     // 仅当 slocResult 中确有该文件的 loc 记录时过滤（路径不匹配/scc 不识别的文件保守放行）。
     let locFiltered = 0;
-    const effectiveFiles = [];
+    const effectiveFiles: any[] = [];
     for (const file of uniqueFiles) {
       const rel = this.toRelativePath(file, pathBase);
       const loc = locByRel.get(rel);
@@ -84,7 +87,7 @@ class DuplicationDetector extends BaseDetector {
         const sourceLineMap = this.buildSourceLineMap(content, file);
         fileSourceLineMaps.set(file, sourceLineMap);
         totalSourceLines += sourceLineMap.sourceCount;
-      } catch (error) {
+      } catch (error: any) {
         // 只输出文件基名，不落 runner 绝对路径（Ref #60）
         console.warn(`[WARN] Failed to read file ${path.basename(file)}: ${error.message}`);
       }
@@ -108,7 +111,7 @@ class DuplicationDetector extends BaseDetector {
     // 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData
     fileDetails = this.buildContextSegments(fileDetails, duplicationOccurrences, fileContents, pathBase);
 
-    const duplicatedLines = fileDetails.reduce((sum, d) => sum + d.duplicationLineCount, 0);
+    const duplicatedLines = fileDetails.reduce((sum: any, d: any) => sum + d.duplicationLineCount, 0);
 
     // 分母：优先用传入的 codeScale（与 cmetrics 和华为云保持一致）
     // 如果没有 codeScale，则用本地统计的源代码行总数
@@ -162,7 +165,7 @@ class DuplicationDetector extends BaseDetector {
    * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（含 sourceLines，分类口径与 scc 一致）
    * @returns {Object} {fileDuplicatedLines, fileSourceLines, sharedHashWindows}
    */
-  detectWithLineLevel(files, fileSourceLineMaps) {
+  detectWithLineLevel(files: any, fileSourceLineMaps: any) {
     const WINDOW_SIZE = this.minLines; // 10
 
     // Step 1: 提取每个文件的源代码行（与 scc 有效代码行语义一致），保留原始行号
@@ -181,7 +184,7 @@ class DuplicationDetector extends BaseDetector {
       if (sourceLines.length < WINDOW_SIZE) continue;
       for (let i = 0; i <= sourceLines.length - WINDOW_SIZE; i++) {
         const windowText = sourceLines.slice(i, i + WINDOW_SIZE)
-          .map(l => l.text).join('\n');
+          .map((l: any) => l.text).join('\n');
         const hash = crypto.createHash('md5').update(windowText).digest('hex');
         if (!hashToWindows.has(hash)) hashToWindows.set(hash, []);
         hashToWindows.get(hash).push({
@@ -223,8 +226,8 @@ class DuplicationDetector extends BaseDetector {
    * - 过滤为源代码行（剔除空行/注释行）
    * - 只含有重复的文件入 fileDetails（无重复文件由 sloc 基础记录覆盖）
    */
-  calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources, locByRel, sccDupByRel) {
-    const fileDetails = [];
+  calculateFileDetailsFromLines(fileDuplicatedLines: any, fileSourceLineMaps: any, sources: any, locByRel: any, sccDupByRel: any) {
+    const fileDetails: any[] = [];
     for (const [file, lineSet] of fileDuplicatedLines) {
       // 兼容路径分隔符：detectWithLineLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
       const sourceLineMap = fileSourceLineMaps.get(file)
@@ -284,7 +287,7 @@ class DuplicationDetector extends BaseDetector {
    * @param {string[]} sources 源目录（用于相对路径对齐）
    * @returns {Map<string, number>|null} 相对路径 → 重复有效行数（scc 口径），失败返回 null
    */
-  countDuplicatedLinesWithScc(fileDuplicatedLines, fileContents, sources) {
+  countDuplicatedLinesWithScc(fileDuplicatedLines: any, fileContents: any, sources: any) {
     if (!fileDuplicatedLines || fileDuplicatedLines.size === 0) {
       return new Map();
     }
@@ -304,9 +307,9 @@ class DuplicationDetector extends BaseDetector {
         if (!content) continue;
         const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
         // 按物理行号升序抽取重复行内容，保持原相对路径与扩展名写入镜像
-        const dupTexts = [...lineSet].sort((a, b) => a - b)
-          .filter(n => lines[n - 1] !== undefined)
-          .map(n => lines[n - 1]);
+        const dupTexts = [...lineSet].sort((a: any, b: any) => a - b)
+          .filter((n: any) => lines[n - 1] !== undefined)
+          .map((n: any) => lines[n - 1]);
         if (dupTexts.length === 0) continue;
         const relPath = this.toRelativePath(file, sources);
         const dest = path.join(tmpRoot, ...relPath.split('/'));
@@ -331,11 +334,11 @@ class DuplicationDetector extends BaseDetector {
       }
       console.log(`[duplication] scc recount done for ${dupByRel.size} duplicated files`);
       return dupByRel;
-    } catch (error) {
+    } catch (error: any) {
       console.warn(`[WARN] scc recount of duplicated lines failed, fallback to local line-map: ${error.message}`);
       return null;
     } finally {
-      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (e) { /* 忽略清理异常 */ }
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (e: any) { /* 忽略清理异常 */ }
     }
   }
 
@@ -353,7 +356,7 @@ class DuplicationDetector extends BaseDetector {
       ? __nccwpck_require__.ab
       : null;
     // 候选顺序：bundle 根 + bin/ → bundle 根平铺（asset 平铺分发形态）→ 源码结构上溯
-    const candidates = [];
+    const candidates: any[] = [];
     if (bundleRoot) {
       candidates.push(path.join(bundleRoot, 'bin', 'scc'));
       candidates.push(path.join(bundleRoot, 'scc'));
@@ -366,7 +369,7 @@ class DuplicationDetector extends BaseDetector {
         // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755
         try {
           fs.chmodSync(candidate, 0o755);
-        } catch (e) {
+        } catch (e: any) {
           console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
         }
         return candidate;
@@ -377,7 +380,7 @@ class DuplicationDetector extends BaseDetector {
     try {
       require('child_process').execSync('command -v scc', { stdio: 'ignore' });
       return 'scc';
-    } catch (e) {
+    } catch (e: any) {
       console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），重复行统计回退到本地 line-map');
       return null;
     }
@@ -387,7 +390,7 @@ class DuplicationDetector extends BaseDetector {
   // hashIsCode=true：C/C++ 预处理指令（#include/#define 等）计入代码行（scc 计入）
   // mlStrings：Python 三引号 docstring 按注释处理（scc 不计入代码行）
   // blockComments：多组块注释标记（如 CMake 的 #[[ ]]），进入后直到对应结束标记出现
-  static getLanguageConfig(ext, fileName) {
+  static getLanguageConfig(ext: any, fileName: any) {
     const e = (ext || '').toLowerCase();
     // CMake 按文件名/扩展名识别（与 scc 一致）：CMakeLists.txt / *.cmake。
     // 支持行注释 # 与方括号块注释 #[[ ]]（#[==[ 变体罕见，暂不支持）。
@@ -417,7 +420,7 @@ class DuplicationDetector extends BaseDetector {
     }
   }
 
-  static startsWithAny(text, markers) {
+  static startsWithAny(text: any, markers: any) {
     for (const m of markers) {
       if (text.startsWith(m)) return true;
     }
@@ -425,7 +428,7 @@ class DuplicationDetector extends BaseDetector {
   }
 
   // 判断一行是否以某个多行字符串标记开始；若同一行内已闭合则返回 null（不进入状态）
-  static openMlString(text, markers) {
+  static openMlString(text: any, markers: any) {
     for (const m of markers) {
       if (text.startsWith(m)) {
         return text.slice(m.length).includes(m) ? null : m;
@@ -437,7 +440,7 @@ class DuplicationDetector extends BaseDetector {
   // 判断一行中（非行首）是否出现三引号字符串标记。
   // 与 scc 语义对齐：行首的三引号是 docstring（注释），行中的三引号是字符串字面量（计入代码行）。
   // 返回 { marker, open }：open=true 表示该行打开了未在同行闭合的多行字符串；open=false 表示同行已闭合。
-  static findMidLineMlString(line, markers) {
+  static findMidLineMlString(line: any, markers: any) {
     for (const m of markers) {
       const idx = line.indexOf(m);
       // 只处理出现在行中的标记；行首由调用方走 docstring 分支
@@ -454,13 +457,13 @@ class DuplicationDetector extends BaseDetector {
   // - 行中三引号多行字符串（如 x = '''...'''）整块计入代码行（含内部空白行）
   // - C/C++ 预处理指令（#include/#define 等）计入代码行
   // 返回 { lineMap: 行号→是否有效代码行, sourceCount, sourceLines: [{lineNum,text}] }
-  buildSourceLineMap(content, filePath) {
+  buildSourceLineMap(content: any, filePath: any) {
     const lines = content.split('\n');
     const lang = DuplicationDetector.getLanguageConfig(
         filePath ? path.extname(filePath) : '',
         filePath ? path.basename(filePath) : '');
     const lineMap = new Map();
-    const sourceLines = [];
+    const sourceLines: any[] = [];
     let sourceCount = 0;
     let inBlock = null;       // 块注释结束标记（null=不在块注释中；支持多组标记，如 CMake #[[ ]]）
     let inDocstring = null;   // 行首三引号 docstring（注释）的结束标记
@@ -487,7 +490,7 @@ class DuplicationDetector extends BaseDetector {
         const marker = DuplicationDetector.openMlString(trimmed, lang.mlStrings);
         if (marker !== null) inDocstring = marker;
       } else if (lang.blockComments
-          && DuplicationDetector.startsWithAny(trimmed, lang.blockComments.map(p => p[0]))) {
+          && DuplicationDetector.startsWithAny(trimmed, lang.blockComments.map((p: any) => p[0]))) {
         // 多组块注释开始行（如 CMake #[[ ]]）：进入后直到对应结束标记出现
         for (const [bs, be] of lang.blockComments) {
           if (trimmed.startsWith(bs)) {
@@ -521,7 +524,7 @@ class DuplicationDetector extends BaseDetector {
     return { lineMap, sourceCount, sourceLines };
   }
 
-  calculateFileDuplication(fileContents) {
+  calculateFileDuplication(fileContents: any) {
     const hashCount = new Map();
     for (const content of fileContents.values()) {
       const normalized = content.trim();
@@ -539,7 +542,7 @@ class DuplicationDetector extends BaseDetector {
 
   // 将绝对路径转为相对路径
   // 修复前缀匹配问题：/repo 会误匹配 /repo-other/test.py，需确保 src 是路径分隔符边界
-  toRelativePath(absolutePath, sources) {
+  toRelativePath(absolutePath: any, sources: any) {
     if (!sources || sources.length === 0) {
       return absolutePath.replace(/\\/g, '/');
     }
@@ -563,7 +566,7 @@ class DuplicationDetector extends BaseDetector {
    * @param {string} file 文件绝对路径
    * @returns {boolean} true 表示二进制文件，应跳过重复检测
    */
-  static isBinaryFile(file) {
+  static isBinaryFile(file: any) {
     const SNIFF_BYTES = 8192;
     let fd = null;
     try {
@@ -571,12 +574,12 @@ class DuplicationDetector extends BaseDetector {
       const buf = Buffer.alloc(SNIFF_BYTES);
       const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
       return buf.slice(0, bytesRead).includes(0);
-    } catch (error) {
+    } catch (error: any) {
       // 读取失败按非二进制处理，交给后续 readFileSync 的 catch 统一告警
       return false;
     } finally {
       if (fd !== null) {
-        try { fs.closeSync(fd); } catch (e) { /* 忽略关闭异常 */ }
+        try { fs.closeSync(fd); } catch (e: any) { /* 忽略关闭异常 */ }
       }
     }
   }
@@ -587,7 +590,7 @@ class DuplicationDetector extends BaseDetector {
    * @param {string} startDir 起始目录
    * @returns {string|null} 仓库根目录绝对路径，找不到返回 null
    */
-  findGitRoot(startDir) {
+  findGitRoot(startDir: any) {
     let cur = path.resolve(startDir);
     const root = path.parse(cur).root;
     for (let i = 0; i < 8 && cur && cur !== root; i++) {
@@ -603,7 +606,7 @@ class DuplicationDetector extends BaseDetector {
   // 只在文件内容完全一致（MD5相同）时才认为是重复文件
   // 对于一组重复文件 A、B、C，只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
   // 前端将同一组的所有文件展示在一起，无需区分"原始文件"和"重复副本"
-  calculateIdenticalFileDetails(fileContents, sources) {
+  calculateIdenticalFileDetails(fileContents: any, sources: any) {
     // 按内容哈希分组
     const hashGroups = new Map();
     for (const [file, content] of fileContents) {
@@ -615,14 +618,14 @@ class DuplicationDetector extends BaseDetector {
       hashGroups.get(hash).push(file);
     }
 
-    const details = [];
+    const details: any[] = [];
     for (const [hash, files] of hashGroups) {
       // 只处理有重复的组（2个及以上文件内容一致）
       if (files.length < 2) continue;
 
       // 每组只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
       // 前端展示时将同一组的所有文件列在一起，不再双向展示
-      const duplicatedFiles = files.map(f => this.toRelativePath(f, sources));
+      const duplicatedFiles = files.map((f: any) => this.toRelativePath(f, sources));
 
       details.push({
         duplicatedFiles: duplicatedFiles
@@ -660,7 +663,7 @@ class DuplicationDetector extends BaseDetector {
    * @param {Map} sharedHashWindows hash → [{file, startIdx, endIdx}]（仅跨 2+ 窗口的共享 hash）
    * @returns {Array} duplicationOccurrences 列表
    */
-  buildDuplicationOccurrences(fileSourceLines, fileContents, sources, sharedHashWindows) {
+  buildDuplicationOccurrences(fileSourceLines: any, fileContents: any, sources: any, sharedHashWindows: any) {
     if (!sharedHashWindows || sharedHashWindows.size === 0) return [];
 
     // 1) 计算「完全一致文件」的等价类：内容(trim 后)哈希相同的文件归为一类
@@ -678,7 +681,7 @@ class DuplicationDetector extends BaseDetector {
       for (const f of files) fileToRep.set(f, rep);
     }
 
-    const occurrences = [];
+    const occurrences: any[] = [];
     const W = this.minLines;
 
     // 2) 预计算每个「代表文件」的 10 行滑动窗口哈希数组（每代表一份，供两两匹配复用）
@@ -693,7 +696,7 @@ class DuplicationDetector extends BaseDetector {
       const hashToPos = new Map();
       for (let i = 0; i <= src.length - W; i++) {
         const h = crypto.createHash('md5')
-          .update(src.slice(i, i + W).map(l => l.text).join('\n')).digest('hex');
+          .update(src.slice(i, i + W).map((l: any) => l.text).join('\n')).digest('hex');
         winHashes[i] = h;
         if (!hashToPos.has(h)) hashToPos.set(h, []);
         hashToPos.get(h).push(i);
@@ -707,7 +710,7 @@ class DuplicationDetector extends BaseDetector {
     //    这样 A-B(1-45) 与 A-B-C(14-45) 作为两条独立关系同时保留，互不截断——
     //    不再像旧的「按精确文件集合分桶」那样，把长关系中的窗口让给超集关系导致长关系被截断。
     const parent = new Map();
-    const find = (k) => {
+    const find = (k: any) => {
       let root = k;
       while (parent.get(root) !== root) root = parent.get(root);
       while (parent.get(k) !== root) {
@@ -717,11 +720,11 @@ class DuplicationDetector extends BaseDetector {
       }
       return root;
     };
-    const union = (a, b) => {
+    const union = (a: any, b: any) => {
       const ra = find(a), rb = find(b);
       if (ra !== rb) parent.set(ra, rb);
     };
-    const nodeKey = (rep, s, e) => `${rep}\u0001${s}\u0001${e}`;
+    const nodeKey = (rep: any, s: any, e: any) => `${rep}\u0001${s}\u0001${e}`;
 
     const repList = [...repInfo.keys()];
     for (let a = 0; a < repList.length; a++) {
@@ -770,7 +773,7 @@ class DuplicationDetector extends BaseDetector {
       for (const positions of info.hashToPos.values()) {
         if (positions.length < 2) continue;
         // 分段：连续窗口位置合段（段内为周期性重叠窗口，j-i < W 会被跳过，不参与配对）
-        const segs = [];
+        const segs: any[] = [];
         let segStart = positions[0];
         for (let p = 1; p <= positions.length; p++) {
           const cur = positions[p];
@@ -782,7 +785,7 @@ class DuplicationDetector extends BaseDetector {
         if (segs.length < 2) continue;
         if (segs.length > MAX_SELF_DUP_SEGS) {
           // 超高频模板：所有段整组 union（每段一个节点），避免两两配对组合爆炸
-          const segNodes = segs.map(([a, b]) => {
+          const segNodes = segs.map(([a, b]: any) => {
             const k = nodeKey(rep, a, b + W - 1);
             if (!parent.has(k)) parent.set(k, k);
             return k;
@@ -827,7 +830,7 @@ class DuplicationDetector extends BaseDetector {
     }
     for (const nodes of compNodes.values()) {
       if (nodes.size < 2) continue;
-      const fileOccs = [];
+      const fileOccs: any[] = [];
       for (const nk of nodes) {
         const parts = nk.split('\u0001');
         const rep = parts[0];
@@ -849,7 +852,7 @@ class DuplicationDetector extends BaseDetector {
     //    只有源代码行数 ≥ minLines(10) 的文件才可能被滑窗检测为重复块，故以此作为阈值
     for (const files of contentHashToFiles.values()) {
       if (files.length < 2) continue;
-      const fileOccs = [];
+      const fileOccs: any[] = [];
       for (const f of files) {
         const sourceLines = fileSourceLines.get(f);
         if (!sourceLines || sourceLines.length < this.minLines) continue;
@@ -875,7 +878,7 @@ class DuplicationDetector extends BaseDetector {
   // 只保留组内「所有出现位置行覆盖并集」最大的那个组中的该出现位置，从其它组删除。
   // 删除后若某组不足 2 条出现位置，则整组丢弃。
   // 注意：此处以 occurrence 自身的 groupId 为分组依据，不依赖外部结构。
-  dedupOccurrencesAcrossGroups(occurrences) {
+  dedupOccurrencesAcrossGroups(occurrences: any) {
     if (!occurrences || occurrences.length === 0) return;
 
     // 统计每个组的行覆盖并集大小，用于决定保留哪个组
@@ -932,9 +935,9 @@ class DuplicationDetector extends BaseDetector {
   }
 
   // 把一组出现位置(重复块)统一排序、生成 groupId 并写入 occurrences
-  pushGroup(occurrences, fileOccs, sources, fileContents) {
+  pushGroup(occurrences: any, fileOccs: any, sources: any, fileContents: any) {
     // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
-    fileOccs.sort((a, b) => {
+    fileOccs.sort((a: any, b: any) => {
       const relA = this.toRelativePath(a.file, sources);
       const relB = this.toRelativePath(b.file, sources);
       if (relA !== relB) return relA.localeCompare(relB);
@@ -946,12 +949,12 @@ class DuplicationDetector extends BaseDetector {
     // 因此不能再用「单一内容哈希」作为组 ID，否则不同关系可能因首块内容相同而碰撞。
     const groupId = crypto.createHash('sha256')
       .update(fileOccs
-          .map(o => `${this.toRelativePath(o.file, sources)}:${o.startLine}-${o.endLine}`)
+          .map((o: any) => `${this.toRelativePath(o.file, sources)}:${o.startLine}-${o.endLine}`)
           .sort()
           .join('\u0001'))
       .digest('hex');
 
-    fileOccs.forEach((occ, i) => {
+    fileOccs.forEach((occ: any, i: any) => {
       const content = this.extractBlockContent(occ.file, occ.startLine, occ.endLine, fileContents);
       occurrences.push({
         groupId: groupId,
@@ -974,7 +977,7 @@ class DuplicationDetector extends BaseDetector {
    * @param {Map} fileContents file(原始路径) → 内容
    * @returns {string} 代码内容，找不到文件时返回空字符串
    */
-  extractBlockContent(file, startLine, endLine, fileContents) {
+  extractBlockContent(file: any, startLine: any, endLine: any, fileContents: any) {
     // 兼容路径分隔符：fileContents 的 key 是原始路径（Windows 下含反斜杠）
     const content = fileContents.get(file)
         || fileContents.get(file.replace(/\//g, '\\'));
@@ -994,9 +997,9 @@ class DuplicationDetector extends BaseDetector {
    *   扩展 ±contextLines 后的区间合并传 false（只有真正重叠才合并，避免上下文过长）。
    * @returns {Array} 合并后的区间列表（按 startLine 排序）
    */
-  mergeIntervals(intervals, mergeAdjacent = true) {
+  mergeIntervals(intervals: any, mergeAdjacent: any = true) {
     if (intervals.length === 0) return [];
-    const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
+    const sorted = intervals.slice().sort((a: any, b: any) => a.startLine - b.startLine);
     const merged = [Object.assign({}, sorted[0])];
     // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
     const overlapThreshold = mergeAdjacent ? 1 : 0;
@@ -1039,7 +1042,7 @@ class DuplicationDetector extends BaseDetector {
    * @param {number} contextLines 上下文行数，默认 5
    * @returns {Array} 更新后的 fileDetails（每个有重复的 fileDetail 增加 snapshotData 字段）
    */
-  buildContextSegments(fileDetails, duplicationOccurrences, fileContents, sources, contextLines = 5) {
+  buildContextSegments(fileDetails: any, duplicationOccurrences: any, fileContents: any, sources: any, contextLines: any = 5) {
     if (!duplicationOccurrences || duplicationOccurrences.length === 0) {
       return fileDetails;
     }
@@ -1075,7 +1078,7 @@ class DuplicationDetector extends BaseDetector {
 
       // 3. 每个块扩展 ±contextLines，再次合并重叠的扩展区间
       //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间。
-      const extended = mergedBlocks.map((b) => ({
+      const extended = mergedBlocks.map((b: any) => ({
         startLine: Math.max(1, b.startLine - contextLines),
         endLine: b.endLine + contextLines
       }));
@@ -1085,9 +1088,9 @@ class DuplicationDetector extends BaseDetector {
       //    超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多段（分段不丢内容），
       //    避免 Base64/JSON 单字符串过大影响传输与解析。
       const MAX_SEGMENT_CHARS = 24 * 1024; // 单段原始内容字符数上限（仅分段用，不截断内容）
-      const segments = [];
+      const segments: any[] = [];
       // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
-      const pushSegment = (segStart, segEnd, contentText) => {
+      const pushSegment = (segStart: any, segEnd: any, contentText: any) => {
         segments.push({
           originalStartLine: segStart,
           originalEndLine: segEnd,
@@ -1151,3 +1154,5 @@ class DuplicationDetector extends BaseDetector {
 }
 
 module.exports = DuplicationDetector;
+
+export {};

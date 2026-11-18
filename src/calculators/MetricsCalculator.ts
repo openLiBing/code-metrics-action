@@ -1,5 +1,5 @@
 class MetricsCalculator {
-  static mergeResults(slocResult, lizardResult, duplicationResult) {
+  static mergeResults(slocResult: any, lizardResult: any, duplicationResult: any) {
     // 合并总体指标（排除 fileDetails / identicalFileDetails / duplicationOccurrences，单独处理）
     const { fileDetails: slocFileDetails, ...slocMetrics } = slocResult;
     const { fileDetails: lizardFileDetails, ...lizardMetrics } = lizardResult;
@@ -30,7 +30,7 @@ class MetricsCalculator {
   }
 
   // 合并三个检测器的 fileDetails
-  static mergeFileDetails(slocFileDetails, lizardFileDetails, duplicationFileDetails) {
+  static mergeFileDetails(slocFileDetails: any, lizardFileDetails: any, duplicationFileDetails: any) {
     // 以 sloc 的 fileDetails 为基础（有 filePath, language, loc）
     const fileMap = new Map();
 
@@ -109,7 +109,7 @@ class MetricsCalculator {
     return [...fileMap.values()];
   }
 
-  static validate(metrics) {
+  static validate(metrics: any) {
     // 4 项全局指标必须有数值
     const required = [
       'codeScale',
@@ -139,7 +139,7 @@ class MetricsCalculator {
    * @param {*} value 原始值
    * @returns {number|null} 数值或 null
    */
-  static toOptionalNumber(value) {
+  static toOptionalNumber(value: any): number | null {
     if (value === null || value === undefined) {
       return null;
     }
@@ -147,7 +147,7 @@ class MetricsCalculator {
     return Number.isNaN(num) ? null : num;
   }
 
-  static formatForReport(metrics) {
+  static formatForReport(metrics: any) {
     // 分离 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
     const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metrics;
 
@@ -183,3 +183,5 @@ class MetricsCalculator {
 }
 
 module.exports = MetricsCalculator;
+
+export {};

@@ -6,21 +6,23 @@ const core = require('@actions/core');
  */
 class Logger {
   // 支持多参数，拼接为一条消息
-  debug(...args) {
-    core.debug(args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+  debug(...args: any[]) {
+    core.debug(args.map((a: any) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
   }
 
-  info(message) {
+  info(message: any) {
     core.info(message);
   }
 
-  warn(message) {
+  warn(message: any) {
     core.warning(message);
   }
 
-  error(message) {
+  error(message: any) {
     core.error(message);
   }
 }
 
 module.exports = Logger;
+
+export {};
