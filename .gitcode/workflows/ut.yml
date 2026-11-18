@@ -21,7 +21,7 @@ permissions:
 env:
   # UT增量行覆盖率门禁阈值：低于该值 PR 流水线失败，可通过仓库变量覆盖，未配置默认 80
   UT_INCREMENTAL_LINE_COVERAGE_THRESHOLD: ${{ vars.UT_INCREMENTAL_LINE_COVERAGE_THRESHOLD || '80' }}
-  # UT报告输出目录：c8 默认输出路径；json 供平台上报，cobertura 供 diff-cover 计算增量覆盖率
+  # UT报告输出目录：Jest 默认输出路径；json 供平台上报，cobertura 供 diff-cover 计算增量覆盖率
   UT_REPORT_DIR: coverage/
   # PR 触发场景标记：覆盖率上报仅 push/手动触发执行
   IS_PR_EVENT: ${{ atomgit.event_name != '' && contains('pull_request_target,pull_request_comment,MR,Note', atomgit.event_name) }}
@@ -40,10 +40,15 @@ jobs:
       - name: install dependencies
         run: npm ci
 
-      # node 内置测试运行器（node --test）经 c8 采集 V8 覆盖率：json 供平台上报，cobertura 供 diff-cover 计算变更行覆盖率
-      # c8 统计口径由 .c8rc.json 统一配置（--all --src=src：未加载文件按 0% 纳入报告；action 入口 index.js 不计入）
+      - name: setup-python (diff-cover)
+        uses: setup-python
+        with:
+          version: 3.14.3
+
+      # Jest 运行单测并采集覆盖率：json 供平台上报，cobertura 供 diff-cover 计算变更行覆盖率
+      # 覆盖率口径由 jest.config.js 统一配置（collectCoverageFrom 覆盖 src，排除 action 入口与内置二进制）
       - name: ut
-        run: npx --yes c8@^10 node --test
+        run: npm run test:coverage
 
       # 将ut报告上传至openlibing平台运营
       - name: upload ut report to openlibing
@@ -80,7 +85,7 @@ jobs:
             exit "${rc}"
           fi
 
-      # PR场景上传完整覆盖率报告（diff-coverage.html 增量明细 + c8 全量报告），打包为 zip 供下载；1 天后自动清理避免配额累积
+      # PR场景上传完整覆盖率报告（diff-coverage.html 增量明细 + Jest 全量报告），打包为 zip 供下载；1 天后自动清理避免配额累积
       - name: upload diff coverage report
         if: ${{ always() && env.IS_PR_EVENT == 'true' }} # 门禁失败场景也需可下载报告
         uses: upload-artifact

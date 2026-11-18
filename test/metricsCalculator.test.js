@@ -1,8 +1,7 @@
 /**
  * 指标合并/格式化单测。
  */
-const test = require('node:test');
-const assert = require('node:assert/strict');
+const { test, expect } = require('@jest/globals');
 const MetricsCalculator = require('../src/calculators/MetricsCalculator');
 
 test('mergeFileDetails 以 sloc 为基础合并 lizard/duplication 文件明细', () => {
@@ -23,19 +22,19 @@ test('mergeFileDetails 以 sloc 为基础合并 lizard/duplication 文件明细'
     ]
   );
 
-  assert.equal(merged.length, 2);
+  expect(merged.length).toBe(2);
   const a = merged.find((d) => d.filePath === 'a.js');
-  assert.equal(a.language, 'JavaScript');
-  assert.equal(a.loc, 10);
-  assert.equal(a.functionCount, 1);
-  assert.equal(a.duplicationRate, 10);
-  assert.deepEqual(a.duplicatedFiles, ['b.js']);
+  expect(a.language).toBe('JavaScript');
+  expect(a.loc).toBe(10);
+  expect(a.functionCount).toBe(1);
+  expect(a.duplicationRate).toBe(10);
+  expect(a.duplicatedFiles).toEqual(['b.js']);
 
   // duplication 独有文件：loc 用 totalLines 兜底
   const b = merged.find((d) => d.filePath === 'b.prelds');
-  assert.equal(b.loc, 12);
-  assert.equal(b.language, '');
-  assert.equal(b.duplicationLineCount, 6);
+  expect(b.loc).toBe(12);
+  expect(b.language).toBe('');
+  expect(b.duplicationLineCount).toBe(6);
 });
 
 test('mergeResults 合并总体指标并保留明细数组', () => {
@@ -50,13 +49,13 @@ test('mergeResults 合并总体指标并保留明细数组', () => {
     }
   );
 
-  assert.equal(result.codeScale, 10);
-  assert.equal(result.averageFunctionLoc, 5);
-  assert.equal(result.totalCodeDuplicationRate, 1.2);
-  assert.equal(result.fileDetails.length, 1);
-  assert.equal(result.fileDetails[0].duplicationLineCount, 1);
-  assert.deepEqual(result.identicalFileDetails, [{ duplicatedFiles: ['a.js', 'b.js'] }]);
-  assert.deepEqual(result.duplicationOccurrences, [{ groupId: 'g' }]);
+  expect(result.codeScale).toBe(10);
+  expect(result.averageFunctionLoc).toBe(5);
+  expect(result.totalCodeDuplicationRate).toBe(1.2);
+  expect(result.fileDetails.length).toBe(1);
+  expect(result.fileDetails[0].duplicationLineCount).toBe(1);
+  expect(result.identicalFileDetails).toEqual([{ duplicatedFiles: ['a.js', 'b.js'] }]);
+  expect(result.duplicationOccurrences).toEqual([{ groupId: 'g' }]);
 });
 
 test('mergeFileDetails 无函数文件的两个均值指标保持 null', () => {
@@ -81,8 +80,8 @@ test('validate 校验 5 项必需指标', () => {
     totalCodeDuplicationRate: 1,
     totalFileDuplicationRate: 1
   };
-  assert.equal(MetricsCalculator.validate(metrics), true);
-  assert.throws(() => MetricsCalculator.validate({}), /Missing required metric/);
+  expect(MetricsCalculator.validate(metrics)).toBe(true);
+  expect(() => MetricsCalculator.validate({})).toThrow(/Missing required metric/);
 });
 
 test('validate 允许无函数时两个均值指标为 null，但键缺失仍报错', () => {
@@ -125,26 +124,26 @@ test('formatForReport 归一化数值并映射平台字段', () => {
     duplicationOccurrences: []
   });
 
-  assert.equal(formatted.codeScale, 100);
-  assert.equal(formatted.codeLineTotal, 120);
-  assert.equal(formatted.commentLines, 5);
-  assert.equal(formatted.complexityCount, 8);
-  assert.equal(formatted.cyclomaticComplexityPerFile, 2);
-  assert.equal(formatted.duplicatedBlocks, 1);
-  assert.equal(formatted.duplicatedLines, 3);
-  assert.equal(formatted.avgFunctionLoc, 4);
-  assert.equal(formatted.avgCyclomaticComplexity, 1.5);
-  assert.deepEqual(formatted.fileDetails, []);
-  assert.deepEqual(formatted.identicalFileDetails, []);
-  assert.deepEqual(formatted.duplicationOccurrences, []);
+  expect(formatted.codeScale).toBe(100);
+  expect(formatted.codeLineTotal).toBe(120);
+  expect(formatted.commentLines).toBe(5);
+  expect(formatted.complexityCount).toBe(8);
+  expect(formatted.cyclomaticComplexityPerFile).toBe(2);
+  expect(formatted.duplicatedBlocks).toBe(1);
+  expect(formatted.duplicatedLines).toBe(3);
+  expect(formatted.avgFunctionLoc).toBe(4);
+  expect(formatted.avgCyclomaticComplexity).toBe(1.5);
+  expect(formatted.fileDetails).toEqual([]);
+  expect(formatted.identicalFileDetails).toEqual([]);
+  expect(formatted.duplicationOccurrences).toEqual([]);
 });
 
 test('formatForReport 缺失字段回退为 0/空数组，均值指标回退为 null', () => {
   const formatted = MetricsCalculator.formatForReport({});
-  assert.equal(formatted.codeScale, 0);
-  assert.equal(formatted.codeLineTotal, 0);
+  expect(formatted.codeScale).toBe(0);
+  expect(formatted.codeLineTotal).toBe(0);
   // 分母为 0 时均值指标无数据，不能回退为 0
-  assert.equal(formatted.avgFunctionLoc, null);
-  assert.equal(formatted.avgCyclomaticComplexity, null);
-  assert.deepEqual(formatted.fileDetails, []);
+  expect(formatted.avgFunctionLoc).toBeNull();
+  expect(formatted.avgCyclomaticComplexity).toBeNull();
+  expect(formatted.fileDetails).toEqual([]);
 });

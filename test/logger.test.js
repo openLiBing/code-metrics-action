@@ -1,23 +1,16 @@
 /**
  * 统一日志封装单测：验证按级别转发到 @actions/core。
  */
-const test = require('node:test');
-const assert = require('node:assert/strict');
+// Jest 运行时已注入全局 jest，解构同名变量会重复声明，故起别名
+const { test, expect, jest: jestGlobals } = require('@jest/globals');
 const core = require('@actions/core');
 const Logger = require('../src/utils/logger');
 
 test('Logger 将 info/warn/error/debug 转发到 @actions/core', () => {
-  const original = {
-    info: core.info,
-    warning: core.warning,
-    error: core.error,
-    debug: core.debug
-  };
-  const calls = [];
-  core.info = (message) => calls.push(['info', message]);
-  core.warning = (message) => calls.push(['warn', message]);
-  core.error = (message) => calls.push(['error', message]);
-  core.debug = (message) => calls.push(['debug', message]);
+  const infoSpy = jestGlobals.spyOn(core, 'info').mockImplementation(() => {});
+  const warningSpy = jestGlobals.spyOn(core, 'warning').mockImplementation(() => {});
+  const errorSpy = jestGlobals.spyOn(core, 'error').mockImplementation(() => {});
+  const debugSpy = jestGlobals.spyOn(core, 'debug').mockImplementation(() => {});
 
   try {
     const logger = new Logger();
@@ -25,14 +18,12 @@ test('Logger 将 info/warn/error/debug 转发到 @actions/core', () => {
     logger.warn('warn-message');
     logger.error('error-message');
     logger.debug('text', { a: 1 }, 2);
-  } finally {
-    Object.assign(core, original);
-  }
 
-  assert.deepEqual(calls, [
-    ['info', 'info-message'],
-    ['warn', 'warn-message'],
-    ['error', 'error-message'],
-    ['debug', 'text {"a":1} 2']
-  ]);
+    expect(infoSpy).toHaveBeenCalledWith('info-message');
+    expect(warningSpy).toHaveBeenCalledWith('warn-message');
+    expect(errorSpy).toHaveBeenCalledWith('error-message');
+    expect(debugSpy).toHaveBeenCalledWith('text {"a":1} 2');
+  } finally {
+    jestGlobals.restoreAllMocks();
+  }
 });
