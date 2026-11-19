@@ -184,6 +184,12 @@ permissions:
 
 GitHub Actions 下通过 `core.setOutput` 输出以下键，可在后续步骤以 `steps.<id>.outputs.<name>` 引用。GitCode 不输出这些英文键，避免与下方中文概览行在结果面板重复展示。
 
+> **GitCode 侧获取指标的方式**：GitCode Actions 不提供上述英文 action outputs（回到 !52 之前的行为），如需在后续步骤消费指标，可通过以下任一方式获取：
+>
+> - **中文概览键**：读取 `ATOMGIT_OUTPUT` 中的中文键（如 `代码规模（codeScale）`、`总代码重复率（totalCodeDuplicationRate）`），详见下方「概览输出」；
+> - **运行摘要**：查看流水线 summary 页面（`ATOMGIT_STEP_SUMMARY`）中的指标概览；
+> - **metrics.json 产物**：插件生成的 `metrics.json` 包含全量指标与明细，可作为构建产物供下游步骤读取。
+
 | 输出                        | 说明                     |
 | --------------------------- | ------------------------ |
 | code-scale                  | 代码规模（有效代码行数） |
