@@ -16,24 +16,12 @@ stages:
     jobs:
       pre-commit:
         name: pre-commit
-        runs-on: ["self-hosted", "region=overseas"]
+        runs-on: ["self-hosted", "default"]
         steps:
           - name: Checkout repository
             uses: checkout
             with:
               ref: master
-
-          - name: setup-go
-            uses: setup-go
-            with:
-              version: 1.26
-              cache: true
-
-          - name: setup-node
-            uses: setup-node
-            with:
-              node-version: 20
-              cache: true
 
           - name: Install npm dependencies
             run: npm install

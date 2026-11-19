@@ -17,7 +17,7 @@ permissions:
 jobs:
   sca-pr-scan:
     name: sca-pr-scan
-    runs-on: ["self-hosted", "region=cn"]
+    runs-on: ["self-hosted", "default"]
     steps:
       - name: Run sca-pr-action
         uses: openlibing/sca-action/sca-pr-action@v1.0.0

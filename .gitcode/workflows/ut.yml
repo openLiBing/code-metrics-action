@@ -29,7 +29,7 @@ env:
 jobs:
   ut:
     name: ut
-    runs-on: ["self-hosted", "region=cn", "flavor=large"]
+    runs-on: ["self-hosted", "large"]
     steps:
       - name: checkout
         uses: checkout
@@ -37,27 +37,8 @@ jobs:
           ref: ${{ atomgit.event.pull_request.merge_commit_sha || atomgit.event.pull_request.head.sha }} # PR 场景检出预合并 commit（验证合入默认分支后的最终状态），缺失时回退 PR head，push/手动场景为空走默认检出
           fetch-depth: 0 # 全量检出以生成基线分支远端 ref，供增量覆盖率比较
 
-      # setup 插件在当前执行机上对 /opt/tools 无写权限时会安装失败，此处临时规避
-      - name: bootstrap tool cache dir
-        run: |
-          if [ ! -d /opt/tools/cache ] || [ ! -w /opt/tools/cache ]; then
-            sudo mkdir -p /opt/tools/cache
-            sudo chown -R "$(id -u):$(id -g)" /opt/tools
-          fi
-
-      - name: setup-node
-        uses: setup-node
-        with:
-          node-version: 20
-          cache: true
-
       - name: install dependencies
         run: npm ci
-
-      - name: setup-python (diff-cover)
-        uses: setup-python
-        with:
-          version: 3.14.3
 
       # node 内置测试运行器（node --test）经 c8 采集 V8 覆盖率：json 供平台上报，cobertura 供 diff-cover 计算变更行覆盖率
       # c8 统计口径由 .c8rc.json 统一配置（--all --src=src：未加载文件按 0% 纳入报告；action 入口 index.js 不计入）
@@ -75,7 +56,7 @@ jobs:
       - name: diff coverage check
         if: ${{ env.IS_PR_EVENT == 'true' }}
         run: |
-          pip install "diff-cover>=9.6,<11"
+          python -m pip install "diff-cover>=9.6,<11"
           BASE_REF="${ATOMGIT_BASE_REF:-}"
           if [ -z "$BASE_REF" ]; then
             echo "[UT 增量行覆盖率门禁] 未取到基线分支（ATOMGIT_BASE_REF 为空，评论触发不携带 PR 基线），跳过增量门禁"
