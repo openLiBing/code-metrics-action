@@ -58977,7 +58977,7 @@ async function run() {
       pipelineName: pipelineName
     });
 
-    // 设置输出（平台自适应：GitHub 走 core.setOutput，GitCode 写 ATOMGIT_OUTPUT）
+    // 设置输出（仅 GitHub 写 action outputs；GitCode 结果面板只保留中文概览行，不写重复英文键）
     setCiOutput('code-scale', result.codeScale);
     setCiOutput('avg-function-loc', result.avgFunctionLoc);
     setCiOutput('avg-cyclomatic-complexity', result.avgCyclomaticComplexity);
@@ -59984,7 +59984,6 @@ module.exports = CoderepoUploader;
 /***/ 7496:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const fs = __nccwpck_require__(9896);
 const core = __nccwpck_require__(7484);
 
 /**
@@ -60063,30 +60062,19 @@ function resolveRepoUrlFromEnv() {
 }
 
 /**
- * 平台自适应写 step output。
- * GitCode 不识别 GitHub 的 ::set-output 协议（core.setOutput 在 GitCode 下不生效），
- * 必须显式写 ATOMGIT_OUTPUT；GitHub 继续走 core.setOutput。
+ * 写 action step output，仅 GitHub Actions 生效。
+ * GitCode 的 ATOMGIT_OUTPUT 会直接渲染到流水线结果面板，写入英文指标键会与
+ * 中文概览行（appendAtomgitOutput）重复展示，因此 GitCode 不输出英文键。
  *
  * @param {string} name 输出名
  * @param {string|number} value 输出值
  */
 function setCiOutput(name, value) {
+  if (!IS_GITHUB) {
+    return;
+  }
   // 无函数场景均值为 null：按 README 约定统一输出空字符串，避免 String(null) 落盘为字面量 null
-  const normalized = value === null || value === undefined ? '' : value;
-  if (IS_GITHUB) {
-    core.setOutput(name, normalized);
-    return;
-  }
-  const outputFile = process.env.ATOMGIT_OUTPUT;
-  if (!outputFile) {
-    core.warning(`ATOMGIT_OUTPUT 未设置，无法写入 step output: ${name}`);
-    return;
-  }
-  try {
-    fs.appendFileSync(outputFile, `${name}=${String(normalized)}\n`, 'utf8');
-  } catch (e) {
-    core.warning(`写入 step output 失败（${name}）: ${e.message}`);
-  }
+  core.setOutput(name, value === null || value === undefined ? '' : value);
 }
 
 module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput };

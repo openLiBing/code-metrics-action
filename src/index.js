@@ -310,7 +310,7 @@ async function run() {
       pipelineName: pipelineName
     });
 
-    // 设置输出（平台自适应：GitHub 走 core.setOutput，GitCode 写 ATOMGIT_OUTPUT）
+    // 设置输出（仅 GitHub 写 action outputs；GitCode 结果面板只保留中文概览行，不写重复英文键）
     setCiOutput('code-scale', result.codeScale);
     setCiOutput('avg-function-loc', result.avgFunctionLoc);
     setCiOutput('avg-cyclomatic-complexity', result.avgCyclomaticComplexity);
