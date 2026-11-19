@@ -17,7 +17,7 @@ permissions:
 jobs:
   malicious-code-pr-scan:
     name: malicious-code-pr-scan
-    runs-on: ["self-hosted", "region=cn"]
+    runs-on: ["self-hosted", "default"]
     steps:
       - name: Run malicious-code-pr-action
         uses: openlibing/malicious-code-scan-action/malicious-code-pr-scan-action@v1.0.0
