@@ -13,6 +13,7 @@ useDefault = true
 [allowlist]
 description = "已知误报/无需扫描路径"
 paths = [
+    '''(^|/)\.gitleaks\.toml$''',
     '''(^|/)tmp_pre-commit-reports(/|$)''',
     '''^\.idea/''',
     '''^target/''',
