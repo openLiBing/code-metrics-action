@@ -62,7 +62,7 @@ regexes = [
 ]
 
 # ---------------------------------------------------------------------
-# 规则 2：数据库/中间件连接串内嵌明文口令（mongodb://user:pass@）
+# 规则 2：数据库/中间件连接串内嵌明文口令（示例 mongodb://<user>:<pass>@host/db）  # gitleaks:allow -- 规则说明文本，非真实凭据
 #   针对如 mongodb://rwuser:pass@host:port/db 这类生产连接串直接写死
 #   含明文口令的场景。限定协议避免 http(s) URL 中的 user:pass 误报；
 #   占位符（redis://:${REDIS_PASSWORD}@ 空 user、user:CHANGE_ME@、
@@ -121,7 +121,7 @@ keywords = ["\"auth\""]
 # 规则 6-9：explicit 字段强脱敏 —— 密码/访问密钥/令牌赋值
 #   改自 sensitive-data-rules.yaml 的 explicit-*（原版用 lookbehind/
 #   lookahead，gitleaks 的 Go RE2 不支持），改为 word boundary + 值字符集
-#   + allowlist 过滤英文单词值。SecretGroup=2 取真实值作为 secret。
+#   + allowlist 过滤英文单词值。SecretGroup=2 取真实值作为 secret  # gitleaks:allow -- 规则说明文本，非真实凭据
 # ---------------------------------------------------------------------
 [[rules]]
 id = "explicit-password"
