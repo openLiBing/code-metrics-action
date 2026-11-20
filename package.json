@@ -11,7 +11,7 @@
     "lint": "eslint . --config eslint.config.mjs",
     "format": "prettier --write \"**/*.{json,yml,yaml,md}\"",
     "format:check": "prettier --check \"**/*.{json,yml,yaml,md}\"",
-    "package": "ncc build src/index.ts -o dist && node -e \"require('fs').cpSync('src/bin','dist/bin',{recursive:true})\"",
+    "package": "ncc build src/index.ts -o dist && node scripts/normalize-dist.js && node -e \"require('fs').cpSync('src/bin','dist/bin',{recursive:true})\"",
     "build": "npm run package",
     "all": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run package"
   },

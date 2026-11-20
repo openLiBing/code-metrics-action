@@ -101,4 +101,57 @@ test('getEmptyResult 函数总数为 0 时两个均值指标为 null', () => {
   expect(result.fileDetails).toEqual([]);
 });
 
+test('detect 汇总 runLizard 结果为函数级明细与均值', async () => {
+  const os = require('os');
+  const path = require('path');
+  const fs = require('fs');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lizard-detect-'));
+  try {
+    fs.writeFileSync(path.join(tempDir, 'a.js'), 'function f1() {}\nfunction f2() {}\n', 'utf8');
+    const detector = new LizardDetector({});
+    // 覆写 runLizard（实例方法）：不依赖 python3/lizard 二进制，直接注入固定结果，
+    // 让 detect() 走完文件收集 + 指标聚合的主流程
+    detector.runLizard = () => ({
+      totalFunctions: 2,
+      totalNloc: 30,
+      totalCC: 3,
+      functions: [
+        { name: 'f1', nloc: 10, cc: 1, startLine: 1, endLine: 10, filename: path.join(tempDir, 'a.js') },
+        { name: 'f2', nloc: 20, cc: 2, startLine: 12, endLine: 31, filename: path.join(tempDir, 'a.js') }
+      ]
+    });
+    const result = await detector.detect(tempDir);
+    expect(result.totalFunctions).toBe(2);
+    expect(result.totalNloc).toBe(30);
+    expect(result.averageFunctionLoc).toBe(15);
+    expect(result.averageCyclomaticComplexity).toBe(1.5);
+    // 同一文件的函数聚合为一条文件级明细
+    expect(result.fileDetails.length).toBe(1);
+    expect(result.fileDetails[0].functionCount).toBe(2);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('detect 在函数总数为 0 时返回无数据空结果', async () => {
+  const os = require('os');
+  const path = require('path');
+  const fs = require('fs');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lizard-empty-'));
+  try {
+    fs.writeFileSync(path.join(tempDir, 'config.txt'), 'hello\n', 'utf8');
+    const detector = new LizardDetector({});
+    // runLizard 找不到 python3/lizard 时的真实降级形态：函数总数 0
+    detector.runLizard = () => ({ totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] });
+    const result = await detector.detect(tempDir);
+    // 均值指标无数据返回 null，而不是误报为 0
+    expect(result.totalFunctions).toBe(0);
+    expect(result.averageFunctionLoc).toBeNull();
+    expect(result.averageCyclomaticComplexity).toBeNull();
+    expect(result.fileDetails).toEqual([]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 export {};

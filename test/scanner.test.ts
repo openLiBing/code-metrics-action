@@ -44,4 +44,32 @@ test('MetricsScanner 构造时按配置创建检测器与上报器', () => {
   expect(path.isAbsolute(scanner.workingDir)).toBe(true);
 });
 
+test('scan 全流程返回总体指标与文件明细（不上传）', async () => {
+  const os = require('os');
+  const fs = require('fs');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-e2e-'));
+  try {
+    fs.writeFileSync(path.join(tempDir, 'a.js'), 'const x = 1;\nconst y = 2;\n', 'utf8');
+    const scanner = new MetricsScanner({
+      sourceDir: tempDir,
+      detectors: { sloc: { enabled: true }, lizard: { enabled: true }, duplication: { enabled: true } }
+    });
+    const result = await scanner.scan();
+
+    // validate 4 项全局指标全部就位（sloc 兜底统计保证 codeScale 有值）
+    expect(result.codeScale).toBeGreaterThan(0);
+    expect(typeof result.totalCodeDuplicationRate).toBe('number');
+    expect(typeof result.totalFileDuplicationRate).toBe('number');
+    // fileDetails 从格式化结果中分离后独立返回
+    expect(Array.isArray(result.fileDetails)).toBe(true);
+    expect(result.fileDetails.length).toBe(1);
+    expect(result.fileDetails[0].filePath).toBe('a.js');
+    // detectionInfo 携带解析后的 source 列表与三个探测器的启用状态
+    expect(result.detectionInfo.sources).toEqual([tempDir]);
+    expect(result.detectionInfo.tools).toEqual({ sloc: true, lizard: true, duplication: true });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 export {};

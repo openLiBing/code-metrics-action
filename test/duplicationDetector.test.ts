@@ -177,4 +177,78 @@ test('getEmptyResult 返回全零指标', () => {
   expect(result.duplicationOccurrences).toEqual([]);
 });
 
+// ============ detect() 全流程（真实 fixture 文件，不 mock 内部方法） ============
+
+test('detect 全流程：跨文件 10+ 行相同代码计为重复并产出块级明细', async () => {
+  const os = require('os');
+  const path = require('path');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-detect-'));
+  try {
+    // a.js 与 b.js：12 行完全相同的有效代码（≥ 检测窗口 10 行，触发重复）
+    const duplicated = Array.from({ length: 12 }, (_: any, i: number) => `const value_${i + 1} = ${i + 1};`).join('\n');
+    fs.writeFileSync(path.join(tempDir, 'a.js'), duplicated + '\n', 'utf8');
+    fs.writeFileSync(path.join(tempDir, 'b.js'), duplicated + '\n', 'utf8');
+    // c.js：内容不同且不构成重复，验证不误报
+    fs.writeFileSync(path.join(tempDir, 'c.js'), 'const uniqueOne = 100;\nconst uniqueTwo = 200;\nconst uniqueThree = 300;\n', 'utf8');
+
+    // sloc 结果：scc 口径每文件 loc（12/12/3），codeScale 作为总重复率分母
+    const slocResult = {
+      codeScale: 27,
+      fileDetails: [
+        { filePath: 'a.js', loc: 12 },
+        { filePath: 'b.js', loc: 12 },
+        { filePath: 'c.js', loc: 3 }
+      ]
+    };
+
+    const detector = new DuplicationDetector({});
+    const result = await detector.detect(tempDir, slocResult);
+
+    // a/b 各 12 行全部重复：duplicatedLines=24，总重复率 24/27
+    expect(result.duplicatedLines).toBe(24);
+    expect(result.totalCodeDuplicationRate).toBe(88.89);
+    // a/b 内容完全一致：2 个文件参与一致（a、b 各计 1），占总文件数 2/3
+    expect(result.totalFiles).toBe(3);
+    expect(result.duplicatedFiles).toBe(2);
+    expect(result.totalFileDuplicationRate).toBe(66.67);
+    expect(result.identicalFileDetails.length).toBe(1);
+    const identical = result.identicalFileDetails[0];
+    expect(identical.duplicatedFiles.length).toBe(2);
+
+    // 重复块出现位置：a.js 与 b.js 各 1 块，同属一个内容分组
+    expect(result.duplicationOccurrences.length).toBe(2);
+    const occPaths = result.duplicationOccurrences.map((o: any) => o.filePath).sort();
+    expect(occPaths).toEqual(['a.js', 'b.js']);
+    expect(result.duplicationOccurrences[0].groupId).toBe(result.duplicationOccurrences[1].groupId);
+
+    // 文件级明细：仅有重复的 a.js / b.js 入列，每文件 12 行重复且带上下文快照
+    const detailPaths = result.fileDetails.map((d: any) => d.filePath).sort();
+    expect(detailPaths).toEqual(['a.js', 'b.js']);
+    for (const d of result.fileDetails) {
+      expect(d.duplicationLineCount).toBe(12);
+      expect(d.snapshotData).toBeTruthy();
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('detect 在无重复内容时返回全零结果', async () => {
+  const os = require('os');
+  const path = require('path');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-clean-'));
+  try {
+    fs.writeFileSync(path.join(tempDir, 'x.js'), 'const only = 1;\nconst here = 2;\n', 'utf8');
+    const detector = new DuplicationDetector({});
+    const result = await detector.detect(tempDir, null);
+    expect(result.duplicatedLines).toBe(0);
+    expect(result.totalCodeDuplicationRate).toBe(0);
+    expect(result.duplicatedBlocks).toBe(0);
+    expect(result.duplicationOccurrences).toEqual([]);
+    expect(result.fileDetails).toEqual([]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 export {};
