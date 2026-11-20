@@ -1,0 +1,67 @@
+# 夜间全量扫描配置（nightly）：gitleaks 走 `dir .` 单路径全量并输出原生 SARIF；
+# PR 增量配置见 .pre-commit-config.yaml（保持 pass_filenames: true，不加 --report-path）。
+# pre-commit配置，首次使用需执行以下命令确保生效，可在代码提交前拦截并检查
+# pip install pre-commit  # 安装pre-commit工具
+# pre-commit install  # 安装git hook，请在代码仓根目录执行
+repos:
+  # 夜间全量：报告目录不入库，运行时先建目录（幂等），避免 gitleaks/eslint 写报告失败
+  - repo: local
+    hooks:
+      - id: ensure-sarif-dir
+        name: Ensure SARIF report directory
+        language: system
+        entry: python -c "import os; os.makedirs('tmp_pre-commit-reports', exist_ok=True)"
+        pass_filenames: false
+        always_run: true
+  # ===================== 通用基础钩子（所有语言） =====================
+  #- repo: https://github.com/pre-commit/pre-commit-hooks
+  - repo: https://gitcode.com/gh_mirrors/pr/pre-commit-hooks # 使用gitcode镜像加速
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace # 移除行尾空白字符
+      - id: end-of-file-fixer # 确保文件以换行符结尾
+      - id: check-yaml # 校验 YAML 文件语法
+      - id: check-json # 校验 JSON 文件语法
+      - id: check-xml # 校验 XML 文件语法
+      - id: check-merge-conflict # 检查未解决的合并冲突标记
+      - id: check-added-large-files # 拦截超大文件提交（默认500KB）
+      #  args: ["--maxkb", "500"]  # 支持自定义修改
+      - id: detect-private-key # 检测私钥/敏感信息泄露
+
+  # ===================== 敏感信息扫描 =====================
+  - repo: https://gitcode.com/openlibing/pre-commit-hook-gitleaks.git
+    rev: v8.30.1.1
+    hooks:
+      - id: gitleaks
+        args: [dir, ., --redact, --config, .gitleaks.toml, --no-banner, --report-format, sarif, --report-path, ./tmp_pre-commit-reports/gitleaks.sarif]  # 夜间全量：单路径 dir . + 原生 SARIF（PR 增量配置见 .pre-commit-config.yaml）
+        pass_filenames: false  # 夜间全量：扫描路径由 args 的 `dir .` 提供
+  # 格式化
+  # 运行前请先本地安装：npm install --save-dev --save-exact prettier@3.9.5
+  - repo: local
+    hooks:
+      - id: prettier-format
+        name: prettier format
+        entry: npx prettier --write
+        language: system
+        files: \.(json|yml|yaml|md)$
+
+  - repo: local
+    hooks:
+      - id: eslint-sarif
+        name: eslint (sarif report)
+        # entry 先建输出目录：ESLint --output-file 不创建父目录，不能依赖流水线 mkdir
+        entry: >
+          node -e "require('fs').mkdirSync('tmp_pre-commit-reports',{recursive:true});const r=require('child_process').spawnSync(process.execPath,['node_modules/eslint/bin/eslint.js',...process.argv.slice(1)],{stdio:'inherit'});process.exit(r.status==null?1:r.status)" --
+        language: system
+        files: \.(js|ts)$
+        require_serial: true
+        args:
+          - --config
+          - eslint.config.mjs
+          - --format
+          - "@microsoft/eslint-formatter-sarif"
+          - --output-file
+          - ./tmp_pre-commit-reports/eslint.sarif
+          - --no-error-on-unmatched-pattern
+          # 全量检查（--all-files）会显式传入被忽略的 dist/index.js，消除对应告警
+          - --no-warn-ignored
