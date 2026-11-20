@@ -33,8 +33,19 @@ repos:
     rev: v8.30.1.1
     hooks:
       - id: gitleaks
-        args: [dir, ., --redact, --config, .gitleaks.toml, --no-banner, --report-format, sarif, --report-path, ./tmp_pre-commit-reports/gitleaks.sarif]  # 夜间全量：单路径 dir . + 原生 SARIF（PR 增量配置见 .pre-commit-config.yaml）
-        pass_filenames: false  # 夜间全量：扫描路径由 args 的 `dir .` 提供
+        args: [
+            dir,
+            .,
+            --redact,
+            --config,
+            .gitleaks.toml,
+            --no-banner,
+            --report-format,
+            sarif,
+            --report-path,
+            ./tmp_pre-commit-reports/gitleaks.sarif,
+          ] # 夜间全量：单路径 dir . + 原生 SARIF（PR 增量配置见 .pre-commit-config.yaml）
+        pass_filenames: false # 夜间全量：扫描路径由 args 的 `dir .` 提供
   # 格式化
   # 运行前请先本地安装：npm install --save-dev --save-exact prettier@3.9.5
   - repo: local
