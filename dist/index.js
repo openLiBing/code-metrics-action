@@ -3303,6 +3303,31 @@ function onConfigChange(fn) {
   _listeners.push(fn);
 }
 
+/** 区域名白名单：仅小写字母、数字与连字符（如 cn-southwest-2）。 */
+const REGION_PATTERN = /^[a-z0-9-]+$/;
+
+/**
+ * 校验会拼进 STS 端点 URL 的配置值，非法时抛错而不是静默接受。
+ * credentials.js 的端点为 `https://sts.${region}.myhuaweicloud.com${stsAssumePath}`，
+ * region 中出现 '@' 等字符会改变 URL 解析后的实际主机；stsAssumePath 含 '://' 或空白
+ * 同样可导致请求发往非预期地址。
+ */
+function _validateOverride(key, value) {
+  if (key === 'region') {
+    if (typeof value !== 'string' || !REGION_PATTERN.test(value)) {
+      throw new TypeError(`region 非法（${JSON.stringify(value)}）：仅允许小写字母、数字与连字符`);
+    }
+    return;
+  }
+  if (key === 'stsAssumePath') {
+    if (typeof value !== 'string' || !value.startsWith('/') || /[@\s?#]/.test(value) || value.includes('://')) {
+      throw new TypeError(
+        `stsAssumePath 非法（${JSON.stringify(value)}）：必须以 / 开头，且不能包含 @、空白、?、# 或 ://`
+      );
+    }
+  }
+}
+
 /**
  * 覆盖内置配置（如更换账号 / 区域 / 受众 / 委托等）。
  * @param {Object} overrides 可覆盖字段：accountId/audience/agencyName/oidcProviderName/
@@ -3320,6 +3345,12 @@ function configure(overrides = {}) {
     'region', 'stsAssumePath', 'durationSeconds'
   ];
   const changed = credentialKeys.filter((k) => overrides[k] !== undefined && overrides[k] !== cfg[k]);
+  // 先整体校验再写入：非法值直接抛错，避免配置被部分覆盖
+  for (const k of allowed) {
+    if (overrides[k] !== undefined) {
+      _validateOverride(k, overrides[k]);
+    }
+  }
   for (const k of allowed) {
     if (overrides[k] !== undefined) {
       cfg[k] = overrides[k];
@@ -3554,14 +3585,21 @@ module.exports = { getCredentials };
 
 /**
  * HTTP 请求工具模块：sendRequest 发送请求并解析 JSON 响应。
- * 基于 Node 内置 fetch（Node 18+），零第三方依赖。
+ * 基于 Node 内置 fetch（Node 18+），零第三方依赖；Node 16 等无内置 fetch 的运行时
+ * 回退到 Node 内置 http/https 实现（同样零第三方依赖，不引入 undici 等 HTTP 库）。
  * 调试模式打印完整请求/响应日志（敏感字段自动脱敏），非调试模式不打印请求详情。
  */
 
+const http = __nccwpck_require__(8611);
+const https = __nccwpck_require__(5692);
+
 const { debug, maskHeaders, maskBody, clip } = __nccwpck_require__(9463);
 
-// Node 18+ 有内置全局 fetch；在只支持 node16 运行时的 CI 平台（如 GitCode Action）下
-// 回退到 undici（SDK 直接依赖，固定 ^5 兼容 Node 16，随 ncc 构建内联进 Action 产物）。
+// 回退实现的超时：与 fetch 默认 headersTimeout/bodyTimeout（300s）同量级，
+// 避免无内置 fetch 的运行时在服务端无响应时无限挂起。
+const FALLBACK_TIMEOUT_MS = 300000;
+
+// Node 18+ 有内置全局 fetch；无内置 fetch 的运行时回退到下面的 _nodeFetch。
 // 运行时动态判断而非模块加载时固化，保证测试拦截器替换全局 fetch 后仍生效。
 
 /**
@@ -3575,6 +3613,7 @@ const { debug, maskHeaders, maskBody, clip } = __nccwpck_require__(9463);
  *          JSON 解析失败时 data = { raw }
  */
 async function sendRequest(method, url, headers, body) {
+  _assertHttps(url);
   debug(`--> ${String(method).toUpperCase()} ${_safeUrlForLog(url)}`);
   debug(`--> 请求头: ${JSON.stringify(maskHeaders(headers))}`);
   if (body !== undefined && body !== null && body !== '') {
@@ -3583,11 +3622,15 @@ async function sendRequest(method, url, headers, body) {
 
   let res;
   try {
-    const fetchImpl = typeof fetch === 'function' ? fetch : (...args) => (__nccwpck_require__(6752).fetch)(...args);
+    const fetchImpl = typeof fetch === 'function' ? fetch : _nodeFetch;
     res = await fetchImpl(url, {
       method,
       headers,
-      body: body || undefined
+      body: body || undefined,
+      // 禁止自动跟随跳转：https 端点返回 302/307 指向 http:// 时，fetch 会把请求体与
+      // X-Security-Token 等自定义头重发到明文地址（跨源仅剥离 Authorization），
+      // 与「强制 HTTPS」目标冲突。STS / OIDC / APIG 均无需跟随跳转。
+      redirect: 'error'
     });
   } catch (err) {
     throw new Error(`网络请求失败 ${method} ${_safeUrlForLog(url)}: ${err.message}`);
@@ -3595,7 +3638,7 @@ async function sendRequest(method, url, headers, body) {
 
   const raw = await res.text();
   debug(`<-- HTTP 状态码: ${res.status}`);
-  debug(`<-- 响应头: ${JSON.stringify(_headersToObject(res.headers))}`);
+  debug(`<-- 响应头: ${JSON.stringify(maskHeaders(_headersToObject(res.headers)))}`);
   debug(`<-- 响应体: ${raw ? clip(maskBody(raw)) : '(空)'}`);
 
   let data = {};
@@ -3626,6 +3669,22 @@ function _describeBody(body) {
 }
 
 /**
+ * 强制 HTTPS：拒绝 http:// 等非 TLS 协议，避免 Authorization / X-Security-Token 等凭证明文传输。
+ * URL 无法解析时同样拒绝，防止通过畸形 URL 绕过协议判断。
+ */
+function _assertHttps(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url));
+  } catch (e) {
+    throw new Error('无效的请求 URL：无法解析');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`仅允许 HTTPS 请求，已拒绝 ${parsed.protocol} (${_safeUrlForLog(url)})`);
+  }
+}
+
+/**
  * 异常消息中的 URL 展示：只保留协议 + host + path，去掉 query / fragment，
  * 避免 URL 查询参数中的令牌或票据随异常消息进入日志。
  */
@@ -3645,6 +3704,79 @@ function _headersToObject(headers) {
     out[key] = value;
   });
   return out;
+}
+
+/**
+ * 全局 fetch 缺失时（Node 16 等无内置 fetch 的运行时）的最小 fetch 实现：
+ * 基于 Node 内置 http/https，零第三方依赖，仅覆盖 sendRequest 用到的能力
+ * （method / headers / body 发送，status / headers.forEach / text 读取）。
+ * 不自动跟随重定向：调用方为 IAM / STS / APIG 固定接口，均不返回重定向。
+ */
+function _nodeFetch(url, options) {
+  const opts = options || {};
+  return new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(String(url));
+    } catch (e) {
+      reject(new Error(`无效的 URL: ${String(url)}`));
+      return;
+    }
+
+    const transport = parsed.protocol === 'https:' ? https : http;
+    const method = String(opts.method || 'GET').toUpperCase();
+    const headers = Object.assign({}, opts.headers);
+    const body = opts.body;
+    const hasBody = body !== undefined && body !== null && body !== '';
+    if (hasBody) {
+      headers['Content-Length'] = Buffer.byteLength(body);
+    }
+
+    const req = transport.request({
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method,
+      headers
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        resolve({
+          status: res.statusCode,
+          headers: _toFetchHeaders(res.headers),
+          text: async () => Buffer.concat(chunks).toString('utf-8')
+        });
+      });
+      res.on('error', reject);
+    });
+
+    req.setTimeout(FALLBACK_TIMEOUT_MS, () => {
+      req.destroy(new Error(`请求超时（${FALLBACK_TIMEOUT_MS}ms）`));
+    });
+    req.on('error', reject);
+    if (hasBody) {
+      req.write(body);
+    }
+    req.end();
+  });
+}
+
+/** 把 Node 原生响应头包装成 fetch Headers 的最小兼容对象（仅需 forEach）。 */
+function _toFetchHeaders(rawHeaders) {
+  const flat = {};
+  for (const key of Object.keys(rawHeaders || {})) {
+    const value = rawHeaders[key];
+    flat[key.toLowerCase()] = Array.isArray(value) ? value.join(', ') : value;
+  }
+  return {
+    forEach(cb) {
+      for (const key of Object.keys(flat)) {
+        cb(flat[key], key);
+      }
+    }
+  };
 }
 
 module.exports = { sendRequest };
@@ -3776,15 +3908,22 @@ function mask(value, head = 6, tail = 4) {
 const SENSITIVE_KEYS = [
   'authorization', 'x-security-token', 'x-auth-token', 'password', 'secret',
   'id_token', 'access_key_id', 'secret_access_key', 'security_token',
-  'accesskeyid', 'secretaccesskey', 'securitytoken', 'client_secret'
+  'accesskeyid', 'secretaccesskey', 'securitytoken', 'client_secret',
+  'access_token', 'refresh_token', 'token', 'session_token', 'api_key',
+  'private_key', 'secret_key', 'credentials', 'auth_token', 'bearer_token'
 ];
 
 /** JWT 特征（三段 base64url，以 eyJ 开头），用于在任意文本中识别并脱敏令牌。 */
 const JWT_RE = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
 
-/** 文本脱敏：将其中的 JWT 令牌整体脱敏。 */
+/** PEM 私钥特征（RSA / EC / PKCS#8 / OPENSSH 等任意 PRIVATE KEY 块），整段匹配。 */
+const PEM_PRIVATE_KEY_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
+
+/** 文本脱敏：将其中的 PEM 私钥与 JWT 令牌整段脱敏。 */
 function maskText(text) {
-  return String(text).replace(JWT_RE, (m) => mask(m, 20, 10));
+  return String(text)
+    .replace(PEM_PRIVATE_KEY_RE, (m) => mask(m, 20, 10))
+    .replace(JWT_RE, (m) => mask(m, 20, 10));
 }
 
 /** 深度脱敏 JSON 结构：敏感字段名直接脱敏，其余字段递归处理（字符串再做 JWT 识别）。 */
@@ -3883,6 +4022,14 @@ async function getOidcTokenFromActions() {
     return null;
   }
   const url = new URL(reqUrl);
+  // 该地址由流水线运行时注入且请求会携带 Bearer 请求令牌、响应体是 ID Token，
+  // 必须强制 https，避免被改写为 http 后令牌明文传输。
+  if (url.protocol !== 'https:') {
+    throw new Error(
+      `OIDC 请求地址必须为 https（当前协议 ${url.protocol}，主机 ${url.host}）：` +
+      'ACTIONS_ID_TOKEN_REQUEST_URL 携带的请求令牌与返回的 ID Token 不允许明文传输'
+    );
+  }
   url.searchParams.append('audience', cfg.audience);
   const res = await sendRequest('GET', url.toString(), {
     Authorization: `Bearer ${reqToken}`,
