@@ -29,16 +29,19 @@ stages:
           - name: setup-prettier
             run: npm install --save-dev --save-exact prettier@3.9.5
 
+          - name: Prepare SARIF report directory
+            run: mkdir -p ./tmp_pre-commit-reports
+
           - name: run pre-commit
             id: pre-commit
             uses: openlibing/pre-commit-action@v1.1.0
             with:
-              extra_args: "--all-files"
+              extra_args: "--config=.pre-commit-nightly-config.yaml --all-files"
               report-dir: ./tmp_pre-commit-reports/
 
           - name: upload sarif reports
             if: ${{ always() }}
-            uses: openlibing/upload-sarif-action@v1.0.0
+            uses: openlibing/upload-sarif-action@v1.0.2
             with:
               sarif_file: ${{ steps.pre-commit.outputs.sarif-files }}
               source_path: .
