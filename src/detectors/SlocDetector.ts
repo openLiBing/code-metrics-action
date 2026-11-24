@@ -2,7 +2,8 @@ const { execSync, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const BaseDetector = require('./BaseDetector');
-const FileCollector = require('../utils/fileCollector');
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+import { FileCollector } from '../utils/fileCollector';
 
 // scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
 function getSccPath() {
@@ -190,7 +191,6 @@ class SlocDetector extends BaseDetector {
     // 如果 scc --by-file 未产出有效文件明细，回退到逐文件统计获取明细
     if (fileDetails.length === 0) {
       console.log('[DEBUG] scc --by-file 未产出文件明细，回退到逐文件统计');
-      const FileCollector = require('../utils/fileCollector');
       const excludeDirs = this.config.excludeDirs || [];
       const allFiles: any[] = [];
       for (const src of sources) {
@@ -269,7 +269,6 @@ class SlocDetector extends BaseDetector {
 
   // 回退方案：当 scc 不可用时，逐文件读取并统计行数
   fallbackDetect(sources: any, excludeDirs: any) {
-    const FileCollector = require('../utils/fileCollector');
     const allFiles: any[] = [];
     for (const src of sources) {
       const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);

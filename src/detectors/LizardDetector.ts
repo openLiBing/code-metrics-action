@@ -3,7 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const BaseDetector = require('./BaseDetector');
-const FileCollector = require('../utils/fileCollector');
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+import { FileCollector } from '../utils/fileCollector';
 
 class LizardDetector extends BaseDetector {
   tempJsonFile: string;

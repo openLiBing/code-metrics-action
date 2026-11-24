@@ -1,5 +1,174 @@
-class MetricsCalculator {
-  static mergeResults(slocResult: any, lizardResult: any, duplicationResult: any) {
+/**
+ * 指标合并与上报格式化（纯逻辑层，无 IO 副作用）。
+ * 三个检测器的输出契约以 interface 固化，跨模块传递不再依赖 any：
+ * - 输入契约（SlocResult 等）：各键允许缺失——检测器可被禁用（整体为 {}），
+ *   合并层对缺失字段有防御性兜底，缺哪些由 validate 运行时把关；
+ * - 输出契约（MergedFileDetail / ReportMetrics）：字段完整，缺省值在本层归一化。
+ */
+
+/** sloc 检测器的文件级明细（scc --by-file 口径） */
+interface SlocFileDetail {
+  filePath: string;
+  language?: string;
+  loc?: number;
+  commentLines?: number;
+}
+
+/** lizard 的函数级明细（合并层仅透传展示，字段由 lizard 解析产出） */
+interface FunctionDetail {
+  functionName: string;
+  functionLoc: number;
+  startLine: number;
+  endLine: number;
+}
+
+/** lizard 检测器的文件级明细 */
+interface LizardFileDetail {
+  filePath: string;
+  functionCount?: number;
+  avgFunctionLoc?: number;
+  avgCyclomaticComplexity?: number;
+  functionDetails?: FunctionDetail[];
+}
+
+/** duplication 检测器的文件级明细 */
+interface DuplicationFileDetail {
+  filePath: string;
+  duplicationRate?: number;
+  duplicationLineCount?: number;
+  /** 该文件有效代码行数（scc loc 优先），供合并时兜底 scc 不识别扩展名文件的 loc */
+  totalLines?: number;
+  /** 重复块上下文快照（重复块±5行整体 Base64），由 buildContextSegments 挂载 */
+  snapshotData?: string | null;
+  /** 与该文件内容重复的文件列表 */
+  duplicatedFiles?: string[];
+}
+
+/** 内容完全一致文件组（总文件重复率下钻用，duplicatedFiles 含组内全部文件） */
+interface IdenticalFileDetail {
+  duplicatedFiles: string[];
+}
+
+/** 重复块出现位置（content 为明文，uploader 做 Base64 编码后分批上报） */
+interface DuplicationOccurrence {
+  groupId: string;
+  contentHash: string;
+  occurrenceIndex: number;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  content: string;
+}
+
+/** sloc 检测器整体结果（fileDetails 之外的字段原样并入合并结果） */
+interface SlocResult {
+  codeScale?: number;
+  rawLines?: number;
+  commentLines?: number;
+  blankLines?: number;
+  sourceLines?: number;
+  complexity?: number;
+  fileDetails?: SlocFileDetail[];
+}
+
+/** lizard 检测器整体结果 */
+interface LizardResult {
+  totalFunctions?: number;
+  totalNloc?: number;
+  averageFunctionLoc?: number;
+  totalCyclomaticComplexity?: number;
+  averageCyclomaticComplexity?: number;
+  cyclomaticComplexityPerFile?: number;
+  fileDetails?: LizardFileDetail[];
+}
+
+/** duplication 检测器整体结果 */
+interface DuplicationResult {
+  totalCodeDuplicationRate?: number;
+  totalFileDuplicationRate?: number;
+  duplicatedBlocks?: number;
+  duplicatedLines?: number;
+  totalLines?: number;
+  duplicatedFiles?: number;
+  totalFiles?: number;
+  fileDetails?: DuplicationFileDetail[];
+  identicalFileDetails?: IdenticalFileDetail[];
+  duplicationOccurrences?: DuplicationOccurrence[];
+}
+
+/** 三检测器合并后的文件级明细（mergeFileDetails 输出，字段完整） */
+interface MergedFileDetail {
+  filePath: string;
+  language: string;
+  loc: number;
+  commentLines: number;
+  functionCount: number;
+  // 无函数文件两个均值指标不适用，保持 null（0 会被误读为函数代码行很短/复杂度很低）
+  avgFunctionLoc: number | null;
+  avgCyclomaticComplexity: number | null;
+  functionDetails: FunctionDetail[];
+  duplicationRate: number;
+  duplicationLineCount: number;
+  duplicatedFiles: string[];
+  // 仅 duplication 覆盖的文件携带上下文快照，其余场景缺省
+  snapshotData?: string | null;
+}
+
+/**
+ * 三检测器合并后的指标集（validate 前的中间形态）：
+ * - 总体标量允许缺失，且允许字符串形式注入（上游解析外部工具产出），
+ *   formatForReport 统一 Number() 归一化后才进入上报契约；
+ * - 三个明细集合 validate 不校验、formatForReport 以 || [] 兜底，同样允许缺失。
+ */
+interface MergedMetrics {
+  codeScale?: number | string;
+  rawLines?: number | string;
+  commentLines?: number | string;
+  blankLines?: number | string;
+  sourceLines?: number | string;
+  complexity?: number | string;
+  totalFunctions?: number | string;
+  totalNloc?: number | string;
+  averageFunctionLoc?: number | string | null;
+  totalCyclomaticComplexity?: number | string;
+  averageCyclomaticComplexity?: number | string | null;
+  cyclomaticComplexityPerFile?: number | string;
+  totalCodeDuplicationRate?: number | string;
+  totalFileDuplicationRate?: number | string;
+  duplicatedBlocks?: number | string;
+  duplicatedLines?: number | string;
+  totalLines?: number | string;
+  duplicatedFiles?: number | string;
+  totalFiles?: number | string;
+  fileDetails?: MergedFileDetail[];
+  identicalFileDetails?: IdenticalFileDetail[];
+  duplicationOccurrences?: DuplicationOccurrence[];
+}
+
+/** 上报格式（uploader 上报契约）：数值缺省兜底 0，两个函数均值无数据保持 null。scanner 以此契约组装扫描结果 */
+export interface ReportMetrics {
+  codeScale: number;
+  codeLineTotal: number;
+  commentLines: number;
+  complexityCount: number;
+  cyclomaticComplexityPerFile: number;
+  duplicatedBlocks: number;
+  duplicatedLines: number;
+  avgFunctionLoc: number | null;
+  avgCyclomaticComplexity: number | null;
+  totalCodeDuplicationRate: number;
+  totalFileDuplicationRate: number;
+  fileDetails: MergedFileDetail[];
+  identicalFileDetails: IdenticalFileDetail[];
+  duplicationOccurrences: DuplicationOccurrence[];
+}
+
+export class MetricsCalculator {
+  static mergeResults(
+    slocResult: SlocResult,
+    lizardResult: LizardResult,
+    duplicationResult: DuplicationResult
+  ): MergedMetrics {
     // 合并总体指标（排除 fileDetails / identicalFileDetails / duplicationOccurrences，单独处理）
     const { fileDetails: slocFileDetails, ...slocMetrics } = slocResult;
     const { fileDetails: lizardFileDetails, ...lizardMetrics } = lizardResult;
@@ -29,10 +198,14 @@ class MetricsCalculator {
     };
   }
 
-  // 合并三个检测器的 fileDetails
-  static mergeFileDetails(slocFileDetails: any, lizardFileDetails: any, duplicationFileDetails: any) {
+  /** 合并三个检测器的 fileDetails（以 sloc 为基础，lizard/duplication 按 filePath 匹配） */
+  static mergeFileDetails(
+    slocFileDetails: SlocFileDetail[],
+    lizardFileDetails: LizardFileDetail[],
+    duplicationFileDetails: DuplicationFileDetail[]
+  ): MergedFileDetail[] {
     // 以 sloc 的 fileDetails 为基础（有 filePath, language, loc）
-    const fileMap = new Map();
+    const fileMap = new Map<string, MergedFileDetail>();
 
     for (const detail of slocFileDetails) {
       fileMap.set(detail.filePath, {
@@ -109,9 +282,9 @@ class MetricsCalculator {
     return [...fileMap.values()];
   }
 
-  static validate(metrics: any) {
+  static validate(metrics: MergedMetrics): boolean {
     // 4 项全局指标必须有数值
-    const required = [
+    const required: (keyof MergedMetrics)[] = [
       'codeScale',
       'totalCodeDuplicationRate',
       'totalFileDuplicationRate'
@@ -123,7 +296,10 @@ class MetricsCalculator {
     }
     // 两个函数均值在函数总数为 0 时允许为 null（无数据），但键必须存在，
     // 以区分"探测器未执行/未配置"与"无函数"
-    const nullableRequired = ['averageFunctionLoc', 'averageCyclomaticComplexity'];
+    const nullableRequired: (keyof MergedMetrics)[] = [
+      'averageFunctionLoc',
+      'averageCyclomaticComplexity'
+    ];
     for (const key of nullableRequired) {
       if (metrics[key] === undefined) {
         throw new Error(`Missing required metric: ${key}`);
@@ -136,10 +312,10 @@ class MetricsCalculator {
   /**
    * 数值指标归一化：缺失或非法值返回 null（无数据），避免 0 被当作真实指标上报
    *
-   * @param {*} value 原始值
-   * @returns {number|null} 数值或 null
+   * @param value 原始值
+   * @returns 数值或 null
    */
-  static toOptionalNumber(value: any): number | null {
+  static toOptionalNumber(value: unknown): number | null {
     if (value === null || value === undefined) {
       return null;
     }
@@ -147,7 +323,7 @@ class MetricsCalculator {
     return Number.isNaN(num) ? null : num;
   }
 
-  static formatForReport(metrics: any) {
+  static formatForReport(metrics: MergedMetrics): ReportMetrics {
     // 分离 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
     const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metrics;
 
@@ -181,7 +357,3 @@ class MetricsCalculator {
     };
   }
 }
-
-module.exports = MetricsCalculator;
-
-export {};

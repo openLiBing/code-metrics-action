@@ -1,14 +1,46 @@
 const SlocDetector = require('./detectors/SlocDetector');
 const LizardDetector = require('./detectors/LizardDetector');
 const DuplicationDetector = require('./detectors/DuplicationDetector');
-const MetricsCalculator = require('./calculators/MetricsCalculator');
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+import { MetricsCalculator } from './calculators/MetricsCalculator';
+// 纯类型导入：仅编译期使用，tsc / ncc 产物中都会被完全擦除
+import type { ReportMetrics } from './calculators/MetricsCalculator';
 const CoderepoUploader = require('./uploaders/CoderepoUploader');
 const ConfigLoader = require('./config/loader');
 const Logger = require('./utils/logger');
 const FileUtils = require('./utils/fileUtils');
-const FileCollector = require('./utils/fileCollector');
+import { FileCollector } from './utils/fileCollector';
 const path = require('path');
 const { sanitize } = require('./utils/sanitize');
+
+/** 上传结果信息（成功/失败其一），仅在启用上传的分支挂载到扫描结果，供入口层输出 */
+interface ScanUploadInfo {
+  success: boolean;
+  /** OBS 全量文件地址（成功时） */
+  obsUrl?: string;
+  /** 平台详情页跳转链接（成功且平台返回时） */
+  detailLink?: string;
+  /** 平台提示文案（成功且平台返回时） */
+  tip?: string;
+  /** 失败原因（失败时） */
+  error?: string;
+}
+
+/** 扫描结果：上报格式化后的指标（复用 ReportMetrics 契约）+ 检测信息 + 可选上传结果 */
+interface ScanResult extends ReportMetrics {
+  detectionInfo: {
+    startTime: string;
+    endTime: string;
+    durationMs: number;
+    sources: string[];
+    tools: {
+      sloc: boolean;
+      lizard: boolean;
+      duplication: boolean;
+    };
+  };
+  uploadInfo?: ScanUploadInfo;
+}
 
 // 将日期格式化为 yyyy-MM-dd HH:mm:ss
 function formatDateTime(date: any) {
@@ -119,7 +151,7 @@ class MetricsScanner {
       const endTimeFormatted = formatDateTime(endTime);
       const durationMs = endTime.getTime() - startTime.getTime();
 
-      const result = {
+      const result: ScanResult = {
         ...overallMetrics,
         fileDetails: fileDetails,
         detectionInfo: {
@@ -157,13 +189,13 @@ class MetricsScanner {
         //   本地保留 groupId/filePath/起止行等元数据即可
         const compactResult = {
           ...result,
-          fileDetails: (result.fileDetails || []).map((fd: any) => {
+          fileDetails: (result.fileDetails || []).map((fd) => {
             const { snapshotData, ...rest } = fd;
             return rest;
           }),
           // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
           // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
-          duplicationOccurrences: (result.duplicationOccurrences || []).map((occ: any) => {
+          duplicationOccurrences: (result.duplicationOccurrences || []).map((occ) => {
             const MAX_CONTENT_CHARS = 15 * 1024;
             if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
               return {
@@ -253,5 +285,3 @@ module.exports = {
   DuplicationDetector,
   MetricsCalculator
 };
-
-export {};

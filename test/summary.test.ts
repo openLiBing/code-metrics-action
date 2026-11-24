@@ -2,7 +2,7 @@
  * 运行摘要构建工具单测（从 src/index.js 抽出的纯函数）。
  */
 const { test, expect } = require('@jest/globals');
-const { escapeCell, formatCstTime, buildSummaryMarkdown } = require('../src/utils/summary');
+import { escapeCell, formatCstTime, buildSummaryMarkdown } from '../src/utils/summary';
 
 test('escapeCell 处理空值、竖线与换行', () => {
   expect(escapeCell(undefined)).toBe('-');

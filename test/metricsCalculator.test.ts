@@ -2,7 +2,7 @@
  * 指标合并/格式化单测。
  */
 const { test, expect } = require('@jest/globals');
-const MetricsCalculator = require('../src/calculators/MetricsCalculator');
+import { MetricsCalculator } from '../src/calculators/MetricsCalculator';
 
 test('mergeFileDetails 以 sloc 为基础合并 lizard/duplication 文件明细', () => {
   const merged = MetricsCalculator.mergeFileDetails(
@@ -23,7 +23,7 @@ test('mergeFileDetails 以 sloc 为基础合并 lizard/duplication 文件明细'
   );
 
   expect(merged.length).toBe(2);
-  const a = merged.find((d: any) => d.filePath === 'a.js');
+  const a = merged.find((d) => d.filePath === 'a.js')!;
   expect(a.language).toBe('JavaScript');
   expect(a.loc).toBe(10);
   expect(a.functionCount).toBe(1);
@@ -31,7 +31,7 @@ test('mergeFileDetails 以 sloc 为基础合并 lizard/duplication 文件明细'
   expect(a.duplicatedFiles).toEqual(['b.js']);
 
   // duplication 独有文件：loc 用 totalLines 兜底
-  const b = merged.find((d: any) => d.filePath === 'b.prelds');
+  const b = merged.find((d) => d.filePath === 'b.prelds')!;
   expect(b.loc).toBe(12);
   expect(b.language).toBe('');
   expect(b.duplicationLineCount).toBe(6);
@@ -45,17 +45,37 @@ test('mergeResults 合并总体指标并保留明细数组', () => {
       totalCodeDuplicationRate: 1.2,
       fileDetails: [{ filePath: 'a.js', duplicationLineCount: 1 }],
       identicalFileDetails: [{ duplicatedFiles: ['a.js', 'b.js'] }],
-      duplicationOccurrences: [{ groupId: 'g' }]
+      duplicationOccurrences: [
+        {
+          groupId: 'g',
+          contentHash: 'abc123',
+          occurrenceIndex: 0,
+          filePath: 'a.js',
+          startLine: 1,
+          endLine: 5,
+          content: 'console.log(1);'
+        }
+      ]
     }
   );
 
   expect(result.codeScale).toBe(10);
   expect(result.averageFunctionLoc).toBe(5);
   expect(result.totalCodeDuplicationRate).toBe(1.2);
-  expect(result.fileDetails.length).toBe(1);
-  expect(result.fileDetails[0].duplicationLineCount).toBe(1);
+  expect(result.fileDetails!.length).toBe(1);
+  expect(result.fileDetails![0].duplicationLineCount).toBe(1);
   expect(result.identicalFileDetails).toEqual([{ duplicatedFiles: ['a.js', 'b.js'] }]);
-  expect(result.duplicationOccurrences).toEqual([{ groupId: 'g' }]);
+  expect(result.duplicationOccurrences).toEqual([
+    {
+      groupId: 'g',
+      contentHash: 'abc123',
+      occurrenceIndex: 0,
+      filePath: 'a.js',
+      startLine: 1,
+      endLine: 5,
+      content: 'console.log(1);'
+    }
+  ]);
 });
 
 test('mergeFileDetails 无函数文件的两个均值指标保持 null', () => {

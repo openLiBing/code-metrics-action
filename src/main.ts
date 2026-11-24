@@ -6,7 +6,8 @@ const os = require('os');
 const { execSync, execFile, execFileSync } = require('child_process');
 const { sanitize } = require('./utils/sanitize');
 const { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput } = require('./utils/ciContext');
-const { formatCstTime, buildSummaryMarkdown } = require('./utils/summary');
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+import { formatCstTime, buildSummaryMarkdown } from './utils/summary';
 
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)

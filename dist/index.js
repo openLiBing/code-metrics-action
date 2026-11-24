@@ -56652,11 +56652,19 @@ exports.z = function (fn) {
 /***/ }),
 
 /***/ 4264:
-/***/ ((module, exports) => {
+/***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
+/**
+ * 指标合并与上报格式化（纯逻辑层，无 IO 副作用）。
+ * 三个检测器的输出契约以 interface 固化，跨模块传递不再依赖 any：
+ * - 输入契约（SlocResult 等）：各键允许缺失——检测器可被禁用（整体为 {}），
+ *   合并层对缺失字段有防御性兜底，缺哪些由 validate 运行时把关；
+ * - 输出契约（MergedFileDetail / ReportMetrics）：字段完整，缺省值在本层归一化。
+ */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MetricsCalculator = void 0;
 class MetricsCalculator {
     static mergeResults(slocResult, lizardResult, duplicationResult) {
         // 合并总体指标（排除 fileDetails / identicalFileDetails / duplicationOccurrences，单独处理）
@@ -56676,7 +56684,7 @@ class MetricsCalculator {
             duplicationOccurrences: duplicationOccurrences || []
         };
     }
-    // 合并三个检测器的 fileDetails
+    /** 合并三个检测器的 fileDetails（以 sloc 为基础，lizard/duplication 按 filePath 匹配） */
     static mergeFileDetails(slocFileDetails, lizardFileDetails, duplicationFileDetails) {
         // 以 sloc 的 fileDetails 为基础（有 filePath, language, loc）
         const fileMap = new Map();
@@ -56767,7 +56775,10 @@ class MetricsCalculator {
         }
         // 两个函数均值在函数总数为 0 时允许为 null（无数据），但键必须存在，
         // 以区分"探测器未执行/未配置"与"无函数"
-        const nullableRequired = ['averageFunctionLoc', 'averageCyclomaticComplexity'];
+        const nullableRequired = [
+            'averageFunctionLoc',
+            'averageCyclomaticComplexity'
+        ];
         for (const key of nullableRequired) {
             if (metrics[key] === undefined) {
                 throw new Error(`Missing required metric: ${key}`);
@@ -56778,8 +56789,8 @@ class MetricsCalculator {
     /**
      * 数值指标归一化：缺失或非法值返回 null（无数据），避免 0 被当作真实指标上报
      *
-     * @param {*} value 原始值
-     * @returns {number|null} 数值或 null
+     * @param value 原始值
+     * @returns 数值或 null
      */
     static toOptionalNumber(value) {
         if (value === null || value === undefined) {
@@ -56821,7 +56832,7 @@ class MetricsCalculator {
         };
     }
 }
-module.exports = MetricsCalculator;
+exports.MetricsCalculator = MetricsCalculator;
 
 
 /***/ }),
@@ -56903,7 +56914,8 @@ const fs = __nccwpck_require__(9896);
 const path = __nccwpck_require__(6928);
 const crypto = __nccwpck_require__(6982);
 const BaseDetector = __nccwpck_require__(1504);
-const FileCollector = __nccwpck_require__(8124);
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+const fileCollector_1 = __nccwpck_require__(8124);
 class DuplicationDetector extends BaseDetector {
     constructor(config = {}) {
         super(config);
@@ -56933,7 +56945,7 @@ class DuplicationDetector extends BaseDetector {
         // 收集所有文件
         const allFiles = [];
         for (const src of sources) {
-            const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+            const files = fileCollector_1.FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
             allFiles.push(...files);
         }
         const uniqueFiles = [...new Set(allFiles)];
@@ -58086,7 +58098,8 @@ const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
 const os = __nccwpck_require__(857);
 const BaseDetector = __nccwpck_require__(1504);
-const FileCollector = __nccwpck_require__(8124);
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+const fileCollector_1 = __nccwpck_require__(8124);
 class LizardDetector extends BaseDetector {
     constructor(config = {}) {
         super(config);
@@ -58100,7 +58113,7 @@ class LizardDetector extends BaseDetector {
         // 收集所有文件
         const allFiles = [];
         for (const src of sources) {
-            const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+            const files = fileCollector_1.FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
             allFiles.push(...files);
         }
         // 去重
@@ -58414,7 +58427,8 @@ const { execSync, execFileSync } = __nccwpck_require__(5317);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
 const BaseDetector = __nccwpck_require__(1504);
-const FileCollector = __nccwpck_require__(8124);
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+const fileCollector_1 = __nccwpck_require__(8124);
 // scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
 function getSccPath() {
     // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
@@ -58554,7 +58568,7 @@ class SlocDetector extends BaseDetector {
                 const filePath = this.toRelativePath(fileName, sources);
                 // 后置过滤：用 FileCollector 的目录剪枝语义排除命中 exclude-dirs 的文件，
                 // 保证与 FileCollector / lizard / duplication 收集的文件范围完全一致
-                if (excludeDirs.length > 0 && FileCollector.isPathExcluded(filePath, excludeDirs)) {
+                if (excludeDirs.length > 0 && fileCollector_1.FileCollector.isPathExcluded(filePath, excludeDirs)) {
                     continue;
                 }
                 const code = file.Code || 0;
@@ -58584,11 +58598,10 @@ class SlocDetector extends BaseDetector {
         // 如果 scc --by-file 未产出有效文件明细，回退到逐文件统计获取明细
         if (fileDetails.length === 0) {
             console.log('[DEBUG] scc --by-file 未产出文件明细，回退到逐文件统计');
-            const FileCollector = __nccwpck_require__(8124);
             const excludeDirs = this.config.excludeDirs || [];
             const allFiles = [];
             for (const src of sources) {
-                const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+                const files = fileCollector_1.FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
                 allFiles.push(...files);
             }
             const uniqueFiles = [...new Set(allFiles)];
@@ -58662,10 +58675,9 @@ class SlocDetector extends BaseDetector {
     }
     // 回退方案：当 scc 不可用时，逐文件读取并统计行数
     fallbackDetect(sources, excludeDirs) {
-        const FileCollector = __nccwpck_require__(8124);
         const allFiles = [];
         for (const src of sources) {
-            const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+            const files = fileCollector_1.FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
             allFiles.push(...files);
         }
         const uniqueFiles = [...new Set(allFiles)];
@@ -58784,7 +58796,8 @@ const os = __nccwpck_require__(857);
 const { execSync, execFile, execFileSync } = __nccwpck_require__(5317);
 const { sanitize } = __nccwpck_require__(3262);
 const { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput } = __nccwpck_require__(42);
-const { formatCstTime, buildSummaryMarkdown } = __nccwpck_require__(8633);
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+const summary_1 = __nccwpck_require__(8633);
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
 function getInput(name) {
@@ -59110,13 +59123,13 @@ async function run() {
         }
         // 运行摘要：GitHub 写 GITHUB_STEP_SUMMARY，GitCode 写 ATOMGIT_STEP_SUMMARY，统一使用 Markdown 表格
         // GitHub 平台摘要固定输出全英文，GitCode 保持原有中文文案
-        appendStepSummary(buildSummaryMarkdown({
+        appendStepSummary((0, summary_1.buildSummaryMarkdown)({
             gitUrl,
             branchName,
             commitId,
             pipelineRunId,
             runNumber,
-            finishedAt: formatCstTime(new Date()),
+            finishedAt: (0, summary_1.formatCstTime)(new Date()),
             detailLink,
             detailTip
         }, result, { english: IS_GITHUB }));
@@ -59146,12 +59159,13 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const SlocDetector = __nccwpck_require__(7160);
 const LizardDetector = __nccwpck_require__(5005);
 const DuplicationDetector = __nccwpck_require__(8137);
-const MetricsCalculator = __nccwpck_require__(4264);
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+const MetricsCalculator_1 = __nccwpck_require__(4264);
 const CoderepoUploader = __nccwpck_require__(8024);
 const ConfigLoader = __nccwpck_require__(1839);
 const Logger = __nccwpck_require__(7893);
 const FileUtils = __nccwpck_require__(5213);
-const FileCollector = __nccwpck_require__(8124);
+const fileCollector_1 = __nccwpck_require__(8124);
 const path = __nccwpck_require__(6928);
 const { sanitize } = __nccwpck_require__(3262);
 // 将日期格式化为 yyyy-MM-dd HH:mm:ss
@@ -59206,7 +59220,7 @@ class MetricsScanner {
         const sourceInput = options.sourceDir || this.config.sourceDir;
         const sources = Array.isArray(sourceInput) ? sourceInput : [sourceInput];
         const resolvedSources = sources.map((src) => path.isAbsolute(src) ? src : path.resolve(this.workingDir, src));
-        const previewFiles = FileCollector.collectFiles(resolvedSources, this.config.excludeDirs || [], this.config.allowedExtensions || []);
+        const previewFiles = fileCollector_1.FileCollector.collectFiles(resolvedSources, this.config.excludeDirs || [], this.config.allowedExtensions || []);
         let slocResult = {};
         let lizardResult = {};
         let duplicationResult = {};
@@ -59225,9 +59239,9 @@ class MetricsScanner {
                 // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
                 duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
             }
-            const mergedMetrics = MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
-            MetricsCalculator.validate(mergedMetrics);
-            const formattedMetrics = MetricsCalculator.formatForReport(mergedMetrics);
+            const mergedMetrics = MetricsCalculator_1.MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
+            MetricsCalculator_1.MetricsCalculator.validate(mergedMetrics);
+            const formattedMetrics = MetricsCalculator_1.MetricsCalculator.formatForReport(mergedMetrics);
             // 从格式化结果中分离 fileDetails 和总体指标
             const { fileDetails, ...overallMetrics } = formattedMetrics;
             const endTime = new Date();
@@ -59357,7 +59371,7 @@ module.exports = {
     SlocDetector,
     LizardDetector,
     DuplicationDetector,
-    MetricsCalculator
+    MetricsCalculator: MetricsCalculator_1.MetricsCalculator
 };
 
 
@@ -60104,19 +60118,23 @@ module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolve
 /***/ }),
 
 /***/ 8124:
-/***/ ((module, exports, __nccwpck_require__) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const fs = __nccwpck_require__(9896);
-const path = __nccwpck_require__(6928);
+exports.FileCollector = void 0;
+const fs_1 = __importDefault(__nccwpck_require__(9896));
+const path_1 = __importDefault(__nccwpck_require__(6928));
 class FileCollector {
     /**
      * 判断目录是否属于默认跳过的隐藏目录（版本控制/IDE 私有目录）
      *
-     * @param {string} dirName 目录名（不含路径）
-     * @return {boolean} 命中默认跳过名单返回 true，否则返回 false
+     * @param dirName 目录名（不含路径）
+     * @return 命中默认跳过名单返回 true，否则返回 false
      */
     static isDefaultExcludedDir(dirName) {
         return FileCollector.DEFAULT_EXCLUDED_DIRS.includes(String(dirName || '').toLowerCase());
@@ -60134,7 +60152,7 @@ class FileCollector {
         }
         const normalized = (allowedExtensions || []).map((e) => String(e).toLowerCase());
         const list = normalized.length > 0 ? normalized : FileCollector.DEFAULT_CODE_EXTENSIONS;
-        const ext = path.extname(lower);
+        const ext = path_1.default.extname(lower);
         return list.includes(ext);
     }
     /**
@@ -60228,7 +60246,7 @@ class FileCollector {
     // 将单个 glob 模式转为锚定整串匹配的正则（大小写敏感）。
     // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
     // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
-    // 非法或超限模式返回 null，由调用方跳过，避免中断整个扫描。
+    // 返回 null 表示模式非法/超限（由调用方跳过，避免中断整个扫描），非 null 为锚定整串匹配的正则
     static globToRegExp(glob) {
         const pattern = String(glob || '');
         // 长度与 globstar 层数上限：兜底超长/深度嵌套模式的正则回溯风险
@@ -60316,19 +60334,19 @@ class FileCollector {
         // 支持传入单个路径或路径数组
         const sources = Array.isArray(source) ? source : [source];
         for (const src of sources) {
-            const absolutePath = path.resolve(src);
-            if (!fs.existsSync(absolutePath)) {
+            const absolutePath = path_1.default.resolve(src);
+            if (!fs_1.default.existsSync(absolutePath)) {
                 console.warn(`[WARN] 路径不存在: ${absolutePath}`);
                 continue;
             }
-            const stat = fs.statSync(absolutePath);
+            const stat = fs_1.default.statSync(absolutePath);
             if (stat.isDirectory()) {
                 // 如果是目录，递归遍历
                 FileCollector._walkDir(absolutePath, '', excludeDirs, allowedExtensions, files);
             }
             else if (stat.isFile()) {
                 // 单文件输入：文件级排除 + 扩展名白名单双重过滤
-                const name = path.basename(absolutePath);
+                const name = path_1.default.basename(absolutePath);
                 // 相对扫描根的路径取调用方传入路径（正斜杠、剥离前导 ./ 与 /），
                 // 使含斜杠的路径式规则（如 src/opensource/*）在传入相对路径时同样生效；
                 // 两种形态叠加判断，保持与目录扫描的 isExcluded 语义一致。
@@ -60337,7 +60355,7 @@ class FileCollector {
                     continue;
                 }
                 if (!FileCollector.isAllowedFile(name, allowedExtensions)) {
-                    console.warn(`[WARN] 文件扩展名不在允许列表中: ${path.basename(absolutePath)}`);
+                    console.warn(`[WARN] 文件扩展名不在允许列表中: ${path_1.default.basename(absolutePath)}`);
                     continue;
                 }
                 files.push(absolutePath);
@@ -60348,15 +60366,16 @@ class FileCollector {
     // 递归遍历目录，根据排除规则和扩展名过滤文件。
     // relPrefix：当前目录相对扫描根的路径（用于路径式排除匹配），根目录本身为 ''
     static _walkDir(dir, relPrefix, excludeDirs, allowedExtensions, files) {
+        // readdirSync 失败（如权限/符号链接断裂）时静默跳过该目录
         let entries;
         try {
-            entries = fs.readdirSync(dir, { withFileTypes: true });
+            entries = fs_1.default.readdirSync(dir, { withFileTypes: true });
         }
         catch (error) {
             return;
         }
         for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
+            const fullPath = path_1.default.join(dir, entry.name);
             // 当前条目相对扫描根的路径（正斜杠），用于路径式排除匹配
             const relPath = relPrefix ? relPrefix + '/' + entry.name : entry.name;
             if (entry.isDirectory()) {
@@ -60382,6 +60401,7 @@ class FileCollector {
         }
     }
 }
+exports.FileCollector = FileCollector;
 // 缺省代码扩展名白名单（allowed-extensions 未配置时生效，业界惯例为白名单制，
 // 对齐 scc/cloc 内置语言的常见子集；.gn/.gni/.prelds 为 OHOS 构建体系特有脚本）
 FileCollector.DEFAULT_CODE_EXTENSIONS = [
@@ -60419,7 +60439,6 @@ FileCollector.MAX_GLOB_PATTERN_LENGTH = 256;
 FileCollector.MAX_GLOBSTAR_COUNT = 16;
 // 已告警的非法/超限规则，避免目录遍历时重复刷日志
 FileCollector._warnedGlobs = new Set();
-module.exports = FileCollector;
 
 
 /***/ }),
@@ -60542,7 +60561,7 @@ module.exports = { sanitize };
 /***/ }),
 
 /***/ 8633:
-/***/ ((module, exports) => {
+/***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
@@ -60552,6 +60571,7 @@ module.exports = { sanitize };
  * GitHub Actions 侧摘要固定使用英文（平台面向国际用户），GitCode 侧保持中文不变。
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.buildSummaryMarkdown = exports.safeLinkUrl = exports.formatCstTime = exports.escapeCell = void 0;
 /** 摘要文案字典：zh 为 GitCode 现有文案，en 为 GitHub 侧全英文文案 */
 const SUMMARY_TEXT = {
     zh: {
@@ -60628,11 +60648,13 @@ function escapeCell(value) {
         .replace(/\|/g, '\\|')
         .replace(/\r?\n/g, ' ');
 }
+exports.escapeCell = escapeCell;
 /** 格式化为东八区时间（平台展示口径统一为 UTC+8） */
 function formatCstTime(date) {
     const cst = new Date(date.getTime() + 8 * 3600 * 1000);
     return `${cst.toISOString().replace('T', ' ').slice(0, 19)} (UTC+8)`;
 }
+exports.formatCstTime = formatCstTime;
 /**
  * 链接 URL 安全处理（Ref #76）：仅放行 http/https，编码会破坏 Markdown 链接结构的字符。
  * 非法协议或非法 URL 返回空串，由调用方降级为纯文本，避免 `)` 提前闭合链接目标后注入 Markdown。
@@ -60656,14 +60678,15 @@ function safeLinkUrl(value) {
     // 注：encodeURIComponent 不编码 ( ) ! * '，此处按字符显式转 %XX
     return url.replace(/[()<>\s"]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
 }
+exports.safeLinkUrl = safeLinkUrl;
 /**
  * 生成运行摘要（Markdown 表格）。
  * GitHub Actions 没有 GitCode 那样的输出面板，只能在运行摘要页展示，故两个平台统一用摘要表呈现。
  *
- * @param {Object} ctx 扫描上下文（仓库、分支、提交、流水线、完成时间、详情链接）
- * @param {Object} result 扫描结果（5 项指标）
- * @param {Object} [options] 展示选项；english=true 时输出全英文摘要（GitHub 平台）
- * @returns {string} Markdown 文本
+ * @param ctx 扫描上下文（仓库、分支、提交、流水线、完成时间、详情链接）
+ * @param result 扫描结果（5 项指标）
+ * @param [options] 展示选项；english=true 时输出全英文摘要（GitHub 平台）
+ * @returns Markdown 文本
  */
 function buildSummaryMarkdown(ctx, result, options = {}) {
     const text = options.english ? SUMMARY_TEXT.en : SUMMARY_TEXT.zh;
@@ -60673,6 +60696,7 @@ function buildSummaryMarkdown(ctx, result, options = {}) {
     const pipelineCell = pipelineUrl
         ? `[${escapeCell(pipelineLabel)}](${pipelineUrl})`
         : escapeCell(pipelineLabel);
+    // 每行为 [标签, 展示值]；ctx 各字段允许缺省（如 GitCode 无 runNumber），转义时统一兜底
     const scanRows = [
         [text.labels.repo, ctx.gitUrl],
         [text.labels.branch, ctx.branchName],
@@ -60720,7 +60744,7 @@ function buildSummaryMarkdown(ctx, result, options = {}) {
     }
     return `${lines.join('\n')}\n`;
 }
-module.exports = { escapeCell, formatCstTime, safeLinkUrl, buildSummaryMarkdown };
+exports.buildSummaryMarkdown = buildSummaryMarkdown;
 
 
 /***/ }),

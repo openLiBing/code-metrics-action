@@ -76,15 +76,41 @@ const SUMMARY_TEXT = {
   }
 };
 
+/** 摘要上下文：仓库/分支/提交/流水线/完成时间与详情链接（各键允许缺省，展示层兜底） */
+interface SummaryContext {
+  gitUrl?: string;
+  branchName?: string;
+  commitId?: string;
+  runNumber?: number | string;
+  pipelineRunId?: string | number;
+  finishedAt?: string;
+  detailLink?: string;
+  detailTip?: string;
+}
+
+/** 摘要展示的 5 项指标（无函数时两个均值为 null，展示为 -- 表示无数据） */
+interface SummaryMetricsResult {
+  codeScale?: number | null;
+  avgFunctionLoc?: number | null;
+  avgCyclomaticComplexity?: number | null;
+  totalCodeDuplicationRate?: number | null;
+  totalFileDuplicationRate?: number | null;
+}
+
+/** 展示选项：english=true 时输出全英文摘要（GitHub 平台） */
+interface SummaryOptions {
+  english?: boolean;
+}
+
 /** Markdown 表格单元格转义：竖线必须转义，换行压平，避免撑破表格 */
-function escapeCell(value: any) {
+export function escapeCell(value: unknown): string {
   return String(value === null || value === undefined || value === '' ? '-' : value)
     .replace(/\|/g, '\\|')
     .replace(/\r?\n/g, ' ');
 }
 
 /** 格式化为东八区时间（平台展示口径统一为 UTC+8） */
-function formatCstTime(date: any) {
+export function formatCstTime(date: Date): string {
   const cst = new Date(date.getTime() + 8 * 3600 * 1000);
   return `${cst.toISOString().replace('T', ' ').slice(0, 19)} (UTC+8)`;
 }
@@ -93,7 +119,7 @@ function formatCstTime(date: any) {
  * 链接 URL 安全处理（Ref #76）：仅放行 http/https，编码会破坏 Markdown 链接结构的字符。
  * 非法协议或非法 URL 返回空串，由调用方降级为纯文本，避免 `)` 提前闭合链接目标后注入 Markdown。
  */
-function safeLinkUrl(value: any) {
+export function safeLinkUrl(value: unknown): string {
   const url = String(value || '').trim();
   if (!url) {
     return '';
@@ -109,19 +135,23 @@ function safeLinkUrl(value: any) {
   }
   // 括号会提前闭合 Markdown 链接目标，空白/尖括号/引号可改变链接解析，统一百分号编码
   // 注：encodeURIComponent 不编码 ( ) ! * '，此处按字符显式转 %XX
-  return url.replace(/[()<>\s"]/g, (c: any) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+  return url.replace(/[()<>\s"]/g, (c: string) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
 }
 
 /**
  * 生成运行摘要（Markdown 表格）。
  * GitHub Actions 没有 GitCode 那样的输出面板，只能在运行摘要页展示，故两个平台统一用摘要表呈现。
  *
- * @param {Object} ctx 扫描上下文（仓库、分支、提交、流水线、完成时间、详情链接）
- * @param {Object} result 扫描结果（5 项指标）
- * @param {Object} [options] 展示选项；english=true 时输出全英文摘要（GitHub 平台）
- * @returns {string} Markdown 文本
+ * @param ctx 扫描上下文（仓库、分支、提交、流水线、完成时间、详情链接）
+ * @param result 扫描结果（5 项指标）
+ * @param [options] 展示选项；english=true 时输出全英文摘要（GitHub 平台）
+ * @returns Markdown 文本
  */
-function buildSummaryMarkdown(ctx: any, result: any, options: any = {}) {
+export function buildSummaryMarkdown(
+  ctx: SummaryContext,
+  result: SummaryMetricsResult,
+  options: SummaryOptions = {}
+): string {
   const text = options.english ? SUMMARY_TEXT.en : SUMMARY_TEXT.zh;
   const pipelineLabel = ctx.runNumber ? `#${ctx.runNumber}` : ctx.pipelineRunId || '-';
   const repoBase = String(ctx.gitUrl || '').replace(/\.git$/, '');
@@ -132,7 +162,8 @@ function buildSummaryMarkdown(ctx: any, result: any, options: any = {}) {
     ? `[${escapeCell(pipelineLabel)}](${pipelineUrl})`
     : escapeCell(pipelineLabel);
 
-  const scanRows = [
+  // 每行为 [标签, 展示值]；ctx 各字段允许缺省（如 GitCode 无 runNumber），转义时统一兜底
+  const scanRows: Array<[string, string | undefined]> = [
     [text.labels.repo, ctx.gitUrl],
     [text.labels.branch, ctx.branchName],
     [text.labels.commit, ctx.commitId ? String(ctx.commitId).slice(0, 8) : ''],
@@ -141,14 +172,14 @@ function buildSummaryMarkdown(ctx: any, result: any, options: any = {}) {
   ];
   // 指标值按字典顺序对应：代码规模、平均函数代码行、平均圈复杂度、总代码重复率、总文件重复率
   // 无函数（分母为 0）时两个均值指标为 null，展示 -- 表示无数据
-  const metricValues = [
+  const metricValues: Array<number | null | undefined> = [
     result.codeScale,
     result.avgFunctionLoc,
     result.avgCyclomaticComplexity,
     result.totalCodeDuplicationRate,
     result.totalFileDuplicationRate
   ];
-  const metricRows = text.metrics.map((metric: any, index: any) => {
+  const metricRows = text.metrics.map((metric, index) => {
     const value = metricValues[index];
     // 无函数（分母为 0）时两个均值指标为 null，展示 -- 表示无数据
     const display = value === null || value === undefined ? '--' : value;
@@ -160,13 +191,13 @@ function buildSummaryMarkdown(ctx: any, result: any, options: any = {}) {
     '',
     text.scanTableHeader,
     '|:--|:--|',
-    ...scanRows.map(([key, value]: any) => `| ${escapeCell(key)} | ${value === pipelineCell ? value : escapeCell(value)} |`),
+    ...scanRows.map(([key, value]) => `| ${escapeCell(key)} | ${value === pipelineCell ? value : escapeCell(value)} |`),
     '',
     text.overviewTitle,
     '',
     text.metricTableHeader,
     '|:--|--:|:--|',
-    ...metricRows.map(([key, value, desc]: any) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
+    ...metricRows.map(([key, value, desc]) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
     ''
   ];
   // 详情链接同样只放行合法 http(s) URL；非法链接降级为提示文本，不生成 Markdown 链接
@@ -179,7 +210,3 @@ function buildSummaryMarkdown(ctx: any, result: any, options: any = {}) {
   }
   return `${lines.join('\n')}\n`;
 }
-
-module.exports = { escapeCell, formatCstTime, safeLinkUrl, buildSummaryMarkdown };
-
-export {};

@@ -1,7 +1,7 @@
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
-class FileCollector {
+export class FileCollector {
   // 缺省代码扩展名白名单（allowed-extensions 未配置时生效，业界惯例为白名单制，
   // 对齐 scc/cloc 内置语言的常见子集；.gn/.gni/.prelds 为 OHOS 构建体系特有脚本）
   static DEFAULT_CODE_EXTENSIONS = [
@@ -41,15 +41,15 @@ class FileCollector {
   static MAX_GLOB_PATTERN_LENGTH = 256;
   static MAX_GLOBSTAR_COUNT = 16;
   // 已告警的非法/超限规则，避免目录遍历时重复刷日志
-  static _warnedGlobs = new Set();
+  static _warnedGlobs = new Set<string>();
 
   /**
    * 判断目录是否属于默认跳过的隐藏目录（版本控制/IDE 私有目录）
    *
-   * @param {string} dirName 目录名（不含路径）
-   * @return {boolean} 命中默认跳过名单返回 true，否则返回 false
+   * @param dirName 目录名（不含路径）
+   * @return 命中默认跳过名单返回 true，否则返回 false
    */
-  static isDefaultExcludedDir(dirName: any) {
+  static isDefaultExcludedDir(dirName: string): boolean {
     return FileCollector.DEFAULT_EXCLUDED_DIRS.includes(String(dirName || '').toLowerCase());
   }
 
@@ -59,12 +59,12 @@ class FileCollector {
    * 扫描范围 = 用户指定的扩展名 + 文件名特例（如指定 .h,.cpp 则只扫这两类 + CMakeLists.txt 等），
    * 不再叠加缺省白名单。
    */
-  static isAllowedFile(fileName: any, allowedExtensions: any) {
+  static isAllowedFile(fileName: string, allowedExtensions: string[]): boolean {
     const lower = (fileName || '').toLowerCase();
     if (FileCollector.SPECIAL_FILE_NAMES.includes(lower)) {
       return true;
     }
-    const normalized = (allowedExtensions || []).map((e: any) => String(e).toLowerCase());
+    const normalized = (allowedExtensions || []).map((e: string) => String(e).toLowerCase());
     const list = normalized.length > 0 ? normalized : FileCollector.DEFAULT_CODE_EXTENSIONS;
     const ext = path.extname(lower);
     return list.includes(ext);
@@ -82,7 +82,7 @@ class FileCollector {
    * 通配符：*（单段不含 /）、**（跨目录）、?（单字符）、[abc]/[!abc]（字符类）。
    * 目录与文件统一适用同一条规则，不按类型区分。
    */
-  static isExcluded(name: any, relPath: any, excludeDirs: any) {
+  static isExcluded(name: string, relPath: string, excludeDirs: string[]): boolean {
     if (!excludeDirs || excludeDirs.length === 0) {
       return false;
     }
@@ -130,7 +130,7 @@ class FileCollector {
    *   - cpp/part_dup1.cpp：自身命中 cpp/** → 排除
    *   - src/go/x.go：go 非顶层，不命中 go/ → 保留
    */
-  static isPathExcluded(relPath: any, excludeDirs: any) {
+  static isPathExcluded(relPath: string, excludeDirs: string[]): boolean {
     const p = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
     if (!p) return false;
     const parts = p.split('/');
@@ -147,7 +147,7 @@ class FileCollector {
   /**
    * 记录并跳过非法/超限 glob 规则（同一规则只告警一次，避免遍历中刷屏）
    */
-  static _warnInvalidGlob(pattern: any, reason: any) {
+  static _warnInvalidGlob(pattern: string, reason: string): void {
     if (FileCollector._warnedGlobs.has(pattern)) {
       return;
     }
@@ -158,8 +158,8 @@ class FileCollector {
   // 将单个 glob 模式转为锚定整串匹配的正则（大小写敏感）。
   // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
   // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
-  // 非法或超限模式返回 null，由调用方跳过，避免中断整个扫描。
-  static globToRegExp(glob: any) {
+  // 返回 null 表示模式非法/超限（由调用方跳过，避免中断整个扫描），非 null 为锚定整串匹配的正则
+  static globToRegExp(glob: string): RegExp | null {
     const pattern = String(glob || '');
     // 长度与 globstar 层数上限：兜底超长/深度嵌套模式的正则回溯风险
     if (pattern.length > FileCollector.MAX_GLOB_PATTERN_LENGTH
@@ -234,8 +234,12 @@ class FileCollector {
    * @param {string[]} allowedExtensions - 允许的文件扩展名列表（配置后完全覆盖缺省白名单）
    * @returns {string[]} 文件路径列表
    */
-  static collectFiles(source: any, excludeDirs: any = [], allowedExtensions: any = []) {
-    const files: any[] = [];
+  static collectFiles(
+    source: string | string[],
+    excludeDirs: string[] = [],
+    allowedExtensions: string[] = []
+  ): string[] {
+    const files: string[] = [];
 
     // 支持传入单个路径或路径数组
     const sources = Array.isArray(source) ? source : [source];
@@ -276,8 +280,15 @@ class FileCollector {
 
   // 递归遍历目录，根据排除规则和扩展名过滤文件。
   // relPrefix：当前目录相对扫描根的路径（用于路径式排除匹配），根目录本身为 ''
-  static _walkDir(dir: any, relPrefix: any, excludeDirs: any, allowedExtensions: any, files: any) {
-    let entries;
+  static _walkDir(
+    dir: string,
+    relPrefix: string,
+    excludeDirs: string[],
+    allowedExtensions: string[],
+    files: string[]
+  ): void {
+    // readdirSync 失败（如权限/符号链接断裂）时静默跳过该目录
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch (error: any) {
@@ -311,7 +322,3 @@ class FileCollector {
     }
   }
 }
-
-module.exports = FileCollector;
-
-export {};

@@ -5,7 +5,7 @@ const { test, expect } = require('@jest/globals');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const FileCollector = require('../src/utils/fileCollector');
+import { FileCollector } from '../src/utils/fileCollector';
 
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'file-collector-'));
@@ -37,11 +37,11 @@ test('isPathExcluded：任一祖先目录命中即整棵子树排除', () => {
 });
 
 test('globToRegExp：* 不跨目录、** 跨目录、? 与字符类', () => {
-  expect('src/a/b/test1.js').toMatch(FileCollector.globToRegExp('src/**/test?.js'));
-  expect('src/test12.js').not.toMatch(FileCollector.globToRegExp('src/**/test?.js'));
-  expect('a.js').toMatch(FileCollector.globToRegExp('*.js'));
-  expect('a/b.js').not.toMatch(FileCollector.globToRegExp('*.js'));
-  expect('a9.js').toMatch(FileCollector.globToRegExp('a[0-9].js'));
+  expect('src/a/b/test1.js').toMatch(FileCollector.globToRegExp('src/**/test?.js')!);
+  expect('src/test12.js').not.toMatch(FileCollector.globToRegExp('src/**/test?.js')!);
+  expect('a.js').toMatch(FileCollector.globToRegExp('*.js')!);
+  expect('a/b.js').not.toMatch(FileCollector.globToRegExp('*.js')!);
+  expect('a9.js').toMatch(FileCollector.globToRegExp('a[0-9].js')!);
 });
 
 test('globToRegExp：非法字符类与超限规则返回 null，不抛异常', () => {
