@@ -1,0 +1,178 @@
+/**
+ * 运行摘要构建工具单测（从 src/index.js 抽出的纯函数）。
+ */
+const { test, expect } = require('@jest/globals');
+import { escapeCell, formatCstTime, buildSummaryMarkdown } from '../src/utils/summary';
+
+test('escapeCell 处理空值、竖线与换行', () => {
+  expect(escapeCell(undefined)).toBe('-');
+  expect(escapeCell(null)).toBe('-');
+  expect(escapeCell('')).toBe('-');
+  expect(escapeCell(0)).toBe('0');
+  expect(escapeCell('a|b')).toBe('a\\|b');
+  expect(escapeCell('line1\nline2')).toBe('line1 line2');
+});
+
+test('formatCstTime 固定输出东八区时间', () => {
+  expect(formatCstTime(new Date('2026-11-10T00:00:00Z'))).toBe('2026-11-10 08:00:00 (UTC+8)');
+});
+
+test('buildSummaryMarkdown 生成流水线链接、提交短 SHA 与详情入口', () => {
+  const md = buildSummaryMarkdown(
+    {
+      gitUrl: 'https://gitcode.com/openlibing/code-metrics-action.git',
+      branchName: 'master',
+      commitId: 'abcdef1234567890',
+      pipelineRunId: 'run-1',
+      runNumber: '7',
+      finishedAt: '2026-11-10 08:00:00 (UTC+8)',
+      detailLink: 'https://example.com/detail'
+    },
+    {
+      codeScale: 100,
+      avgFunctionLoc: 10,
+      avgCyclomaticComplexity: 2.5,
+      totalCodeDuplicationRate: 1.2,
+      totalFileDuplicationRate: 3.4
+    }
+  );
+  expect(md).toMatch(/\[#7\]\(https:\/\/gitcode\.com\/openlibing\/code-metrics-action\/actions\/runs\/run-1\)/);
+  expect(md).toMatch(/\| 提交 \| abcdef12 \|/);
+  expect(md).toMatch(/查看详情：\[代码度量指标扫描结果\]\(https:\/\/example\.com\/detail\)/);
+  expect(md).toMatch(/\| 代码规模 \| 100 行 \|/);
+});
+
+test('buildSummaryMarkdown 无流水线 ID 时展示占位并转义提示文本', () => {
+  const md = buildSummaryMarkdown(
+    {
+      gitUrl: '',
+      branchName: 'HEAD',
+      commitId: '',
+      pipelineRunId: '',
+      runNumber: '',
+      finishedAt: '',
+      detailTip: 'no|link\nline2'
+    },
+    {
+      codeScale: 0,
+      avgFunctionLoc: 0,
+      avgCyclomaticComplexity: 0,
+      totalCodeDuplicationRate: 0,
+      totalFileDuplicationRate: 0
+    }
+  );
+  expect(md).toMatch(/\| 流水线 \| - \|/);
+  expect(md).toMatch(/> no\\\|link line2/);
+});
+
+test('buildSummaryMarkdown 无函数时均值指标展示 -- 而不是 null', () => {
+  const md = buildSummaryMarkdown(
+    {
+      gitUrl: 'https://gitcode.com/openlibing/code-metrics-action.git',
+      branchName: 'master',
+      commitId: '',
+      pipelineRunId: '',
+      runNumber: '',
+      finishedAt: '2026-11-10 08:00:00 (UTC+8)'
+    },
+    {
+      codeScale: 100,
+      avgFunctionLoc: null,
+      avgCyclomaticComplexity: null,
+      totalCodeDuplicationRate: 0,
+      totalFileDuplicationRate: 0
+    }
+  );
+  expect(md).toMatch(/\| 平均函数代码行 \| -- 行 \|/);
+  expect(md).toMatch(/\| 平均圈复杂度 \| -- \|/);
+  expect(md).not.toMatch(/null/);
+});
+
+test('buildSummaryMarkdown 编码破坏链接结构的字符，非法协议降级为提示文本', () => {
+  const result = {
+    codeScale: 1,
+    avgFunctionLoc: 1,
+    avgCyclomaticComplexity: 1,
+    totalCodeDuplicationRate: 0,
+    totalFileDuplicationRate: 0
+  };
+  const baseCtx = {
+    gitUrl: 'https://gitcode.com/openlibing/code-metrics-action.git',
+    branchName: 'master',
+    commitId: '',
+    pipelineRunId: 'run-1',
+    runNumber: '7',
+    finishedAt: '2026-11-10 08:00:00 (UTC+8)'
+  };
+
+  // 右括号/空白必须编码，避免提前闭合链接目标后注入额外 Markdown
+  const injected = buildSummaryMarkdown(
+    { ...baseCtx, detailLink: 'https://example.com/a)(https://evil.example/a b' },
+    result
+  );
+  expect(injected).toMatch(/查看详情：\[代码度量指标扫描结果\]\(https:\/\/example\.com\/a%29%28https:\/\/evil\.example\/a%20b\)/);
+  expect(injected).not.toMatch(/\]\(https:\/\/evil\.example/);
+
+  // 非 http(s) 协议不生成链接，降级展示 detailTip
+  const jsScheme = buildSummaryMarkdown(
+    { ...baseCtx, detailLink: 'javascript:alert(1)', detailTip: '链接不可用' },
+    result
+  );
+  expect(jsScheme).not.toMatch(/javascript:/);
+  expect(jsScheme).toMatch(/> 链接不可用/);
+});
+
+test('buildSummaryMarkdown GitHub 平台输出全英文摘要', () => {
+  const md = buildSummaryMarkdown(
+    {
+      gitUrl: 'https://github.com/openlibing-test/openlibing-metrics-test.git',
+      branchName: 'main',
+      commitId: 'abcdef1234567890',
+      pipelineRunId: 'run-1',
+      runNumber: '7',
+      finishedAt: '2026-11-10 08:00:00 (UTC+8)',
+      detailLink: 'https://example.com/detail',
+      detailTip: 'detail unavailable'
+    },
+    {
+      codeScale: 100,
+      avgFunctionLoc: 10,
+      avgCyclomaticComplexity: 2.5,
+      totalCodeDuplicationRate: 1.2,
+      totalFileDuplicationRate: 3.4
+    },
+    { english: true }
+  );
+  expect(md).toMatch(/## 📊 Code Metrics Scan Result/);
+  expect(md).toMatch(/\| Repository \| https:\/\/github\.com\/openlibing-test\/openlibing-metrics-test\.git \|/);
+  expect(md).toMatch(/\| Code Scale \| 100 lines \|/);
+  expect(md).toMatch(/### Metrics Overview/);
+  expect(md).toMatch(/> View details: \[Code Metrics Scan Result\]\(https:\/\/example\.com\/detail\)/);
+  // GitHub 摘要中不应出现任何中文
+  expect(md).not.toMatch(/[\u4e00-\u9fa5]/);
+
+  // 服务端中文提示在英文模式下替换为通用英文提示
+  const fallbackMd = buildSummaryMarkdown(
+    {
+      gitUrl: 'https://github.com/openlibing-test/openlibing-metrics-test.git',
+      branchName: 'main',
+      commitId: '',
+      pipelineRunId: '',
+      runNumber: '',
+      finishedAt: '2026-11-10 08:00:00 (UTC+8)',
+      detailTip: '当前仓未录入openLiBing平台'
+    },
+    {
+      codeScale: 1,
+      avgFunctionLoc: 1,
+      avgCyclomaticComplexity: 1,
+      totalCodeDuplicationRate: 0,
+      totalFileDuplicationRate: 0
+    },
+    { english: true }
+  );
+  expect(fallbackMd).toMatch(/> Detail link is unavailable/);
+  expect(fallbackMd).not.toMatch(/[\u4e00-\u9fa5]/);
+});
+
+export {};

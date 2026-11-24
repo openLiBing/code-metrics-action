@@ -56651,2216 +56651,2189 @@ exports.z = function (fn) {
 
 /***/ }),
 
-/***/ 5378:
-/***/ ((module) => {
+/***/ 4264:
+/***/ ((__unused_webpack_module, exports) => {
 
+"use strict";
+
+/**
+ * 指标合并与上报格式化（纯逻辑层，无 IO 副作用）。
+ * 三个检测器的输出契约以 interface 固化，跨模块传递不再依赖 any：
+ * - 输入契约（SlocResult 等）：各键允许缺失——检测器可被禁用（整体为 {}），
+ *   合并层对缺失字段有防御性兜底，缺哪些由 validate 运行时把关；
+ * - 输出契约（MergedFileDetail / ReportMetrics）：字段完整，缺省值在本层归一化。
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.MetricsCalculator = void 0;
 class MetricsCalculator {
-  static mergeResults(slocResult, lizardResult, duplicationResult) {
-    // 合并总体指标（排除 fileDetails / identicalFileDetails / duplicationOccurrences，单独处理）
-    const { fileDetails: slocFileDetails, ...slocMetrics } = slocResult;
-    const { fileDetails: lizardFileDetails, ...lizardMetrics } = lizardResult;
-    // 显式提取 duplicationOccurrences，避免被 ...duplicationMetrics 散开混入总体指标
-    const {
-      fileDetails: duplicationFileDetails,
-      identicalFileDetails,
-      duplicationOccurrences,
-      ...duplicationMetrics
-    } = duplicationResult;
-
-    // 合并文件级指标：以 sloc 的 fileDetails 为基础
-    const fileDetails = MetricsCalculator.mergeFileDetails(
-      slocFileDetails || [],
-      lizardFileDetails || [],
-      duplicationFileDetails || []
-    );
-
-    return {
-      ...slocMetrics,
-      ...lizardMetrics,
-      ...duplicationMetrics,
-      fileDetails: fileDetails,
-      identicalFileDetails: identicalFileDetails || [],
-      // 重复块出现位置列表（含每块的明文 content，由 uploader 做 Base64 编码后分批上报）
-      duplicationOccurrences: duplicationOccurrences || []
-    };
-  }
-
-  // 合并三个检测器的 fileDetails
-  static mergeFileDetails(slocFileDetails, lizardFileDetails, duplicationFileDetails) {
-    // 以 sloc 的 fileDetails 为基础（有 filePath, language, loc）
-    const fileMap = new Map();
-
-    for (const detail of slocFileDetails) {
-      fileMap.set(detail.filePath, {
-        filePath: detail.filePath,
-        language: detail.language || '',
-        loc: detail.loc || 0,
-        commentLines: detail.commentLines || 0,
-        functionCount: 0,
-        // 无函数文件两个均值指标不适用，保持 null（0 会被误读为函数代码行很短/复杂度很低）
-        avgFunctionLoc: null,
-        avgCyclomaticComplexity: null,
-        functionDetails: [],
-        duplicationRate: 0,
-        duplicationLineCount: 0,
-        duplicatedFiles: []
-      });
+    static mergeResults(slocResult, lizardResult, duplicationResult) {
+        // 合并总体指标（排除 fileDetails / identicalFileDetails / duplicationOccurrences，单独处理）
+        const { fileDetails: slocFileDetails, ...slocMetrics } = slocResult;
+        const { fileDetails: lizardFileDetails, ...lizardMetrics } = lizardResult;
+        // 显式提取 duplicationOccurrences，避免被 ...duplicationMetrics 散开混入总体指标
+        const { fileDetails: duplicationFileDetails, identicalFileDetails, duplicationOccurrences, ...duplicationMetrics } = duplicationResult;
+        // 合并文件级指标：以 sloc 的 fileDetails 为基础
+        const fileDetails = MetricsCalculator.mergeFileDetails(slocFileDetails || [], lizardFileDetails || [], duplicationFileDetails || []);
+        return {
+            ...slocMetrics,
+            ...lizardMetrics,
+            ...duplicationMetrics,
+            fileDetails: fileDetails,
+            identicalFileDetails: identicalFileDetails || [],
+            // 重复块出现位置列表（含每块的明文 content，由 uploader 做 Base64 编码后分批上报）
+            duplicationOccurrences: duplicationOccurrences || []
+        };
     }
-
-    // 合并 lizard 的 fileDetails（按 filePath 匹配）
-    for (const detail of lizardFileDetails) {
-      const existing = fileMap.get(detail.filePath);
-      if (existing) {
-        existing.functionCount = detail.functionCount || 0;
-        existing.avgFunctionLoc = detail.avgFunctionLoc ?? null;
-        existing.avgCyclomaticComplexity = detail.avgCyclomaticComplexity ?? null;
-        existing.functionDetails = detail.functionDetails || [];
-      } else {
-        fileMap.set(detail.filePath, {
-          filePath: detail.filePath,
-          language: '',
-          loc: 0,
-          commentLines: 0,
-          functionCount: detail.functionCount || 0,
-          avgFunctionLoc: detail.avgFunctionLoc ?? null,
-          avgCyclomaticComplexity: detail.avgCyclomaticComplexity ?? null,
-          functionDetails: detail.functionDetails || [],
-          duplicationRate: 0,
-          duplicationLineCount: 0,
-          duplicatedFiles: []
-        });
-      }
+    /** 合并三个检测器的 fileDetails（以 sloc 为基础，lizard/duplication 按 filePath 匹配） */
+    static mergeFileDetails(slocFileDetails, lizardFileDetails, duplicationFileDetails) {
+        // 以 sloc 的 fileDetails 为基础（有 filePath, language, loc）
+        const fileMap = new Map();
+        for (const detail of slocFileDetails) {
+            fileMap.set(detail.filePath, {
+                filePath: detail.filePath,
+                language: detail.language || '',
+                loc: detail.loc || 0,
+                commentLines: detail.commentLines || 0,
+                functionCount: 0,
+                // 无函数文件两个均值指标不适用，保持 null（0 会被误读为函数代码行很短/复杂度很低）
+                avgFunctionLoc: null,
+                avgCyclomaticComplexity: null,
+                functionDetails: [],
+                duplicationRate: 0,
+                duplicationLineCount: 0,
+                duplicatedFiles: []
+            });
+        }
+        // 合并 lizard 的 fileDetails（按 filePath 匹配）
+        for (const detail of lizardFileDetails) {
+            const existing = fileMap.get(detail.filePath);
+            if (existing) {
+                existing.functionCount = detail.functionCount || 0;
+                existing.avgFunctionLoc = detail.avgFunctionLoc ?? null;
+                existing.avgCyclomaticComplexity = detail.avgCyclomaticComplexity ?? null;
+                existing.functionDetails = detail.functionDetails || [];
+            }
+            else {
+                fileMap.set(detail.filePath, {
+                    filePath: detail.filePath,
+                    language: '',
+                    loc: 0,
+                    commentLines: 0,
+                    functionCount: detail.functionCount || 0,
+                    avgFunctionLoc: detail.avgFunctionLoc ?? null,
+                    avgCyclomaticComplexity: detail.avgCyclomaticComplexity ?? null,
+                    functionDetails: detail.functionDetails || [],
+                    duplicationRate: 0,
+                    duplicationLineCount: 0,
+                    duplicatedFiles: []
+                });
+            }
+        }
+        // 合并 duplication 的 fileDetails（按 filePath 匹配）
+        for (const detail of duplicationFileDetails) {
+            const existing = fileMap.get(detail.filePath);
+            if (existing) {
+                existing.duplicationRate = detail.duplicationRate || 0;
+                existing.duplicationLineCount = detail.duplicationLineCount || 0;
+                existing.duplicatedFiles = detail.duplicatedFiles || [];
+                // 上下文片段快照（重复块±5行，整体 Base64 编码），由 buildContextSegments 生成
+                existing.snapshotData = detail.snapshotData || null;
+            }
+            else {
+                // duplication 独有文件（scc 不识别其扩展名，如 .prelds）：
+                // loc 用 duplication 检测携带的 totalLines 兜底（本地"非空非注释"口径），
+                // 避免 loc=0 但 duplicationLineCount>0 的矛盾展示
+                fileMap.set(detail.filePath, {
+                    filePath: detail.filePath,
+                    language: '',
+                    loc: detail.totalLines || 0,
+                    commentLines: 0,
+                    functionCount: 0,
+                    avgFunctionLoc: null,
+                    avgCyclomaticComplexity: null,
+                    functionDetails: [],
+                    duplicationRate: detail.duplicationRate || 0,
+                    duplicationLineCount: detail.duplicationLineCount || 0,
+                    duplicatedFiles: detail.duplicatedFiles || [],
+                    snapshotData: detail.snapshotData || null
+                });
+            }
+        }
+        return [...fileMap.values()];
     }
-
-    // 合并 duplication 的 fileDetails（按 filePath 匹配）
-    for (const detail of duplicationFileDetails) {
-      const existing = fileMap.get(detail.filePath);
-      if (existing) {
-        existing.duplicationRate = detail.duplicationRate || 0;
-        existing.duplicationLineCount = detail.duplicationLineCount || 0;
-        existing.duplicatedFiles = detail.duplicatedFiles || [];
-        // 上下文片段快照（重复块±5行，整体 Base64 编码），由 buildContextSegments 生成
-        existing.snapshotData = detail.snapshotData || null;
-      } else {
-        // duplication 独有文件（scc 不识别其扩展名，如 .prelds）：
-        // loc 用 duplication 检测携带的 totalLines 兜底（本地"非空非注释"口径），
-        // 避免 loc=0 但 duplicationLineCount>0 的矛盾展示
-        fileMap.set(detail.filePath, {
-          filePath: detail.filePath,
-          language: '',
-          loc: detail.totalLines || 0,
-          commentLines: 0,
-          functionCount: 0,
-          avgFunctionLoc: null,
-          avgCyclomaticComplexity: null,
-          functionDetails: [],
-          duplicationRate: detail.duplicationRate || 0,
-          duplicationLineCount: detail.duplicationLineCount || 0,
-          duplicatedFiles: detail.duplicatedFiles || [],
-          snapshotData: detail.snapshotData || null
-        });
-      }
+    static validate(metrics) {
+        // 4 项全局指标必须有数值
+        const required = [
+            'codeScale',
+            'totalCodeDuplicationRate',
+            'totalFileDuplicationRate'
+        ];
+        for (const key of required) {
+            if (metrics[key] === undefined || metrics[key] === null) {
+                throw new Error(`Missing required metric: ${key}`);
+            }
+        }
+        // 两个函数均值在函数总数为 0 时允许为 null（无数据），但键必须存在，
+        // 以区分"探测器未执行/未配置"与"无函数"
+        const nullableRequired = [
+            'averageFunctionLoc',
+            'averageCyclomaticComplexity'
+        ];
+        for (const key of nullableRequired) {
+            if (metrics[key] === undefined) {
+                throw new Error(`Missing required metric: ${key}`);
+            }
+        }
+        return true;
     }
-
-    return [...fileMap.values()];
-  }
-
-  static validate(metrics) {
-    // 4 项全局指标必须有数值
-    const required = [
-      'codeScale',
-      'totalCodeDuplicationRate',
-      'totalFileDuplicationRate'
-    ];
-    for (const key of required) {
-      if (metrics[key] === undefined || metrics[key] === null) {
-        throw new Error(`Missing required metric: ${key}`);
-      }
+    /**
+     * 数值指标归一化：缺失或非法值返回 null（无数据），避免 0 被当作真实指标上报
+     *
+     * @param value 原始值
+     * @returns 数值或 null
+     */
+    static toOptionalNumber(value) {
+        if (value === null || value === undefined) {
+            return null;
+        }
+        const num = Number(value);
+        return Number.isNaN(num) ? null : num;
     }
-    // 两个函数均值在函数总数为 0 时允许为 null（无数据），但键必须存在，
-    // 以区分"探测器未执行/未配置"与"无函数"
-    const nullableRequired = ['averageFunctionLoc', 'averageCyclomaticComplexity'];
-    for (const key of nullableRequired) {
-      if (metrics[key] === undefined) {
-        throw new Error(`Missing required metric: ${key}`);
-      }
+    static formatForReport(metrics) {
+        // 分离 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
+        const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metrics;
+        return {
+            codeScale: Number(overallMetrics.codeScale) || 0,
+            // 扫描代码总行数：代码 + 注释 + 空行的物理总行数（scc Lines 汇总，即 rawLines），
+            // 区别于 codeScale（有效代码行）；sloc 检测器禁用时 rawLines 缺失，降级为 0
+            codeLineTotal: Number(overallMetrics.rawLines) || 0,
+            // 注释行数：直接取 sloc 检测器的 scc 汇总 commentLines（现成数据）；
+            // 每文件 commentLines 明细仍随 fileDetails 落 file_detail，供文件级下钻
+            commentLines: Number(overallMetrics.commentLines) || 0,
+            // 总圈复杂度：lizard 函数圈复杂度总和（方法维度总量，与 avgCyclomaticComplexity 同源）
+            complexityCount: Number(overallMetrics.totalCyclomaticComplexity) || 0,
+            // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（lizard 口径，
+            // 区别于方法维度的 avgCyclomaticComplexity）
+            cyclomaticComplexityPerFile: Number(overallMetrics.cyclomaticComplexityPerFile) || 0,
+            // 重复代码块数量：重复块出现位置总数（与 duplication_block 表行数一致）
+            duplicatedBlocks: Number(overallMetrics.duplicatedBlocks) || 0,
+            // 重复代码行数量：Σ 每文件重复行数（totalCodeDuplicationRate 的分子）
+            duplicatedLines: Number(overallMetrics.duplicatedLines) || 0,
+            // 平均函数代码行/平均圈复杂度：分母（函数总数）为 0 时无数据，保持 null 上报，
+            // 不能兜底为 0（0 会被前端当作真实指标展示与排序）
+            avgFunctionLoc: MetricsCalculator.toOptionalNumber(overallMetrics.averageFunctionLoc),
+            avgCyclomaticComplexity: MetricsCalculator.toOptionalNumber(overallMetrics.averageCyclomaticComplexity),
+            totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,
+            totalFileDuplicationRate: Number(overallMetrics.totalFileDuplicationRate) || 0,
+            fileDetails: fileDetails || [],
+            identicalFileDetails: identicalFileDetails || [],
+            // 重复块出现位置列表（含明文 content），uploader 会 Base64 编码后分批上报
+            duplicationOccurrences: duplicationOccurrences || []
+        };
     }
-
-    return true;
-  }
-
-  /**
-   * 数值指标归一化：缺失或非法值返回 null（无数据），避免 0 被当作真实指标上报
-   *
-   * @param {*} value 原始值
-   * @returns {number|null} 数值或 null
-   */
-  static toOptionalNumber(value) {
-    if (value === null || value === undefined) {
-      return null;
-    }
-    const num = Number(value);
-    return Number.isNaN(num) ? null : num;
-  }
-
-  static formatForReport(metrics) {
-    // 分离 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
-    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metrics;
-
-    return {
-      codeScale: Number(overallMetrics.codeScale) || 0,
-      // 扫描代码总行数：代码 + 注释 + 空行的物理总行数（scc Lines 汇总，即 rawLines），
-      // 区别于 codeScale（有效代码行）；sloc 检测器禁用时 rawLines 缺失，降级为 0
-      codeLineTotal: Number(overallMetrics.rawLines) || 0,
-      // 注释行数：直接取 sloc 检测器的 scc 汇总 commentLines（现成数据）；
-      // 每文件 commentLines 明细仍随 fileDetails 落 file_detail，供文件级下钻
-      commentLines: Number(overallMetrics.commentLines) || 0,
-      // 总圈复杂度：lizard 函数圈复杂度总和（方法维度总量，与 avgCyclomaticComplexity 同源）
-      complexityCount: Number(overallMetrics.totalCyclomaticComplexity) || 0,
-      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（lizard 口径，
-      // 区别于方法维度的 avgCyclomaticComplexity）
-      cyclomaticComplexityPerFile: Number(overallMetrics.cyclomaticComplexityPerFile) || 0,
-      // 重复代码块数量：重复块出现位置总数（与 duplication_block 表行数一致）
-      duplicatedBlocks: Number(overallMetrics.duplicatedBlocks) || 0,
-      // 重复代码行数量：Σ 每文件重复行数（totalCodeDuplicationRate 的分子）
-      duplicatedLines: Number(overallMetrics.duplicatedLines) || 0,
-      // 平均函数代码行/平均圈复杂度：分母（函数总数）为 0 时无数据，保持 null 上报，
-      // 不能兜底为 0（0 会被前端当作真实指标展示与排序）
-      avgFunctionLoc: MetricsCalculator.toOptionalNumber(overallMetrics.averageFunctionLoc),
-      avgCyclomaticComplexity: MetricsCalculator.toOptionalNumber(overallMetrics.averageCyclomaticComplexity),
-      totalCodeDuplicationRate: Number(overallMetrics.totalCodeDuplicationRate) || 0,
-      totalFileDuplicationRate: Number(overallMetrics.totalFileDuplicationRate) || 0,
-      fileDetails: fileDetails || [],
-      identicalFileDetails: identicalFileDetails || [],
-      // 重复块出现位置列表（含明文 content），uploader 会 Base64 编码后分批上报
-      duplicationOccurrences: duplicationOccurrences || []
-    };
-  }
 }
-
-module.exports = MetricsCalculator;
+exports.MetricsCalculator = MetricsCalculator;
 
 
 /***/ }),
 
-/***/ 6145:
-/***/ ((module) => {
+/***/ 1839:
+/***/ ((module, exports) => {
 
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 /**
  * 默认配置模块。
  * 说明：config-file（YAML/JSON 配置文件）能力无实际使用，已移除；
  * 运行参数统一由 action 输入覆盖，仅保留内置默认值。
  */
 const DEFAULT_CONFIG = {
-  sourceDir: './',
-  output: 'metrics.json',
-  // 排除目录：常见构建产物、依赖目录和 IDE/工具配置目录
-  excludeDirs: [],
-  // 支持的文件扩展名：覆盖主流编程语言
-  allowedExtensions: [],
-  detectors: {
-    sloc: {
-      enabled: true
+    sourceDir: './',
+    output: 'metrics.json',
+    // 排除目录：常见构建产物、依赖目录和 IDE/工具配置目录
+    excludeDirs: [],
+    // 支持的文件扩展名：覆盖主流编程语言
+    allowedExtensions: [],
+    detectors: {
+        sloc: {
+            enabled: true
+        },
+        lizard: {
+            enabled: true
+        },
+        duplication: {
+            enabled: true,
+            // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块重复记为一次"
+            minLines: 10
+        }
     },
-    lizard: {
-      enabled: true
-    },
-    duplication: {
-      enabled: true,
-      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块重复记为一次"
-      minLines: 10
+    uploader: {
+        enabled: true
     }
-  },
-  uploader: {
-    enabled: true
-  }
 };
-
 class ConfigLoader {
-  static getDefaultConfig() {
-    return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
-  }
+    static getDefaultConfig() {
+        return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+    }
 }
-
 module.exports = ConfigLoader;
 
 
 /***/ }),
 
-/***/ 658:
-/***/ ((module) => {
+/***/ 1504:
+/***/ ((module, exports) => {
 
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 class BaseDetector {
-  constructor(config = {}) {
-    this.config = config;
-  }
-
-  async detect(sourceDir) {
-    throw new Error('Method detect() must be implemented');
-  }
-
-  getName() {
-    throw new Error('Method getName() must be implemented');
-  }
+    constructor(config = {}) {
+        this.config = config;
+    }
+    async detect(sourceDir) {
+        throw new Error('Method detect() must be implemented');
+    }
+    getName() {
+        throw new Error('Method getName() must be implemented');
+    }
 }
-
 module.exports = BaseDetector;
 
 
 /***/ }),
 
-/***/ 1223:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ 8137:
+/***/ ((module, exports, __nccwpck_require__) => {
 
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 const fs = __nccwpck_require__(9896);
 const path = __nccwpck_require__(6928);
 const crypto = __nccwpck_require__(6982);
-const BaseDetector = __nccwpck_require__(658);
-const FileCollector = __nccwpck_require__(6790);
-
+const BaseDetector = __nccwpck_require__(1504);
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+const fileCollector_1 = __nccwpck_require__(8124);
 class DuplicationDetector extends BaseDetector {
-  constructor(config = {}) {
-    super(config);
-    // 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
-    // - minLines=10：连续源代码行至少 10 行才算一次重复
-    this.minLines = config.minLines || 10;
-    this.allowedExtensions = config.allowedExtensions || [];
-  }
-
-  async detect(source, slocResult = null) {
-    // 支持单个路径或多个路径
-    const sources = Array.isArray(source) ? source : [source];
-    const excludeDirs = this.config.excludeDirs || [];
-
-    // 相对路径基准：优先用 git 仓库根目录，确保返回的是仓库根的相对全路径
-    // （source-dir 可能是子目录，用 sources 做基准会把子目录前缀也剥掉，只剩文件名）
-    const gitRoot = this.findGitRoot(sources[0]);
-    const pathBase = gitRoot ? [gitRoot] : sources;
-
-    // scc 的总体代码行数（codeScale），作为总重复率的分母
-    const codeScale = slocResult ? slocResult.codeScale : null;
-
-    // scc 每个文件的 loc 作为该文件重复率的权威分母，保证与上报的 loc 完全一致
-    const locByRel = new Map();
-    if (slocResult && Array.isArray(slocResult.fileDetails)) {
-      for (const d of slocResult.fileDetails) {
-        if (d && d.filePath) locByRel.set(d.filePath, Number(d.loc) || 0);
-      }
+    constructor(config = {}) {
+        super(config);
+        // 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
+        // - minLines=10：连续源代码行至少 10 行才算一次重复
+        this.minLines = config.minLines || 10;
+        this.allowedExtensions = config.allowedExtensions || [];
     }
-
-    // 收集所有文件
-    const allFiles = [];
-    for (const src of sources) {
-      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-      allFiles.push(...files);
-    }
-    const uniqueFiles = [...new Set(allFiles)];
-
-    if (uniqueFiles.length === 0) {
-      return this.getEmptyResult();
-    }
-
-    // scc 口径有效行 < minLines 的文件不参与重复检测（第二道防线）：
-    // 即使插件注释规则与 scc 口径出现不一致（如历史 bug：CMakeLists.txt 的 #[[ ]]
-    // 注释体被当有效行），纯注释撑起的 10 行窗口也会在文件级被拦截，
-    // 与 cmetrics "≥10 个有效代码行才算重复"的定义对齐。
-    // 仅当 slocResult 中确有该文件的 loc 记录时过滤（路径不匹配/scc 不识别的文件保守放行）。
-    let locFiltered = 0;
-    const effectiveFiles = [];
-    for (const file of uniqueFiles) {
-      const rel = this.toRelativePath(file, pathBase);
-      const loc = locByRel.get(rel);
-      if (loc !== undefined && loc < this.minLines) {
-        locFiltered++;
-        continue;
-      }
-      effectiveFiles.push(file);
-    }
-    if (locFiltered > 0) {
-      console.log(`[duplication] Skipped ${locFiltered} files with scc loc < ${this.minLines}`);
-    }
-
-    const fileContents = new Map();
-    const fileSourceLineMaps = new Map();
-    let totalSourceLines = 0;
-    let binarySkipped = 0;
-    for (const file of effectiveFiles) {
-      try {
-        // 二进制文件嗅探：前 8KB 含 \x00 字节即判定为二进制（与 Git 同款标准），
-        // 跳过重复检测——二进制按 UTF-8 读取会产生 U+FFFD 乱码且大量伪重复块。
-        // 用内容嗅探而非扩展名黑名单：.config/.cfg 等文本配置不能按扩展名误杀。
-        if (DuplicationDetector.isBinaryFile(file)) {
-          binarySkipped++;
-          continue;
-        }
-        const content = fs.readFileSync(file, 'utf8');
-        fileContents.set(file, content);
-        const sourceLineMap = this.buildSourceLineMap(content, file);
-        fileSourceLineMaps.set(file, sourceLineMap);
-        totalSourceLines += sourceLineMap.sourceCount;
-      } catch (error) {
-        // 只输出文件基名，不落 runner 绝对路径（Ref #60）
-        console.warn(`[WARN] Failed to read file ${path.basename(file)}: ${error.message}`);
-      }
-    }
-    if (binarySkipped > 0) {
-      console.log(`[duplication] Skipped ${binarySkipped} binary files (NUL byte sniffing)`);
-    }
-
-    // 行级跨文件匹配（与 cmetrics 官方定义对齐："非空非注释行连续 10 行相同"）
-    const lineResult = this.detectWithLineLevel(effectiveFiles, fileSourceLineMaps);
-    // 用 scc 对每个文件的重复行重新计数（分子分母同工具同口径，保证与 loc 完全一致）
-    const sccDupByRel = this.countDuplicatedLinesWithScc(
-        lineResult.fileDuplicatedLines, fileContents, pathBase);
-    // 使用 let 声明：buildContextSegments 会返回带 snapshotData 的新 fileDetails
-    let fileDetails = this.calculateFileDetailsFromLines(
-        lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase, locByRel, sccDupByRel);
-    // 从共享滑动窗口构建重复块出现位置（窗口级 union-find 分组，自动去重）
-    const duplicationOccurrences = this.buildDuplicationOccurrences(
-        lineResult.fileSourceLines, fileContents, pathBase, lineResult.sharedHashWindows);
-
-    // 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData
-    fileDetails = this.buildContextSegments(fileDetails, duplicationOccurrences, fileContents, pathBase);
-
-    const duplicatedLines = fileDetails.reduce((sum, d) => sum + d.duplicationLineCount, 0);
-
-    // 分母：优先用传入的 codeScale（与 cmetrics 和华为云保持一致）
-    // 如果没有 codeScale，则用本地统计的源代码行总数
-    const denominator = codeScale || totalSourceLines;
-
-    const duplicationRate = denominator > 0
-      ? parseFloat(((duplicatedLines / denominator) * 100).toFixed(2))
-      : 0;
-
-    // 完全一致文件计数（用于总文件重复率）
-    const identicalFileCount = this.calculateFileDuplication(fileContents);
-    const fileDuplicationRate = uniqueFiles.length > 0
-      ? parseFloat(((identicalFileCount / uniqueFiles.length) * 100).toFixed(2))
-      : 0;
-
-    // 计算完全一致文件的详情（用于总文件重复率下钻）
-    const identicalFileDetails = this.calculateIdenticalFileDetails(fileContents, pathBase);
-
-    return {
-      totalCodeDuplicationRate: duplicationRate,
-      totalFileDuplicationRate: fileDuplicationRate,
-      // 重复代码块数量：重复块出现位置总数（与 code_metrics_duplication_block 表行数一致）
-      duplicatedBlocks: duplicationOccurrences.length,
-      duplicatedLines: duplicatedLines,
-      totalLines: denominator,
-      duplicatedFiles: identicalFileCount,
-      totalFiles: uniqueFiles.length,
-      fileDetails: fileDetails,
-      identicalFileDetails: identicalFileDetails,
-      // 重复块出现位置列表（同一代码内容的所有出现位置归为同一 group_id），供后端入库 code_metrics_duplication_block
-      duplicationOccurrences: duplicationOccurrences
-    };
-  }
-
-  /**
-   * 行级跨文件重复检测（主路径）
-   * 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
-   *
-   * 算法：
-   * 1. 提取每个文件的源代码行（非空非注释，含 import 行），保留原始行号
-   * 2. 10 源代码行滑动窗口，md5 哈希每个窗口
-   * 3. 同一 hash 有 2+ 个窗口即计为重复（含同文件内重复）
-   * 4. 标记所有被匹配窗口覆盖的源代码行索引
-   * 5. 合并连续的源代码行索引为最大区间 → 每个区间是一个重复块出现位置
-   *
-   * 相比 token 级窗口的优势：
-   * - 按行对齐，30 行连续重复只产生 1 个块（而非多个 19 行碎片）
-   * - 合并后同一 (file, startLine, endLine) 只产生一条记录（避免重复入库）
-   *
-   * @param {string[]} files 文件绝对路径列表
-   * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（含 sourceLines，分类口径与 scc 一致）
-   * @returns {Object} {fileDuplicatedLines, fileSourceLines, sharedHashWindows}
-   */
-  detectWithLineLevel(files, fileSourceLineMaps) {
-    const WINDOW_SIZE = this.minLines; // 10
-
-    // Step 1: 提取每个文件的源代码行（与 scc 有效代码行语义一致），保留原始行号
-    // 直接复用 buildSourceLineMap 已计算好的 sourceLines，避免分类口径不一致
-    const fileSourceLines = new Map();
-    for (const file of files) {
-      const sourceLineMap = fileSourceLineMaps.get(file)
-        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
-      if (!sourceLineMap || !sourceLineMap.sourceLines) continue;
-      fileSourceLines.set(file.replace(/\\/g, '/'), sourceLineMap.sourceLines);
-    }
-
-    // Step 2: 10 源代码行滑动窗口，md5 哈希
-    const hashToWindows = new Map();
-    for (const [normalizedFile, sourceLines] of fileSourceLines) {
-      if (sourceLines.length < WINDOW_SIZE) continue;
-      for (let i = 0; i <= sourceLines.length - WINDOW_SIZE; i++) {
-        const windowText = sourceLines.slice(i, i + WINDOW_SIZE)
-          .map(l => l.text).join('\n');
-        const hash = crypto.createHash('md5').update(windowText).digest('hex');
-        if (!hashToWindows.has(hash)) hashToWindows.set(hash, []);
-        hashToWindows.get(hash).push({
-          file: normalizedFile,
-          startIdx: i,
-          endIdx: i + WINDOW_SIZE - 1
-        });
-      }
-    }
-
-    // Step 3: 标记重复行 + 收集共享 hash 的滑动窗口（供分组使用）
-    const fileDuplicatedLines = new Map();
-    // 仅含跨 2+ 个窗口的共享 hash：hash -> [{file, startIdx, endIdx}]
-    const sharedHashWindows = new Map();
-
-    for (const [hash, windows] of hashToWindows) {
-      if (windows.length < 2) continue;
-      sharedHashWindows.set(hash, windows);
-
-      for (const win of windows) {
-        const sourceLines = fileSourceLines.get(win.file);
-        if (!sourceLines) continue;
-
-        if (!fileDuplicatedLines.has(win.file)) fileDuplicatedLines.set(win.file, new Set());
-
-        const lineSet = fileDuplicatedLines.get(win.file);
-
-        for (let i = win.startIdx; i <= win.endIdx; i++) {
-          lineSet.add(sourceLines[i].lineNum);
-        }
-      }
-    }
-
-    return { fileDuplicatedLines, fileSourceLines, sharedHashWindows };
-  }
-
-  /**
-   * 把行级匹配得到的「文件→重复行号集合」转为 fileDetails 数组（Step 5）
-   * - 过滤为源代码行（剔除空行/注释行）
-   * - 只含有重复的文件入 fileDetails（无重复文件由 sloc 基础记录覆盖）
-   */
-  calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources, locByRel, sccDupByRel) {
-    const fileDetails = [];
-    for (const [file, lineSet] of fileDuplicatedLines) {
-      // 兼容路径分隔符：detectWithLineLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
-      const sourceLineMap = fileSourceLineMaps.get(file)
-        || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
-      if (!sourceLineMap) continue;
-
-      // 分母：优先用 scc 每个文件的 loc（与上报的 loc 完全一致），否则回退到本地分类统计
-      const filePath = this.toRelativePath(file, sources);
-      const sccLoc = locByRel ? locByRel.get(filePath) : undefined;
-      const totalFileSourceLines = (sccLoc !== undefined && sccLoc > 0) ? sccLoc : sourceLineMap.sourceCount;
-
-      // 分子：优先用 scc 对重复行的重数结果（与分母完全同工具同口径，
-      // 保证重复率明细中的有效代码行与代码规模文件级明细一致，杜绝 >100%）；
-      // scc 重数失败（返回 null）时回退到本地 lineMap 口径并做分母封顶保护
-      let duplicatedSourceLines;
-      if (sccDupByRel) {
-        duplicatedSourceLines = sccDupByRel.get(filePath) || 0;
-        // 块注释边界等极端情况下抽取行重数可能略超全集，按分母封顶
-        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
-      } else {
-        duplicatedSourceLines = 0;
-        for (const lineNum of lineSet) {
-          if (sourceLineMap.lineMap.get(lineNum)) {
-            duplicatedSourceLines++;
-          }
-        }
-        duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
-      }
-      if (duplicatedSourceLines === 0) continue;  // 全是注释/空行：不入 fileDetails
-
-      const duplicationRate = totalFileSourceLines > 0
-        ? parseFloat(((duplicatedSourceLines / totalFileSourceLines) * 100).toFixed(2))
-        : 0;
-
-      fileDetails.push({
-        filePath: filePath,
-        duplicationRate,
-        duplicationLineCount: duplicatedSourceLines,
-        // 该文件的有效代码行数（scc loc 优先，无则本地分类统计）。
-        // scc 不识别的扩展名（如 .prelds）不会出现在 sloc fileDetails 中，
-        // 合并时用该值兜底 loc，避免 loc=0 但 duplicationLineCount>0 的矛盾展示
-        totalLines: totalFileSourceLines
-      });
-    }
-    return fileDetails;
-  }
-
-  /**
-   * 用 scc 对每个文件的重复行重新计数，保证分子（重复有效行数）与分母（loc）完全同口径。
-   *
-   * <p>实现方式：把每个文件的重复物理行按行号顺序抽取到临时镜像目录（保持原相对路径与扩展名，
-   * 让 scc 用与全量扫描完全相同的语言规则解析），单次 scc 扫描取每文件 Code 即为重复有效行数。
-   * 任何异常返回 null，调用方回退本地 lineMap 口径。
-   *
-   * @param {Map<string, Set<number>>} fileDuplicatedLines 文件 → 重复物理行号集合
-   * @param {Map<string, string>} fileContents 文件 → 内容
-   * @param {string[]} sources 源目录（用于相对路径对齐）
-   * @returns {Map<string, number>|null} 相对路径 → 重复有效行数（scc 口径），失败返回 null
-   */
-  countDuplicatedLinesWithScc(fileDuplicatedLines, fileContents, sources) {
-    if (!fileDuplicatedLines || fileDuplicatedLines.size === 0) {
-      return new Map();
-    }
-    const os = __nccwpck_require__(857);
-    const { execFileSync } = __nccwpck_require__(5317);
-    const sccPath = DuplicationDetector.getSccBinPath();
-    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
-    // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
-    if (!sccPath) {
-      return null;
-    }
-    // 临时镜像目录：mkdtemp 防并发冲突，finally 统一清理
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-scc-'));
-    try {
-      for (const [file, lineSet] of fileDuplicatedLines) {
-        const content = fileContents.get(file);
-        if (!content) continue;
-        const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
-        // 按物理行号升序抽取重复行内容，保持原相对路径与扩展名写入镜像
-        const dupTexts = [...lineSet].sort((a, b) => a - b)
-          .filter(n => lines[n - 1] !== undefined)
-          .map(n => lines[n - 1]);
-        if (dupTexts.length === 0) continue;
-        const relPath = this.toRelativePath(file, sources);
-        const dest = path.join(tmpRoot, ...relPath.split('/'));
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
-      }
-      const output = execFileSync(sccPath, ['-f', 'json', '--no-cocomo', '--no-size', '--by-file', tmpRoot], {
-        encoding: 'utf8',
-        maxBuffer: 100 * 1024 * 1024,
-        timeout: 300000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-      const sccResult = JSON.parse(output.trim());
-      const dupByRel = new Map();
-      for (const lang of sccResult) {
-        for (const f of (lang.Files || [])) {
-          const name = f.Location || f.Name || '';
-          if (!name) continue;
-          const rel = path.relative(tmpRoot, name).replace(/\\/g, '/');
-          dupByRel.set(rel, f.Code || 0);
-        }
-      }
-      console.log(`[duplication] scc recount done for ${dupByRel.size} duplicated files`);
-      return dupByRel;
-    } catch (error) {
-      console.warn(`[WARN] scc recount of duplicated lines failed, fallback to local line-map: ${error.message}`);
-      return null;
-    } finally {
-      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (e) { /* 忽略清理异常 */ }
-    }
-  }
-
-  /**
-   * 获取 scc 二进制路径，策略与 slocDetector 完全一致：
-   * 优先使用 dist/bin 内置二进制，其次回退 PATH 查找（保证分子分母用同一个 scc）。
-   *
-   * @returns {string} scc 可执行路径
-   */
-  static getSccBinPath() {
-    // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
-    // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
-    // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 src/detectors（上溯一层为 src/bin）
-    const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
-      ? __nccwpck_require2_.ab
-      : null;
-    // 候选顺序：bundle 根 + bin/ → bundle 根平铺（asset 平铺分发形态）→ 源码结构上溯
-    const candidates = [];
-    if (bundleRoot) {
-      candidates.push(path.join(bundleRoot, 'bin', 'scc'));
-      candidates.push(path.join(bundleRoot, 'scc'));
-    }
-    candidates.push(path.join(__dirname, 'bin', 'scc'));
-    candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
-    candidates.push(path.join(__dirname, 'scc'));
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755
-        try {
-          fs.chmodSync(candidate, 0o755);
-        } catch (e) {
-          console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
-        }
-        return candidate;
-      }
-    }
-    // PATH 探测：确认环境本身安装了 scc 才使用裸命令名，
-    // 避免执行注定失败的命令产生误导性报错
-    try {
-      (__nccwpck_require__(5317).execSync)('command -v scc', { stdio: 'ignore' });
-      return 'scc';
-    } catch (e) {
-      console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），重复行统计回退到本地 line-map');
-      return null;
-    }
-  }
-
-  // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）
-  // hashIsCode=true：C/C++ 预处理指令（#include/#define 等）计入代码行（scc 计入）
-  // mlStrings：Python 三引号 docstring 按注释处理（scc 不计入代码行）
-  // blockComments：多组块注释标记（如 CMake 的 #[[ ]]），进入后直到对应结束标记出现
-  static getLanguageConfig(ext, fileName) {
-    const e = (ext || '').toLowerCase();
-    // CMake 按文件名/扩展名识别（与 scc 一致）：CMakeLists.txt / *.cmake。
-    // 支持行注释 # 与方括号块注释 #[[ ]]（#[==[ 变体罕见，暂不支持）。
-    // 此前 CMakeLists.txt 按 .txt 走 default 规则，#[[ ]] 注释体被当成有效代码行，
-    // 导致纯 license 注释撑起 10 行窗口被判重复块（scc 口径 loc=2 的矛盾现象）。
-    const base = (fileName || '').toLowerCase();
-    if (base === 'cmakelists.txt' || e === '.cmake') {
-      return { lineComments: ['#'], blockStart: null, blockEnd: null,
-        blockComments: [['#[[', ']]']], mlStrings: [], hashIsCode: false };
-    }
-    switch (e) {
-      case '.c': case '.cpp': case '.cc': case '.cxx': case '.h': case '.hpp': case '.cuh':
-        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: true };
-      case '.java': case '.js': case '.mjs': case '.cjs': case '.ts': case '.go': case '.cs':
-      case '.scala': case '.kt': case '.kts': case '.swift': case '.rs':
-        return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
-      case '.php':
-        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
-      case '.py':
-        return { lineComments: ['#'], blockStart: null, blockEnd: null, mlStrings: ['"""', "'''"], hashIsCode: false };
-      case '.rb':
-        // Ruby 块注释：=begin ... =end（必须位于行首），行注释为 #
-        return { lineComments: ['#'], blockStart: '=begin', blockEnd: '=end', mlStrings: [], hashIsCode: false };
-      default:
-        // 未知语言：保守兜底，覆盖 C 风格与 # 注释
-        return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
-    }
-  }
-
-  static startsWithAny(text, markers) {
-    for (const m of markers) {
-      if (text.startsWith(m)) return true;
-    }
-    return false;
-  }
-
-  // 判断一行是否以某个多行字符串标记开始；若同一行内已闭合则返回 null（不进入状态）
-  static openMlString(text, markers) {
-    for (const m of markers) {
-      if (text.startsWith(m)) {
-        return text.slice(m.length).includes(m) ? null : m;
-      }
-    }
-    return null;
-  }
-
-  // 判断一行中（非行首）是否出现三引号字符串标记。
-  // 与 scc 语义对齐：行首的三引号是 docstring（注释），行中的三引号是字符串字面量（计入代码行）。
-  // 返回 { marker, open }：open=true 表示该行打开了未在同行闭合的多行字符串；open=false 表示同行已闭合。
-  static findMidLineMlString(line, markers) {
-    for (const m of markers) {
-      const idx = line.indexOf(m);
-      // 只处理出现在行中的标记；行首由调用方走 docstring 分支
-      if (idx > 0) {
-        const after = line.slice(idx + m.length);
-        return { marker: m, open: !after.includes(m) };
-      }
-    }
-    return null;
-  }
-
-  // 逐文件构建"有效代码行"分析：与 scc 口径完全一致
-  // - 剔除空行、行注释、块注释、行首三引号 docstring（注释）
-  // - 行中三引号多行字符串（如 x = '''...'''）整块计入代码行（含内部空白行）
-  // - C/C++ 预处理指令（#include/#define 等）计入代码行
-  // 返回 { lineMap: 行号→是否有效代码行, sourceCount, sourceLines: [{lineNum,text}] }
-  buildSourceLineMap(content, filePath) {
-    const lines = content.split('\n');
-    const lang = DuplicationDetector.getLanguageConfig(
-        filePath ? path.extname(filePath) : '',
-        filePath ? path.basename(filePath) : '');
-    const lineMap = new Map();
-    const sourceLines = [];
-    let sourceCount = 0;
-    let inBlock = null;       // 块注释结束标记（null=不在块注释中；支持多组标记，如 CMake #[[ ]]）
-    let inDocstring = null;   // 行首三引号 docstring（注释）的结束标记
-    let inMlStringCode = null; // 行中三引号多行字符串（代码）的结束标记
-
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      let isCode = false;
-
-      if (inBlock !== null) {
-        // 块注释中：查找当前组的结束标记
-        if (trimmed.includes(inBlock)) inBlock = null;
-      } else if (inDocstring) {
-        // docstring（注释）中：查找结束标记
-        if (trimmed.includes(inDocstring)) inDocstring = null;
-      } else if (inMlStringCode) {
-        // 行中多行字符串中：整块计入代码行（含空白行），查找结束标记
-        isCode = true;
-        if (trimmed.includes(inMlStringCode)) inMlStringCode = null;
-      } else if (trimmed.length === 0) {
-        // 空行
-      } else if (lang.mlStrings.length > 0 && DuplicationDetector.startsWithAny(trimmed, lang.mlStrings)) {
-        // 行首三引号 → docstring，视为注释不计入代码行；未闭合则进入状态
-        const marker = DuplicationDetector.openMlString(trimmed, lang.mlStrings);
-        if (marker !== null) inDocstring = marker;
-      } else if (lang.blockComments
-          && DuplicationDetector.startsWithAny(trimmed, lang.blockComments.map(p => p[0]))) {
-        // 多组块注释开始行（如 CMake #[[ ]]）：进入后直到对应结束标记出现
-        for (const [bs, be] of lang.blockComments) {
-          if (trimmed.startsWith(bs)) {
-            if (!trimmed.slice(bs.length).includes(be)) inBlock = be;
-            break;
-          }
-        }
-      } else if (lang.blockStart && trimmed.startsWith(lang.blockStart)) {
-        // 块注释开始行
-        if (!trimmed.includes(lang.blockEnd)) inBlock = lang.blockEnd;
-      } else if (DuplicationDetector.startsWithAny(trimmed, lang.lineComments)) {
-        // 纯行注释
-      } else if (lang.hashIsCode && trimmed.startsWith('#')) {
-        // C/C++ 预处理指令：计入代码行
-        isCode = true;
-      } else {
-        // 普通代码行；若行中出现三引号且未同行闭合，则进入"行中多行字符串"状态（仍计入代码行）
-        isCode = true;
-        if (lang.mlStrings.length > 0) {
-          const mm = DuplicationDetector.findMidLineMlString(trimmed, lang.mlStrings);
-          if (mm && mm.open) inMlStringCode = mm.marker;
-        }
-      }
-
-      lineMap.set(i + 1, isCode);
-      if (isCode) {
-        sourceCount++;
-        sourceLines.push({ lineNum: i + 1, text: trimmed });
-      }
-    }
-    return { lineMap, sourceCount, sourceLines };
-  }
-
-  calculateFileDuplication(fileContents) {
-    const hashCount = new Map();
-    for (const content of fileContents.values()) {
-      const normalized = content.trim();
-      const hash = crypto.createHash('md5').update(normalized).digest('hex');
-      if (!hashCount.has(hash)) hashCount.set(hash, 0);
-      hashCount.set(hash, hashCount.get(hash) + 1);
-    }
-
-    let identicalFileCount = 0;
-    for (const count of hashCount.values()) {
-      if (count > 1) identicalFileCount += count;
-    }
-    return identicalFileCount;
-  }
-
-  // 将绝对路径转为相对路径
-  // 修复前缀匹配问题：/repo 会误匹配 /repo-other/test.py，需确保 src 是路径分隔符边界
-  toRelativePath(absolutePath, sources) {
-    if (!sources || sources.length === 0) {
-      return absolutePath.replace(/\\/g, '/');
-    }
-    const normalizedPath = absolutePath.replace(/\\/g, '/');
-    for (const src of sources) {
-      const normalizedSrc = src.replace(/\\/g, '/').replace(/\/+$/, ''); // 去掉尾部斜杠
-      // 精确前缀匹配：src 后必须跟 / 或恰好等于完整路径
-      if (normalizedPath === normalizedSrc
-          || normalizedPath.startsWith(normalizedSrc + '/')) {
-        return path.relative(src, absolutePath).replace(/\\/g, '/');
-      }
-    }
-    return absolutePath.replace(/\\/g, '/');
-  }
-
-  /**
-   * 判断文件是否为二进制文件：读取前 8KB，包含 \x00（NUL）字节即判定为二进制。
-   * 与 Git 的 binary 检测标准一致；UTF-8 文本不可能包含 \x00，因此不会误伤文本文件
-   * （.config/.cfg/.json 等文本配置即使扩展名可疑也能正常参与扫描）。
-   *
-   * @param {string} file 文件绝对路径
-   * @returns {boolean} true 表示二进制文件，应跳过重复检测
-   */
-  static isBinaryFile(file) {
-    const SNIFF_BYTES = 8192;
-    let fd = null;
-    try {
-      fd = fs.openSync(file, 'r');
-      const buf = Buffer.alloc(SNIFF_BYTES);
-      const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
-      return buf.slice(0, bytesRead).includes(0);
-    } catch (error) {
-      // 读取失败按非二进制处理，交给后续 readFileSync 的 catch 统一告警
-      return false;
-    } finally {
-      if (fd !== null) {
-        try { fs.closeSync(fd); } catch (e) { /* 忽略关闭异常 */ }
-      }
-    }
-  }
-
-  /**
-   * 从起始目录向上查找 git 仓库根目录（包含 .git 的目录）
-   * .git 既可能是目录（普通仓库）也可能是文件（worktree/submodule）
-   * @param {string} startDir 起始目录
-   * @returns {string|null} 仓库根目录绝对路径，找不到返回 null
-   */
-  findGitRoot(startDir) {
-    let cur = path.resolve(startDir);
-    const root = path.parse(cur).root;
-    for (let i = 0; i < 8 && cur && cur !== root; i++) {
-      if (fs.existsSync(path.join(cur, '.git'))) return cur;
-      const parent = path.dirname(cur);
-      if (parent === cur) break;
-      cur = parent;
-    }
-    return null;
-  }
-
-  // 计算完全一致文件的详情（用于总文件重复率下钻）
-  // 只在文件内容完全一致（MD5相同）时才认为是重复文件
-  // 对于一组重复文件 A、B、C，只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
-  // 前端将同一组的所有文件展示在一起，无需区分"原始文件"和"重复副本"
-  calculateIdenticalFileDetails(fileContents, sources) {
-    // 按内容哈希分组
-    const hashGroups = new Map();
-    for (const [file, content] of fileContents) {
-      const normalized = content.trim();
-      const hash = crypto.createHash('md5').update(normalized).digest('hex');
-      if (!hashGroups.has(hash)) {
-        hashGroups.set(hash, []);
-      }
-      hashGroups.get(hash).push(file);
-    }
-
-    const details = [];
-    for (const [hash, files] of hashGroups) {
-      // 只处理有重复的组（2个及以上文件内容一致）
-      if (files.length < 2) continue;
-
-      // 每组只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
-      // 前端展示时将同一组的所有文件列在一起，不再双向展示
-      const duplicatedFiles = files.map(f => this.toRelativePath(f, sources));
-
-      details.push({
-        duplicatedFiles: duplicatedFiles
-      });
-    }
-
-    return details;
-  }
-
-  /**
-   * 从行级检测的共享滑动窗口构建重复块出现位置列表（主路径）
-   *
-   * 分组策略（基于「精确文件集合分桶」+「完全一致文件去重」+「跨组去重」）：
-   * - 每个共享 hash（10 行连续窗口内容）都有一个「出现文件集合」F(hash)，即共同出现该内容的所有文件
-   * - 内容完全一致的文件（trim 后 MD5 相同）视为同一「等价类」，每个等价类选一个代表；
-   *   每个窗口的「代表集合」F' = { rep(f) | f ∈ F(hash) }
-   * - 按 F' 精确分桶：同一 F' 的窗口归入同一「重复关系」，不再做超集匹配
-   *   ——这保证同一代码块只属于一个精确文件集合组，不会被多个子集组重复包含
-   * - 同一 F' 桶内 |F'| ≥ 2 才算重复关系；桶内按代表合并连续索引为出现区间，每个区间一条 occurrence
-   * - 完全一致文件组单独输出：同一等价类 ≥2 个文件时整块成一组
-   * - 跨组去重保险：最终对同一 (file, startLine, endLine) 出现在多个组的情形，
-   *   只保留行覆盖最大的那个组，从其余组删除该 occurrence（不足 2 条的组整组丢弃）
-   *
-   * 最终分组示例（all_dup_cfile.cpp=A, test-codeql-cpp.cpp=T 完全一致，dup_cfile.cpp=D 为 A 的子集）：
-   * - 完全一致组：{A, T}（整块 1-46 行）
-   * - 部分重复组：{A, D}（L14-46 共同部分），T 因与 A 完全一致被折叠为 A，不再单独出现
-   * - apig 三文件完全共同代码 L4-16：F'={anti, codecheck, sca} 精确成一组，
-   *   不会在 {anti,codecheck}、{codecheck,sca} 等子集组重复出现
-   *
-   * 重复代码行数/重复率仍由行级检测（fileDuplicatedLines）取并集计算，与分组无关，不受影响。
-   *
-   * @param {Map} fileSourceLines file → [{lineNum, text}]（key 为 '/' 归一化路径）
-   * @param {Map} fileContents file(原始路径) → 内容
-   * @param {string[]} sources 源目录列表
-   * @param {Map} sharedHashWindows hash → [{file, startIdx, endIdx}]（仅跨 2+ 窗口的共享 hash）
-   * @returns {Array} duplicationOccurrences 列表
-   */
-  buildDuplicationOccurrences(fileSourceLines, fileContents, sources, sharedHashWindows) {
-    if (!sharedHashWindows || sharedHashWindows.size === 0) return [];
-
-    // 1) 计算「完全一致文件」的等价类：内容(trim 后)哈希相同的文件归为一类
-    //    （如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp 完全相同）
-    const contentHashToFiles = new Map(); // hash -> [归一化路径]
-    const fileToRep = new Map();          // 归一化路径 -> 该类代表
-    for (const [file, content] of fileContents) {
-      const norm = file.replace(/\\/g, '/');
-      const hash = crypto.createHash('md5').update(content.trim()).digest('hex');
-      if (!contentHashToFiles.has(hash)) contentHashToFiles.set(hash, []);
-      contentHashToFiles.get(hash).push(norm);
-    }
-    for (const files of contentHashToFiles.values()) {
-      const rep = files[0];
-      for (const f of files) fileToRep.set(f, rep);
-    }
-
-    const occurrences = [];
-    const W = this.minLines;
-
-    // 2) 预计算每个「代表文件」的 10 行滑动窗口哈希数组（每代表一份，供两两匹配复用）
-    //    repInfo: rep -> { src, winHashes: [idx], hashToPos: Map<hash, [idx]> }
-    const repInfo = new Map();
-    const allReps = new Set();
-    for (const f of fileToRep.keys()) allReps.add(fileToRep.get(f));
-    for (const rep of allReps) {
-      const src = fileSourceLines.get(rep);
-      if (!src || src.length < W) continue;
-      const winHashes = new Array(src.length - W + 1);
-      const hashToPos = new Map();
-      for (let i = 0; i <= src.length - W; i++) {
-        const h = crypto.createHash('md5')
-          .update(src.slice(i, i + W).map(l => l.text).join('\n')).digest('hex');
-        winHashes[i] = h;
-        if (!hashToPos.has(h)) hashToPos.set(h, []);
-        hashToPos.get(h).push(i);
-      }
-      repInfo.set(rep, { src, winHashes, hashToPos });
-    }
-
-    // 3) 两两代表文件：枚举所有「最大连续相同源代码行」运行（run）。
-    //    每个 run 代表一条独立的重复关系；对 run 内的两个出现位置建立连接（union），
-    //    再以「文件+索引区间」为节点做 union-find，把多文件共享同一段内容的出现位置合并成一组。
-    //    这样 A-B(1-45) 与 A-B-C(14-45) 作为两条独立关系同时保留，互不截断——
-    //    不再像旧的「按精确文件集合分桶」那样，把长关系中的窗口让给超集关系导致长关系被截断。
-    const parent = new Map();
-    const find = (k) => {
-      let root = k;
-      while (parent.get(root) !== root) root = parent.get(root);
-      while (parent.get(k) !== root) {
-        const next = parent.get(k);
-        parent.set(k, root);
-        k = next;
-      }
-      return root;
-    };
-    const union = (a, b) => {
-      const ra = find(a), rb = find(b);
-      if (ra !== rb) parent.set(ra, rb);
-    };
-    const nodeKey = (rep, s, e) => `${rep}\u0001${s}\u0001${e}`;
-
-    const repList = [...repInfo.keys()];
-    for (let a = 0; a < repList.length; a++) {
-      const A = repInfo.get(repList[a]);
-      for (let b = a + 1; b < repList.length; b++) {
-        const B = repInfo.get(repList[b]);
-        // 以 A 的窗口为基准，逐个匹配 B 中位置，并沿对角线扩展成最大 run
-        const consumed = new Set(); // "i:j" 已归属某个 run，避免重复枚举
-        for (let i = 0; i < A.winHashes.length; i++) {
-          const positions = B.hashToPos.get(A.winHashes[i]) || [];
-          for (const j of positions) {
-            const ck = i + ':' + j;
-            if (consumed.has(ck)) continue;
-            let k = 0;
-            while (i + k < A.winHashes.length && j + k < B.winHashes.length
-                && A.winHashes[i + k] === B.winHashes[j + k]) k++;
-            for (let t = 0; t < k; t++) consumed.add((i + t) + ':' + (j + t));
-            // run 覆盖的源代码索引区间（含窗口内所有行）
-            const sA = i, eA = i + W - 1 + (k - 1);
-            const sB = j, eB = j + W - 1 + (k - 1);
-            const kA = nodeKey(repList[a], sA, eA);
-            const kB = nodeKey(repList[b], sB, eB);
-            if (!parent.has(kA)) parent.set(kA, kA);
-            if (!parent.has(kB)) parent.set(kB, kB);
-            union(kA, kB);
-          }
-        }
-      }
-    }
-
-    // 3.5) 同文件内自重复：同一文件中相同内容出现在 ≥2 个非重叠位置时，这些区间互相 union。
-    //      行级检测（detectWithLineLevel）把同文件内重复计入重复行数，而上面两两匹配只覆盖跨文件，
-    //      会导致"文件内自重复"的文件（如大型 JSON 配置）重复率有值却没有 occurrence 明细。
-    //      按「对角线 run 扩展」合并长重复（8-36/72-100 不再被切成 10 行小块），并做了两项防爆保护：
-    //      a) 不用 Set 标记已处理位置对：V8 的 Set/Map 元素上限为 2^24（nodejs/node#37320），
-    //         大型配置文件的高频模板窗口对数可达千万级，Set.add 会抛
-    //         RangeError: Value undefined out of range for undefined options property undefined。
-    //         改用「对角线连续性剪枝」：若 (i-1, j-1) 处窗口哈希也相等，说明该对已被更早
-    //         起点的 run 覆盖，直接跳过——每个 run 只从其最左端点完整扩展一次。
-    //      b) 同一 hash 的出现段数超过 MAX_SELF_DUP_SEGS 时退回「所有段 union 成一组」：
-    //         超高频模板（同内容出现上百次）两两配对组合爆炸且展示价值低，整组输出即可。
-    const MAX_SELF_DUP_SEGS = 64;
-    for (const [rep, info] of repInfo) {
-      const winHashes = info.winHashes;
-      const len = winHashes.length;
-      for (const positions of info.hashToPos.values()) {
-        if (positions.length < 2) continue;
-        // 分段：连续窗口位置合段（段内为周期性重叠窗口，j-i < W 会被跳过，不参与配对）
-        const segs = [];
-        let segStart = positions[0];
-        for (let p = 1; p <= positions.length; p++) {
-          const cur = positions[p];
-          if (cur === undefined || cur !== positions[p - 1] + 1) {
-            segs.push([segStart, positions[p - 1]]);
-            segStart = cur;
-          }
-        }
-        if (segs.length < 2) continue;
-        if (segs.length > MAX_SELF_DUP_SEGS) {
-          // 超高频模板：所有段整组 union（每段一个节点），避免两两配对组合爆炸
-          const segNodes = segs.map(([a, b]) => {
-            const k = nodeKey(rep, a, b + W - 1);
-            if (!parent.has(k)) parent.set(k, k);
-            return k;
-          });
-          for (let i = 1; i < segNodes.length; i++) union(segNodes[0], segNodes[i]);
-          continue;
-        }
-        // 常规场景：跨段位置对做对角线 run 扩展（段数 ≤ MAX_SELF_DUP_SEGS，组合可控）
-        for (let si = 0; si < segs.length; si++) {
-          for (let sj = si + 1; sj < segs.length; sj++) {
-            for (let i = segs[si][0]; i <= segs[si][1]; i++) {
-              for (let j = segs[sj][0]; j <= segs[sj][1]; j++) {
-                // 只处理非重叠的后向重复位置：j ≥ i+W 保证两段窗口不重叠
-                if (j < i + W) continue;
-                // 对角线连续性剪枝：(i-1, j-1) 也同哈希 → 该对属于已扩展过的 run，跳过
-                if (i > 0 && winHashes[i - 1] === winHashes[j - 1]) continue;
-                // 从 (i, j) 沿对角线扩展最大 run：(i+k, j+k) 窗口内容一致即同属一段重复
-                let k = 0;
-                while (i + k < len && j + k < len
-                    && winHashes[i + k] === winHashes[j + k]) {
-                  k++;
-                }
-                // run 覆盖的源代码索引区间（含窗口内所有行）
-                const kA = nodeKey(rep, i, i + W - 1 + (k - 1));
-                const kB = nodeKey(rep, j, j + W - 1 + (k - 1));
-                if (!parent.has(kA)) parent.set(kA, kA);
-                if (!parent.has(kB)) parent.set(kB, kB);
-                union(kA, kB);
-              }
+    async detect(source, slocResult = null) {
+        // 支持单个路径或多个路径
+        const sources = Array.isArray(source) ? source : [source];
+        const excludeDirs = this.config.excludeDirs || [];
+        // 相对路径基准：优先用 git 仓库根目录，确保返回的是仓库根的相对全路径
+        // （source-dir 可能是子目录，用 sources 做基准会把子目录前缀也剥掉，只剩文件名）
+        const gitRoot = this.findGitRoot(sources[0]);
+        const pathBase = gitRoot ? [gitRoot] : sources;
+        // scc 的总体代码行数（codeScale），作为总重复率的分母
+        const codeScale = slocResult ? slocResult.codeScale : null;
+        // scc 每个文件的 loc 作为该文件重复率的权威分母，保证与上报的 loc 完全一致
+        const locByRel = new Map();
+        if (slocResult && Array.isArray(slocResult.fileDetails)) {
+            for (const d of slocResult.fileDetails) {
+                if (d && d.filePath)
+                    locByRel.set(d.filePath, Number(d.loc) || 0);
             }
-          }
         }
-      }
-    }
-
-    // 按连通分量分组：每个分量 = 一条独立的重复关系组
-    const compNodes = new Map(); // root -> Set<nodeKey>
-    for (const k of parent.keys()) {
-      const r = find(k);
-      if (!compNodes.has(r)) compNodes.set(r, new Set());
-      compNodes.get(r).add(k);
-    }
-    for (const nodes of compNodes.values()) {
-      if (nodes.size < 2) continue;
-      const fileOccs = [];
-      for (const nk of nodes) {
-        const parts = nk.split('\u0001');
-        const rep = parts[0];
-        const s = Number(parts[1]), e = Number(parts[2]);
-        const src = fileSourceLines.get(rep);
-        if (!src) continue;
-        fileOccs.push({
-          file: rep,
-          startLine: src[s].lineNum,
-          endLine: src[e].lineNum
-        });
-      }
-      if (fileOccs.length < 2) continue; // 少于 2 个出现位置不算重复
-      this.pushGroup(occurrences, fileOccs, sources, fileContents);
-    }
-
-    // 4) 处理「完全一致文件」组：同一内容哈希的 ≥2 个文件单独成一组，
-    //    每个成员各占一条出现记录（整文件为重复块）
-    //    只有源代码行数 ≥ minLines(10) 的文件才可能被滑窗检测为重复块，故以此作为阈值
-    for (const files of contentHashToFiles.values()) {
-      if (files.length < 2) continue;
-      const fileOccs = [];
-      for (const f of files) {
-        const sourceLines = fileSourceLines.get(f);
-        if (!sourceLines || sourceLines.length < this.minLines) continue;
-        fileOccs.push({
-          file: f,
-          startLine: sourceLines[0].lineNum,
-          endLine: sourceLines[sourceLines.length - 1].lineNum
-        });
-      }
-      if (fileOccs.length < 2) continue;
-      this.pushGroup(occurrences, fileOccs, sources, fileContents);
-    }
-
-    // 5) 跨组去重保险：同一 (file, startLine, endLine) 若出现在多个组，
-    //    只保留行覆盖最大的那个组中的出现位置，从其余组删除。
-    //    （理论上精确分桶后不应出现，此处作为防御性兜底，避免任何边界情形造成跨组重复）
-    this.dedupOccurrencesAcrossGroups(occurrences);
-
-    return occurrences;
-  }
-
-  // 跨组去重：同一 (filePath, startLine, endLine) 出现在多个组时，
-  // 只保留组内「所有出现位置行覆盖并集」最大的那个组中的该出现位置，从其它组删除。
-  // 删除后若某组不足 2 条出现位置，则整组丢弃。
-  // 注意：此处以 occurrence 自身的 groupId 为分组依据，不依赖外部结构。
-  dedupOccurrencesAcrossGroups(occurrences) {
-    if (!occurrences || occurrences.length === 0) return;
-
-    // 统计每个组的行覆盖并集大小，用于决定保留哪个组
-    const groupLineSpan = new Map(); // groupId -> Set<lineKey>
-    for (const o of occurrences) {
-      if (!groupLineSpan.has(o.groupId)) groupLineSpan.set(o.groupId, new Set());
-      const span = groupLineSpan.get(o.groupId);
-      for (let ln = o.startLine; ln <= o.endLine; ln++) {
-        span.add(`${o.filePath}:${ln}`);
-      }
-    }
-
-    // 对每个 (filePath, startLine, endLine) 找出它所在的所有组，保留 span 最大者
-    const blockToGroups = new Map(); // blockKey -> Set<groupId>
-    for (const o of occurrences) {
-      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
-      if (!blockToGroups.has(k)) blockToGroups.set(k, new Set());
-      blockToGroups.get(k).add(o.groupId);
-    }
-    const dropGroupForBlock = new Map(); // blockKey -> Set<groupId>(要删除的组)
-    for (const [k, gids] of blockToGroups) {
-      if (gids.size < 2) continue;
-      let best = null, bestSize = -1;
-      for (const gid of gids) {
-        const sz = groupLineSpan.get(gid) ? groupLineSpan.get(gid).size : 0;
-        if (sz > bestSize) { bestSize = sz; best = gid; }
-      }
-      const drop = new Set();
-      for (const gid of gids) if (gid !== best) drop.add(gid);
-      dropGroupForBlock.set(k, drop);
-    }
-    if (dropGroupForBlock.size === 0) return;
-
-    // 执行删除：从被标记为删除的 (blockKey, groupId) 对中移除 occurrence
-    for (let i = occurrences.length - 1; i >= 0; i--) {
-      const o = occurrences[i];
-      const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
-      const drop = dropGroupForBlock.get(k);
-      if (drop && drop.has(o.groupId)) {
-        occurrences.splice(i, 1);
-      }
-    }
-
-    // 删除后若某组不足 2 条，整组丢弃
-    const groupCount = new Map();
-    for (const o of occurrences) {
-      groupCount.set(o.groupId, (groupCount.get(o.groupId) || 0) + 1);
-    }
-    for (let i = occurrences.length - 1; i >= 0; i--) {
-      if (groupCount.get(occurrences[i].groupId) < 2) {
-        occurrences.splice(i, 1);
-      }
-    }
-  }
-
-  // 把一组出现位置(重复块)统一排序、生成 groupId 并写入 occurrences
-  pushGroup(occurrences, fileOccs, sources, fileContents) {
-    // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
-    fileOccs.sort((a, b) => {
-      const relA = this.toRelativePath(a.file, sources);
-      const relB = this.toRelativePath(b.file, sources);
-      if (relA !== relB) return relA.localeCompare(relB);
-      return a.startLine - b.startLine;
-    });
-
-    // groupId 用组内所有出现位置(文件+起止行)的结构化哈希，保证不同重复关系唯一。
-    // 同一关系内各 occurrence 的内容可能不同（如共同部分与完全一致块），
-    // 因此不能再用「单一内容哈希」作为组 ID，否则不同关系可能因首块内容相同而碰撞。
-    const groupId = crypto.createHash('sha256')
-      .update(fileOccs
-          .map(o => `${this.toRelativePath(o.file, sources)}:${o.startLine}-${o.endLine}`)
-          .sort()
-          .join('\u0001'))
-      .digest('hex');
-
-    fileOccs.forEach((occ, i) => {
-      const content = this.extractBlockContent(occ.file, occ.startLine, occ.endLine, fileContents);
-      occurrences.push({
-        groupId: groupId,
-        contentHash: groupId,
-        occurrenceIndex: i,
-        filePath: this.toRelativePath(occ.file, sources),
-        startLine: occ.startLine,
-        endLine: occ.endLine,
-        content: content
-      });
-    });
-  }
-
-  /**
-   * 提取文件中指定行号区间的代码内容
-   *
-   * @param {string} file 文件路径（可能是正斜杠或反斜杠格式）
-   * @param {number} startLine 起始行（1-based）
-   * @param {number} endLine 结束行（1-based）
-   * @param {Map} fileContents file(原始路径) → 内容
-   * @returns {string} 代码内容，找不到文件时返回空字符串
-   */
-  extractBlockContent(file, startLine, endLine, fileContents) {
-    // 兼容路径分隔符：fileContents 的 key 是原始路径（Windows 下含反斜杠）
-    const content = fileContents.get(file)
-        || fileContents.get(file.replace(/\//g, '\\'));
-    if (!content) return '';
-    const lines = content.split('\n');
-    const start = Math.max(0, startLine - 1);
-    const end = Math.min(lines.length, endLine);
-    return lines.slice(start, end).join('\n');
-  }
-
-  /**
-   * 合并重叠/相邻的行号区间
-   *
-   * @param {Array} intervals [{startLine, endLine}]
-   * @param {boolean} mergeAdjacent 是否合并相邻区间（间隔 ≤1 行），默认 true。
-   *   重复块本身合并传 true（相邻重复块视为一个连续重复区域）；
-   *   扩展 ±contextLines 后的区间合并传 false（只有真正重叠才合并，避免上下文过长）。
-   * @returns {Array} 合并后的区间列表（按 startLine 排序）
-   */
-  mergeIntervals(intervals, mergeAdjacent = true) {
-    if (intervals.length === 0) return [];
-    const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
-    const merged = [Object.assign({}, sorted[0])];
-    // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
-    const overlapThreshold = mergeAdjacent ? 1 : 0;
-    for (let i = 1; i < sorted.length; i++) {
-      const last = merged[merged.length - 1];
-      if (sorted[i].startLine <= last.endLine + overlapThreshold) {
-        last.endLine = Math.max(last.endLine, sorted[i].endLine);
-        // 合并时透传附加属性（如 oversized）：任一子区间为真则合并区间视为真
-        if (sorted[i].oversized) last.oversized = true;
-      } else {
-        merged.push(Object.assign({}, sorted[i]));
-      }
-    }
-    return merged;
-  }
-
-  /**
-   * 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData。
-   *
-   * segments 生成策略（完整输出，不截断）：
-   * - 所有重复块（含超大块）均完整保留其代码内容（含 ±contextLines 上下文），
-   *   保证前端能展示/高亮全部重复代码；相邻块的上下文重叠时会合并成一个连续区间。
-   * - 超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多个 segment（分段不丢内容），
-   *   不再对超大块做「头+省略+尾」截断；快照整体随全量上报文件上传 OBS。
-   * - 未覆盖的行段由前端根据相邻片段的行号差用 "... N lines omitted ..." 占位。
-   *
-   * snapshotData 结构（整体 Base64 编码）：
-   * {
-   *   totalLines: 原始文件总行数,
-   *   contextLines: 上下文行数(5),
-   *   truncated: 固定 false（保留字段做结构兼容，现已完整输出不再截断）,
-   *   segments: [{originalStartLine, originalEndLine, contentB64}]
-   *   // 每个 segment 的 contentB64 为该片段代码内容再次 Base64 编码
-   * }
-   *
-   * @param {Array} fileDetails 文件明细列表
-   * @param {Array} duplicationOccurrences 重复块出现位置列表
-   * @param {Map} fileContents file(原始路径) → 内容
-   * @param {string[]} sources 源目录列表
-   * @param {number} contextLines 上下文行数，默认 5
-   * @returns {Array} 更新后的 fileDetails（每个有重复的 fileDetail 增加 snapshotData 字段）
-   */
-  buildContextSegments(fileDetails, duplicationOccurrences, fileContents, sources, contextLines = 5) {
-    if (!duplicationOccurrences || duplicationOccurrences.length === 0) {
-      return fileDetails;
-    }
-
-    // 按 filePath 分组出现位置，得到每个文件的重复块区间
-    const blocksByFile = new Map(); // relativePath → [{startLine, endLine}]
-    for (const occ of duplicationOccurrences) {
-      if (!blocksByFile.has(occ.filePath)) blocksByFile.set(occ.filePath, []);
-      blocksByFile.get(occ.filePath).push({ startLine: occ.startLine, endLine: occ.endLine });
-    }
-
-    // 构建 relativePath → content 的映射，便于按 fileDetail.filePath 查找
-    const relativeToContent = new Map();
-    for (const [absPath, content] of fileContents) {
-      relativeToContent.set(this.toRelativePath(absPath, sources), content);
-    }
-
-    for (const fileDetail of fileDetails) {
-      // 只有有重复的文件才生成快照
-      if (!fileDetail.duplicationLineCount || fileDetail.duplicationLineCount === 0) continue;
-
-      const blocks = blocksByFile.get(fileDetail.filePath);
-      if (!blocks || blocks.length === 0) continue;
-
-      // 1. 合并重叠的重复块区间
-      const mergedBlocks = this.mergeIntervals(blocks);
-
-      // 2. 获取文件内容和总行数
-      const content = relativeToContent.get(fileDetail.filePath);
-      if (!content) continue;
-      const lines = content.split('\n');
-      const totalLines = lines.length;
-
-      // 3. 每个块扩展 ±contextLines，再次合并重叠的扩展区间
-      //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间。
-      const extended = mergedBlocks.map((b) => ({
-        startLine: Math.max(1, b.startLine - contextLines),
-        endLine: b.endLine + contextLines
-      }));
-      const mergedExtended = this.mergeIntervals(extended, false);
-
-      // 4. 构建 segments：所有区间（含超大块）完整保留代码内容，不做任何省略。
-      //    超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多段（分段不丢内容），
-      //    避免 Base64/JSON 单字符串过大影响传输与解析。
-      const MAX_SEGMENT_CHARS = 24 * 1024; // 单段原始内容字符数上限（仅分段用，不截断内容）
-      const segments = [];
-      // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
-      const pushSegment = (segStart, segEnd, contentText) => {
-        segments.push({
-          originalStartLine: segStart,
-          originalEndLine: segEnd,
-          contentB64: Buffer.from(contentText, 'utf8').toString('base64')
-        });
-      };
-      for (const interval of mergedExtended) {
-        const start = Math.max(1, interval.startLine);
-        const end = Math.min(totalLines, interval.endLine);
-        // 完整保留路径：按字符预算切段（分段间行号连续，内容无丢失）
-        let segStart = start;
-        let segChars = 0;
-        for (let ln = start; ln <= end; ln++) {
-          const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
-          const lineLen = lineText.length + 1; // 行内容 + 换行符
-          if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
-            pushSegment(segStart, ln - 1, lines.slice(segStart - 1, ln - 1).join('\n'));
-            segStart = ln;
-            segChars = 0;
-          }
-          segChars += lineLen;
+        // 收集所有文件
+        const allFiles = [];
+        for (const src of sources) {
+            const files = fileCollector_1.FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+            allFiles.push(...files);
         }
-        if (segChars > 0) {
-          pushSegment(segStart, end, lines.slice(segStart - 1, end).join('\n'));
+        const uniqueFiles = [...new Set(allFiles)];
+        if (uniqueFiles.length === 0) {
+            return this.getEmptyResult();
         }
-      }
-
-      // 5. 构建 snapshotData JSON 并整体 Base64 编码（完整内容随全量上报文件上传 OBS，
-      //    DB snapshot_data 为 LONGTEXT 可承载 MB 级快照，不再做 512KB 截断兜底）
-      const snapshotDataObj = {
-        totalLines: totalLines,
-        contextLines: contextLines,
-        segments: segments,
-        truncated: false // 结构兼容字段：现已完整输出，恒为 false
-      };
-      const snapshotJson = JSON.stringify(snapshotDataObj);
-      fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
+        // scc 口径有效行 < minLines 的文件不参与重复检测（第二道防线）：
+        // 即使插件注释规则与 scc 口径出现不一致（如历史 bug：CMakeLists.txt 的 #[[ ]]
+        // 注释体被当有效行），纯注释撑起的 10 行窗口也会在文件级被拦截，
+        // 与 cmetrics "≥10 个有效代码行才算重复"的定义对齐。
+        // 仅当 slocResult 中确有该文件的 loc 记录时过滤（路径不匹配/scc 不识别的文件保守放行）。
+        let locFiltered = 0;
+        const effectiveFiles = [];
+        for (const file of uniqueFiles) {
+            const rel = this.toRelativePath(file, pathBase);
+            const loc = locByRel.get(rel);
+            if (loc !== undefined && loc < this.minLines) {
+                locFiltered++;
+                continue;
+            }
+            effectiveFiles.push(file);
+        }
+        if (locFiltered > 0) {
+            console.log(`[duplication] Skipped ${locFiltered} files with scc loc < ${this.minLines}`);
+        }
+        const fileContents = new Map();
+        const fileSourceLineMaps = new Map();
+        let totalSourceLines = 0;
+        let binarySkipped = 0;
+        for (const file of effectiveFiles) {
+            try {
+                // 二进制文件嗅探：前 8KB 含 \x00 字节即判定为二进制（与 Git 同款标准），
+                // 跳过重复检测——二进制按 UTF-8 读取会产生 U+FFFD 乱码且大量伪重复块。
+                // 用内容嗅探而非扩展名黑名单：.config/.cfg 等文本配置不能按扩展名误杀。
+                if (DuplicationDetector.isBinaryFile(file)) {
+                    binarySkipped++;
+                    continue;
+                }
+                const content = fs.readFileSync(file, 'utf8');
+                fileContents.set(file, content);
+                const sourceLineMap = this.buildSourceLineMap(content, file);
+                fileSourceLineMaps.set(file, sourceLineMap);
+                totalSourceLines += sourceLineMap.sourceCount;
+            }
+            catch (error) {
+                // 只输出文件基名，不落 runner 绝对路径（Ref #60）
+                console.warn(`[WARN] Failed to read file ${path.basename(file)}: ${error.message}`);
+            }
+        }
+        if (binarySkipped > 0) {
+            console.log(`[duplication] Skipped ${binarySkipped} binary files (NUL byte sniffing)`);
+        }
+        // 行级跨文件匹配（与 cmetrics 官方定义对齐："非空非注释行连续 10 行相同"）
+        const lineResult = this.detectWithLineLevel(effectiveFiles, fileSourceLineMaps);
+        // 用 scc 对每个文件的重复行重新计数（分子分母同工具同口径，保证与 loc 完全一致）
+        const sccDupByRel = this.countDuplicatedLinesWithScc(lineResult.fileDuplicatedLines, fileContents, pathBase);
+        // 使用 let 声明：buildContextSegments 会返回带 snapshotData 的新 fileDetails
+        let fileDetails = this.calculateFileDetailsFromLines(lineResult.fileDuplicatedLines, fileSourceLineMaps, pathBase, locByRel, sccDupByRel);
+        // 从共享滑动窗口构建重复块出现位置（窗口级 union-find 分组，自动去重）
+        const duplicationOccurrences = this.buildDuplicationOccurrences(lineResult.fileSourceLines, fileContents, pathBase, lineResult.sharedHashWindows);
+        // 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData
+        fileDetails = this.buildContextSegments(fileDetails, duplicationOccurrences, fileContents, pathBase);
+        const duplicatedLines = fileDetails.reduce((sum, d) => sum + d.duplicationLineCount, 0);
+        // 分母：优先用传入的 codeScale（与 cmetrics 和华为云保持一致）
+        // 如果没有 codeScale，则用本地统计的源代码行总数
+        const denominator = codeScale || totalSourceLines;
+        const duplicationRate = denominator > 0
+            ? parseFloat(((duplicatedLines / denominator) * 100).toFixed(2))
+            : 0;
+        // 完全一致文件计数（用于总文件重复率）
+        const identicalFileCount = this.calculateFileDuplication(fileContents);
+        const fileDuplicationRate = uniqueFiles.length > 0
+            ? parseFloat(((identicalFileCount / uniqueFiles.length) * 100).toFixed(2))
+            : 0;
+        // 计算完全一致文件的详情（用于总文件重复率下钻）
+        const identicalFileDetails = this.calculateIdenticalFileDetails(fileContents, pathBase);
+        return {
+            totalCodeDuplicationRate: duplicationRate,
+            totalFileDuplicationRate: fileDuplicationRate,
+            // 重复代码块数量：重复块出现位置总数（与 code_metrics_duplication_block 表行数一致）
+            duplicatedBlocks: duplicationOccurrences.length,
+            duplicatedLines: duplicatedLines,
+            totalLines: denominator,
+            duplicatedFiles: identicalFileCount,
+            totalFiles: uniqueFiles.length,
+            fileDetails: fileDetails,
+            identicalFileDetails: identicalFileDetails,
+            // 重复块出现位置列表（同一代码内容的所有出现位置归为同一 group_id），供后端入库 code_metrics_duplication_block
+            duplicationOccurrences: duplicationOccurrences
+        };
     }
-
-    return fileDetails;
-  }
-
-  getEmptyResult() {
-    return {
-      totalCodeDuplicationRate: 0,
-      totalFileDuplicationRate: 0,
-      duplicatedBlocks: 0,
-      duplicatedLines: 0,
-      totalLines: 0,
-      duplicatedFiles: 0,
-      totalFiles: 0,
-      fileDetails: [],
-      identicalFileDetails: [],
-      duplicationOccurrences: []
-    };
-  }
-
-  getName() {
-    return 'duplication';
-  }
+    /**
+     * 行级跨文件重复检测（主路径）
+     * 与华为云 cmetrics 官方定义对齐："非空非注释行连续 10 行相同的代码片段是重复代码"
+     *
+     * 算法：
+     * 1. 提取每个文件的源代码行（非空非注释，含 import 行），保留原始行号
+     * 2. 10 源代码行滑动窗口，md5 哈希每个窗口
+     * 3. 同一 hash 有 2+ 个窗口即计为重复（含同文件内重复）
+     * 4. 标记所有被匹配窗口覆盖的源代码行索引
+     * 5. 合并连续的源代码行索引为最大区间 → 每个区间是一个重复块出现位置
+     *
+     * 相比 token 级窗口的优势：
+     * - 按行对齐，30 行连续重复只产生 1 个块（而非多个 19 行碎片）
+     * - 合并后同一 (file, startLine, endLine) 只产生一条记录（避免重复入库）
+     *
+     * @param {string[]} files 文件绝对路径列表
+     * @param {Map} fileSourceLineMaps 每个文件的源代码行 map（含 sourceLines，分类口径与 scc 一致）
+     * @returns {Object} {fileDuplicatedLines, fileSourceLines, sharedHashWindows}
+     */
+    detectWithLineLevel(files, fileSourceLineMaps) {
+        const WINDOW_SIZE = this.minLines; // 10
+        // Step 1: 提取每个文件的源代码行（与 scc 有效代码行语义一致），保留原始行号
+        // 直接复用 buildSourceLineMap 已计算好的 sourceLines，避免分类口径不一致
+        const fileSourceLines = new Map();
+        for (const file of files) {
+            const sourceLineMap = fileSourceLineMaps.get(file)
+                || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
+            if (!sourceLineMap || !sourceLineMap.sourceLines)
+                continue;
+            fileSourceLines.set(file.replace(/\\/g, '/'), sourceLineMap.sourceLines);
+        }
+        // Step 2: 10 源代码行滑动窗口，md5 哈希
+        const hashToWindows = new Map();
+        for (const [normalizedFile, sourceLines] of fileSourceLines) {
+            if (sourceLines.length < WINDOW_SIZE)
+                continue;
+            for (let i = 0; i <= sourceLines.length - WINDOW_SIZE; i++) {
+                const windowText = sourceLines.slice(i, i + WINDOW_SIZE)
+                    .map((l) => l.text).join('\n');
+                const hash = crypto.createHash('md5').update(windowText).digest('hex');
+                if (!hashToWindows.has(hash))
+                    hashToWindows.set(hash, []);
+                hashToWindows.get(hash).push({
+                    file: normalizedFile,
+                    startIdx: i,
+                    endIdx: i + WINDOW_SIZE - 1
+                });
+            }
+        }
+        // Step 3: 标记重复行 + 收集共享 hash 的滑动窗口（供分组使用）
+        const fileDuplicatedLines = new Map();
+        // 仅含跨 2+ 个窗口的共享 hash：hash -> [{file, startIdx, endIdx}]
+        const sharedHashWindows = new Map();
+        for (const [hash, windows] of hashToWindows) {
+            if (windows.length < 2)
+                continue;
+            sharedHashWindows.set(hash, windows);
+            for (const win of windows) {
+                const sourceLines = fileSourceLines.get(win.file);
+                if (!sourceLines)
+                    continue;
+                if (!fileDuplicatedLines.has(win.file))
+                    fileDuplicatedLines.set(win.file, new Set());
+                const lineSet = fileDuplicatedLines.get(win.file);
+                for (let i = win.startIdx; i <= win.endIdx; i++) {
+                    lineSet.add(sourceLines[i].lineNum);
+                }
+            }
+        }
+        return { fileDuplicatedLines, fileSourceLines, sharedHashWindows };
+    }
+    /**
+     * 把行级匹配得到的「文件→重复行号集合」转为 fileDetails 数组（Step 5）
+     * - 过滤为源代码行（剔除空行/注释行）
+     * - 只含有重复的文件入 fileDetails（无重复文件由 sloc 基础记录覆盖）
+     */
+    calculateFileDetailsFromLines(fileDuplicatedLines, fileSourceLineMaps, sources, locByRel, sccDupByRel) {
+        const fileDetails = [];
+        for (const [file, lineSet] of fileDuplicatedLines) {
+            // 兼容路径分隔符：detectWithLineLevel 内部统一用 '/'，fileSourceLineMaps 的 key 是原始路径
+            const sourceLineMap = fileSourceLineMaps.get(file)
+                || fileSourceLineMaps.get(file.replace(/\//g, '\\'));
+            if (!sourceLineMap)
+                continue;
+            // 分母：优先用 scc 每个文件的 loc（与上报的 loc 完全一致），否则回退到本地分类统计
+            const filePath = this.toRelativePath(file, sources);
+            const sccLoc = locByRel ? locByRel.get(filePath) : undefined;
+            const totalFileSourceLines = (sccLoc !== undefined && sccLoc > 0) ? sccLoc : sourceLineMap.sourceCount;
+            // 分子：优先用 scc 对重复行的重数结果（与分母完全同工具同口径，
+            // 保证重复率明细中的有效代码行与代码规模文件级明细一致，杜绝 >100%）；
+            // scc 重数失败（返回 null）时回退到本地 lineMap 口径并做分母封顶保护
+            let duplicatedSourceLines;
+            if (sccDupByRel) {
+                duplicatedSourceLines = sccDupByRel.get(filePath) || 0;
+                // 块注释边界等极端情况下抽取行重数可能略超全集，按分母封顶
+                duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
+            }
+            else {
+                duplicatedSourceLines = 0;
+                for (const lineNum of lineSet) {
+                    if (sourceLineMap.lineMap.get(lineNum)) {
+                        duplicatedSourceLines++;
+                    }
+                }
+                duplicatedSourceLines = Math.min(duplicatedSourceLines, totalFileSourceLines);
+            }
+            if (duplicatedSourceLines === 0)
+                continue; // 全是注释/空行：不入 fileDetails
+            const duplicationRate = totalFileSourceLines > 0
+                ? parseFloat(((duplicatedSourceLines / totalFileSourceLines) * 100).toFixed(2))
+                : 0;
+            fileDetails.push({
+                filePath: filePath,
+                duplicationRate,
+                duplicationLineCount: duplicatedSourceLines,
+                // 该文件的有效代码行数（scc loc 优先，无则本地分类统计）。
+                // scc 不识别的扩展名（如 .prelds）不会出现在 sloc fileDetails 中，
+                // 合并时用该值兜底 loc，避免 loc=0 但 duplicationLineCount>0 的矛盾展示
+                totalLines: totalFileSourceLines
+            });
+        }
+        return fileDetails;
+    }
+    /**
+     * 用 scc 对每个文件的重复行重新计数，保证分子（重复有效行数）与分母（loc）完全同口径。
+     *
+     * <p>实现方式：把每个文件的重复物理行按行号顺序抽取到临时镜像目录（保持原相对路径与扩展名，
+     * 让 scc 用与全量扫描完全相同的语言规则解析），单次 scc 扫描取每文件 Code 即为重复有效行数。
+     * 任何异常返回 null，调用方回退本地 lineMap 口径。
+     *
+     * @param {Map<string, Set<number>>} fileDuplicatedLines 文件 → 重复物理行号集合
+     * @param {Map<string, string>} fileContents 文件 → 内容
+     * @param {string[]} sources 源目录（用于相对路径对齐）
+     * @returns {Map<string, number>|null} 相对路径 → 重复有效行数（scc 口径），失败返回 null
+     */
+    countDuplicatedLinesWithScc(fileDuplicatedLines, fileContents, sources) {
+        if (!fileDuplicatedLines || fileDuplicatedLines.size === 0) {
+            return new Map();
+        }
+        const os = __nccwpck_require__(857);
+        const { execFileSync } = __nccwpck_require__(5317);
+        const sccPath = DuplicationDetector.getSccBinPath();
+        // 未找到可用 scc（内置 bin 与 PATH 均无）：直接返回 null，
+        // 由调用方回退到本地 line-map 统计，跳过注定失败的命令执行
+        if (!sccPath) {
+            return null;
+        }
+        // 临时镜像目录：mkdtemp 防并发冲突，finally 统一清理
+        const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dup-scc-'));
+        try {
+            for (const [file, lineSet] of fileDuplicatedLines) {
+                const content = fileContents.get(file);
+                if (!content)
+                    continue;
+                const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
+                // 按物理行号升序抽取重复行内容，保持原相对路径与扩展名写入镜像
+                const dupTexts = [...lineSet].sort((a, b) => a - b)
+                    .filter((n) => lines[n - 1] !== undefined)
+                    .map((n) => lines[n - 1]);
+                if (dupTexts.length === 0)
+                    continue;
+                const relPath = this.toRelativePath(file, sources);
+                const dest = path.join(tmpRoot, ...relPath.split('/'));
+                fs.mkdirSync(path.dirname(dest), { recursive: true });
+                fs.writeFileSync(dest, dupTexts.join('\n') + '\n', 'utf8');
+            }
+            const output = execFileSync(sccPath, ['-f', 'json', '--no-cocomo', '--no-size', '--by-file', tmpRoot], {
+                encoding: 'utf8',
+                maxBuffer: 100 * 1024 * 1024,
+                timeout: 300000,
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+            const sccResult = JSON.parse(output.trim());
+            const dupByRel = new Map();
+            for (const lang of sccResult) {
+                for (const f of (lang.Files || [])) {
+                    const name = f.Location || f.Name || '';
+                    if (!name)
+                        continue;
+                    const rel = path.relative(tmpRoot, name).replace(/\\/g, '/');
+                    dupByRel.set(rel, f.Code || 0);
+                }
+            }
+            console.log(`[duplication] scc recount done for ${dupByRel.size} duplicated files`);
+            return dupByRel;
+        }
+        catch (error) {
+            console.warn(`[WARN] scc recount of duplicated lines failed, fallback to local line-map: ${error.message}`);
+            return null;
+        }
+        finally {
+            try {
+                fs.rmSync(tmpRoot, { recursive: true, force: true });
+            }
+            catch (e) { /* 忽略清理异常 */ }
+        }
+    }
+    /**
+     * 获取 scc 二进制路径，策略与 slocDetector 完全一致：
+     * 优先使用 dist/bin 内置二进制，其次回退 PATH 查找（保证分子分母用同一个 scc）。
+     *
+     * @returns {string} scc 可执行路径
+     */
+    static getSccBinPath() {
+        // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+        // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
+        // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 src/detectors（上溯一层为 src/bin）
+        const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
+            ? __nccwpck_require2_.ab
+            : null;
+        // 候选顺序：bundle 根 + bin/ → bundle 根平铺（asset 平铺分发形态）→ 源码结构上溯
+        const candidates = [];
+        if (bundleRoot) {
+            candidates.push(path.join(bundleRoot, 'bin', 'scc'));
+            candidates.push(path.join(bundleRoot, 'scc'));
+        }
+        candidates.push(path.join(__dirname, 'bin', 'scc'));
+        candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
+        candidates.push(path.join(__dirname, 'scc'));
+        for (const candidate of candidates) {
+            if (fs.existsSync(candidate)) {
+                // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755
+                try {
+                    fs.chmodSync(candidate, 0o755);
+                }
+                catch (e) {
+                    console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
+                }
+                return candidate;
+            }
+        }
+        // PATH 探测：确认环境本身安装了 scc 才使用裸命令名，
+        // 避免执行注定失败的命令产生误导性报错
+        try {
+            (__nccwpck_require__(5317).execSync)('command -v scc', { stdio: 'ignore' });
+            return 'scc';
+        }
+        catch (e) {
+            console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），重复行统计回退到本地 line-map');
+            return null;
+        }
+    }
+    // 语言 → 注释/多行字符串规则（与 scc 的"有效代码行"语义对齐）
+    // hashIsCode=true：C/C++ 预处理指令（#include/#define 等）计入代码行（scc 计入）
+    // mlStrings：Python 三引号 docstring 按注释处理（scc 不计入代码行）
+    // blockComments：多组块注释标记（如 CMake 的 #[[ ]]），进入后直到对应结束标记出现
+    static getLanguageConfig(ext, fileName) {
+        const e = (ext || '').toLowerCase();
+        // CMake 按文件名/扩展名识别（与 scc 一致）：CMakeLists.txt / *.cmake。
+        // 支持行注释 # 与方括号块注释 #[[ ]]（#[==[ 变体罕见，暂不支持）。
+        // 此前 CMakeLists.txt 按 .txt 走 default 规则，#[[ ]] 注释体被当成有效代码行，
+        // 导致纯 license 注释撑起 10 行窗口被判重复块（scc 口径 loc=2 的矛盾现象）。
+        const base = (fileName || '').toLowerCase();
+        if (base === 'cmakelists.txt' || e === '.cmake') {
+            return { lineComments: ['#'], blockStart: null, blockEnd: null,
+                blockComments: [['#[[', ']]']], mlStrings: [], hashIsCode: false };
+        }
+        switch (e) {
+            case '.c':
+            case '.cpp':
+            case '.cc':
+            case '.cxx':
+            case '.h':
+            case '.hpp':
+            case '.cuh':
+                return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: true };
+            case '.java':
+            case '.js':
+            case '.mjs':
+            case '.cjs':
+            case '.ts':
+            case '.go':
+            case '.cs':
+            case '.scala':
+            case '.kt':
+            case '.kts':
+            case '.swift':
+            case '.rs':
+                return { lineComments: ['//'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+            case '.php':
+                return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+            case '.py':
+                return { lineComments: ['#'], blockStart: null, blockEnd: null, mlStrings: ['"""', "'''"], hashIsCode: false };
+            case '.rb':
+                // Ruby 块注释：=begin ... =end（必须位于行首），行注释为 #
+                return { lineComments: ['#'], blockStart: '=begin', blockEnd: '=end', mlStrings: [], hashIsCode: false };
+            default:
+                // 未知语言：保守兜底，覆盖 C 风格与 # 注释
+                return { lineComments: ['//', '#'], blockStart: '/*', blockEnd: '*/', mlStrings: [], hashIsCode: false };
+        }
+    }
+    static startsWithAny(text, markers) {
+        for (const m of markers) {
+            if (text.startsWith(m))
+                return true;
+        }
+        return false;
+    }
+    // 判断一行是否以某个多行字符串标记开始；若同一行内已闭合则返回 null（不进入状态）
+    static openMlString(text, markers) {
+        for (const m of markers) {
+            if (text.startsWith(m)) {
+                return text.slice(m.length).includes(m) ? null : m;
+            }
+        }
+        return null;
+    }
+    // 判断一行中（非行首）是否出现三引号字符串标记。
+    // 与 scc 语义对齐：行首的三引号是 docstring（注释），行中的三引号是字符串字面量（计入代码行）。
+    // 返回 { marker, open }：open=true 表示该行打开了未在同行闭合的多行字符串；open=false 表示同行已闭合。
+    static findMidLineMlString(line, markers) {
+        for (const m of markers) {
+            const idx = line.indexOf(m);
+            // 只处理出现在行中的标记；行首由调用方走 docstring 分支
+            if (idx > 0) {
+                const after = line.slice(idx + m.length);
+                return { marker: m, open: !after.includes(m) };
+            }
+        }
+        return null;
+    }
+    // 逐文件构建"有效代码行"分析：与 scc 口径完全一致
+    // - 剔除空行、行注释、块注释、行首三引号 docstring（注释）
+    // - 行中三引号多行字符串（如 x = '''...'''）整块计入代码行（含内部空白行）
+    // - C/C++ 预处理指令（#include/#define 等）计入代码行
+    // 返回 { lineMap: 行号→是否有效代码行, sourceCount, sourceLines: [{lineNum,text}] }
+    buildSourceLineMap(content, filePath) {
+        const lines = content.split('\n');
+        const lang = DuplicationDetector.getLanguageConfig(filePath ? path.extname(filePath) : '', filePath ? path.basename(filePath) : '');
+        const lineMap = new Map();
+        const sourceLines = [];
+        let sourceCount = 0;
+        let inBlock = null; // 块注释结束标记（null=不在块注释中；支持多组标记，如 CMake #[[ ]]）
+        let inDocstring = null; // 行首三引号 docstring（注释）的结束标记
+        let inMlStringCode = null; // 行中三引号多行字符串（代码）的结束标记
+        for (let i = 0; i < lines.length; i++) {
+            const trimmed = lines[i].trim();
+            let isCode = false;
+            if (inBlock !== null) {
+                // 块注释中：查找当前组的结束标记
+                if (trimmed.includes(inBlock))
+                    inBlock = null;
+            }
+            else if (inDocstring) {
+                // docstring（注释）中：查找结束标记
+                if (trimmed.includes(inDocstring))
+                    inDocstring = null;
+            }
+            else if (inMlStringCode) {
+                // 行中多行字符串中：整块计入代码行（含空白行），查找结束标记
+                isCode = true;
+                if (trimmed.includes(inMlStringCode))
+                    inMlStringCode = null;
+            }
+            else if (trimmed.length === 0) {
+                // 空行
+            }
+            else if (lang.mlStrings.length > 0 && DuplicationDetector.startsWithAny(trimmed, lang.mlStrings)) {
+                // 行首三引号 → docstring，视为注释不计入代码行；未闭合则进入状态
+                const marker = DuplicationDetector.openMlString(trimmed, lang.mlStrings);
+                if (marker !== null)
+                    inDocstring = marker;
+            }
+            else if (lang.blockComments
+                && DuplicationDetector.startsWithAny(trimmed, lang.blockComments.map((p) => p[0]))) {
+                // 多组块注释开始行（如 CMake #[[ ]]）：进入后直到对应结束标记出现
+                for (const [bs, be] of lang.blockComments) {
+                    if (trimmed.startsWith(bs)) {
+                        if (!trimmed.slice(bs.length).includes(be))
+                            inBlock = be;
+                        break;
+                    }
+                }
+            }
+            else if (lang.blockStart && trimmed.startsWith(lang.blockStart)) {
+                // 块注释开始行
+                if (!trimmed.includes(lang.blockEnd))
+                    inBlock = lang.blockEnd;
+            }
+            else if (DuplicationDetector.startsWithAny(trimmed, lang.lineComments)) {
+                // 纯行注释
+            }
+            else if (lang.hashIsCode && trimmed.startsWith('#')) {
+                // C/C++ 预处理指令：计入代码行
+                isCode = true;
+            }
+            else {
+                // 普通代码行；若行中出现三引号且未同行闭合，则进入"行中多行字符串"状态（仍计入代码行）
+                isCode = true;
+                if (lang.mlStrings.length > 0) {
+                    const mm = DuplicationDetector.findMidLineMlString(trimmed, lang.mlStrings);
+                    if (mm && mm.open)
+                        inMlStringCode = mm.marker;
+                }
+            }
+            lineMap.set(i + 1, isCode);
+            if (isCode) {
+                sourceCount++;
+                sourceLines.push({ lineNum: i + 1, text: trimmed });
+            }
+        }
+        return { lineMap, sourceCount, sourceLines };
+    }
+    calculateFileDuplication(fileContents) {
+        const hashCount = new Map();
+        for (const content of fileContents.values()) {
+            const normalized = content.trim();
+            const hash = crypto.createHash('md5').update(normalized).digest('hex');
+            if (!hashCount.has(hash))
+                hashCount.set(hash, 0);
+            hashCount.set(hash, hashCount.get(hash) + 1);
+        }
+        let identicalFileCount = 0;
+        for (const count of hashCount.values()) {
+            if (count > 1)
+                identicalFileCount += count;
+        }
+        return identicalFileCount;
+    }
+    // 将绝对路径转为相对路径
+    // 修复前缀匹配问题：/repo 会误匹配 /repo-other/test.py，需确保 src 是路径分隔符边界
+    toRelativePath(absolutePath, sources) {
+        if (!sources || sources.length === 0) {
+            return absolutePath.replace(/\\/g, '/');
+        }
+        const normalizedPath = absolutePath.replace(/\\/g, '/');
+        for (const src of sources) {
+            const normalizedSrc = src.replace(/\\/g, '/').replace(/\/+$/, ''); // 去掉尾部斜杠
+            // 精确前缀匹配：src 后必须跟 / 或恰好等于完整路径
+            if (normalizedPath === normalizedSrc
+                || normalizedPath.startsWith(normalizedSrc + '/')) {
+                return path.relative(src, absolutePath).replace(/\\/g, '/');
+            }
+        }
+        return absolutePath.replace(/\\/g, '/');
+    }
+    /**
+     * 判断文件是否为二进制文件：读取前 8KB，包含 \x00（NUL）字节即判定为二进制。
+     * 与 Git 的 binary 检测标准一致；UTF-8 文本不可能包含 \x00，因此不会误伤文本文件
+     * （.config/.cfg/.json 等文本配置即使扩展名可疑也能正常参与扫描）。
+     *
+     * @param {string} file 文件绝对路径
+     * @returns {boolean} true 表示二进制文件，应跳过重复检测
+     */
+    static isBinaryFile(file) {
+        const SNIFF_BYTES = 8192;
+        let fd = null;
+        try {
+            fd = fs.openSync(file, 'r');
+            const buf = Buffer.alloc(SNIFF_BYTES);
+            const bytesRead = fs.readSync(fd, buf, 0, SNIFF_BYTES, 0);
+            return buf.slice(0, bytesRead).includes(0);
+        }
+        catch (error) {
+            // 读取失败按非二进制处理，交给后续 readFileSync 的 catch 统一告警
+            return false;
+        }
+        finally {
+            if (fd !== null) {
+                try {
+                    fs.closeSync(fd);
+                }
+                catch (e) { /* 忽略关闭异常 */ }
+            }
+        }
+    }
+    /**
+     * 从起始目录向上查找 git 仓库根目录（包含 .git 的目录）
+     * .git 既可能是目录（普通仓库）也可能是文件（worktree/submodule）
+     * @param {string} startDir 起始目录
+     * @returns {string|null} 仓库根目录绝对路径，找不到返回 null
+     */
+    findGitRoot(startDir) {
+        let cur = path.resolve(startDir);
+        const root = path.parse(cur).root;
+        for (let i = 0; i < 8 && cur && cur !== root; i++) {
+            if (fs.existsSync(path.join(cur, '.git')))
+                return cur;
+            const parent = path.dirname(cur);
+            if (parent === cur)
+                break;
+            cur = parent;
+        }
+        return null;
+    }
+    // 计算完全一致文件的详情（用于总文件重复率下钻）
+    // 只在文件内容完全一致（MD5相同）时才认为是重复文件
+    // 对于一组重复文件 A、B、C，只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
+    // 前端将同一组的所有文件展示在一起，无需区分"原始文件"和"重复副本"
+    calculateIdenticalFileDetails(fileContents, sources) {
+        // 按内容哈希分组
+        const hashGroups = new Map();
+        for (const [file, content] of fileContents) {
+            const normalized = content.trim();
+            const hash = crypto.createHash('md5').update(normalized).digest('hex');
+            if (!hashGroups.has(hash)) {
+                hashGroups.set(hash, []);
+            }
+            hashGroups.get(hash).push(file);
+        }
+        const details = [];
+        for (const [hash, files] of hashGroups) {
+            // 只处理有重复的组（2个及以上文件内容一致）
+            if (files.length < 2)
+                continue;
+            // 每组只生成一条记录，duplicatedFiles 包含组内所有文件（含原始文件）
+            // 前端展示时将同一组的所有文件列在一起，不再双向展示
+            const duplicatedFiles = files.map((f) => this.toRelativePath(f, sources));
+            details.push({
+                duplicatedFiles: duplicatedFiles
+            });
+        }
+        return details;
+    }
+    /**
+     * 从行级检测的共享滑动窗口构建重复块出现位置列表（主路径）
+     *
+     * 分组策略（基于「精确文件集合分桶」+「完全一致文件去重」+「跨组去重」）：
+     * - 每个共享 hash（10 行连续窗口内容）都有一个「出现文件集合」F(hash)，即共同出现该内容的所有文件
+     * - 内容完全一致的文件（trim 后 MD5 相同）视为同一「等价类」，每个等价类选一个代表；
+     *   每个窗口的「代表集合」F' = { rep(f) | f ∈ F(hash) }
+     * - 按 F' 精确分桶：同一 F' 的窗口归入同一「重复关系」，不再做超集匹配
+     *   ——这保证同一代码块只属于一个精确文件集合组，不会被多个子集组重复包含
+     * - 同一 F' 桶内 |F'| ≥ 2 才算重复关系；桶内按代表合并连续索引为出现区间，每个区间一条 occurrence
+     * - 完全一致文件组单独输出：同一等价类 ≥2 个文件时整块成一组
+     * - 跨组去重保险：最终对同一 (file, startLine, endLine) 出现在多个组的情形，
+     *   只保留行覆盖最大的那个组，从其余组删除该 occurrence（不足 2 条的组整组丢弃）
+     *
+     * 最终分组示例（all_dup_cfile.cpp=A, test-codeql-cpp.cpp=T 完全一致，dup_cfile.cpp=D 为 A 的子集）：
+     * - 完全一致组：{A, T}（整块 1-46 行）
+     * - 部分重复组：{A, D}（L14-46 共同部分），T 因与 A 完全一致被折叠为 A，不再单独出现
+     * - apig 三文件完全共同代码 L4-16：F'={anti, codecheck, sca} 精确成一组，
+     *   不会在 {anti,codecheck}、{codecheck,sca} 等子集组重复出现
+     *
+     * 重复代码行数/重复率仍由行级检测（fileDuplicatedLines）取并集计算，与分组无关，不受影响。
+     *
+     * @param {Map} fileSourceLines file → [{lineNum, text}]（key 为 '/' 归一化路径）
+     * @param {Map} fileContents file(原始路径) → 内容
+     * @param {string[]} sources 源目录列表
+     * @param {Map} sharedHashWindows hash → [{file, startIdx, endIdx}]（仅跨 2+ 窗口的共享 hash）
+     * @returns {Array} duplicationOccurrences 列表
+     */
+    buildDuplicationOccurrences(fileSourceLines, fileContents, sources, sharedHashWindows) {
+        if (!sharedHashWindows || sharedHashWindows.size === 0)
+            return [];
+        // 1) 计算「完全一致文件」的等价类：内容(trim 后)哈希相同的文件归为一类
+        //    （如 all_dup_cfile.cpp 与 test-codeql-cpp.cpp 完全相同）
+        const contentHashToFiles = new Map(); // hash -> [归一化路径]
+        const fileToRep = new Map(); // 归一化路径 -> 该类代表
+        for (const [file, content] of fileContents) {
+            const norm = file.replace(/\\/g, '/');
+            const hash = crypto.createHash('md5').update(content.trim()).digest('hex');
+            if (!contentHashToFiles.has(hash))
+                contentHashToFiles.set(hash, []);
+            contentHashToFiles.get(hash).push(norm);
+        }
+        for (const files of contentHashToFiles.values()) {
+            const rep = files[0];
+            for (const f of files)
+                fileToRep.set(f, rep);
+        }
+        const occurrences = [];
+        const W = this.minLines;
+        // 2) 预计算每个「代表文件」的 10 行滑动窗口哈希数组（每代表一份，供两两匹配复用）
+        //    repInfo: rep -> { src, winHashes: [idx], hashToPos: Map<hash, [idx]> }
+        const repInfo = new Map();
+        const allReps = new Set();
+        for (const f of fileToRep.keys())
+            allReps.add(fileToRep.get(f));
+        for (const rep of allReps) {
+            const src = fileSourceLines.get(rep);
+            if (!src || src.length < W)
+                continue;
+            const winHashes = new Array(src.length - W + 1);
+            const hashToPos = new Map();
+            for (let i = 0; i <= src.length - W; i++) {
+                const h = crypto.createHash('md5')
+                    .update(src.slice(i, i + W).map((l) => l.text).join('\n')).digest('hex');
+                winHashes[i] = h;
+                if (!hashToPos.has(h))
+                    hashToPos.set(h, []);
+                hashToPos.get(h).push(i);
+            }
+            repInfo.set(rep, { src, winHashes, hashToPos });
+        }
+        // 3) 两两代表文件：枚举所有「最大连续相同源代码行」运行（run）。
+        //    每个 run 代表一条独立的重复关系；对 run 内的两个出现位置建立连接（union），
+        //    再以「文件+索引区间」为节点做 union-find，把多文件共享同一段内容的出现位置合并成一组。
+        //    这样 A-B(1-45) 与 A-B-C(14-45) 作为两条独立关系同时保留，互不截断——
+        //    不再像旧的「按精确文件集合分桶」那样，把长关系中的窗口让给超集关系导致长关系被截断。
+        const parent = new Map();
+        const find = (k) => {
+            let root = k;
+            while (parent.get(root) !== root)
+                root = parent.get(root);
+            while (parent.get(k) !== root) {
+                const next = parent.get(k);
+                parent.set(k, root);
+                k = next;
+            }
+            return root;
+        };
+        const union = (a, b) => {
+            const ra = find(a), rb = find(b);
+            if (ra !== rb)
+                parent.set(ra, rb);
+        };
+        const nodeKey = (rep, s, e) => `${rep}\u0001${s}\u0001${e}`;
+        const repList = [...repInfo.keys()];
+        for (let a = 0; a < repList.length; a++) {
+            const A = repInfo.get(repList[a]);
+            for (let b = a + 1; b < repList.length; b++) {
+                const B = repInfo.get(repList[b]);
+                // 以 A 的窗口为基准，逐个匹配 B 中位置，并沿对角线扩展成最大 run
+                const consumed = new Set(); // "i:j" 已归属某个 run，避免重复枚举
+                for (let i = 0; i < A.winHashes.length; i++) {
+                    const positions = B.hashToPos.get(A.winHashes[i]) || [];
+                    for (const j of positions) {
+                        const ck = i + ':' + j;
+                        if (consumed.has(ck))
+                            continue;
+                        let k = 0;
+                        while (i + k < A.winHashes.length && j + k < B.winHashes.length
+                            && A.winHashes[i + k] === B.winHashes[j + k])
+                            k++;
+                        for (let t = 0; t < k; t++)
+                            consumed.add((i + t) + ':' + (j + t));
+                        // run 覆盖的源代码索引区间（含窗口内所有行）
+                        const sA = i, eA = i + W - 1 + (k - 1);
+                        const sB = j, eB = j + W - 1 + (k - 1);
+                        const kA = nodeKey(repList[a], sA, eA);
+                        const kB = nodeKey(repList[b], sB, eB);
+                        if (!parent.has(kA))
+                            parent.set(kA, kA);
+                        if (!parent.has(kB))
+                            parent.set(kB, kB);
+                        union(kA, kB);
+                    }
+                }
+            }
+        }
+        // 3.5) 同文件内自重复：同一文件中相同内容出现在 ≥2 个非重叠位置时，这些区间互相 union。
+        //      行级检测（detectWithLineLevel）把同文件内重复计入重复行数，而上面两两匹配只覆盖跨文件，
+        //      会导致"文件内自重复"的文件（如大型 JSON 配置）重复率有值却没有 occurrence 明细。
+        //      按「对角线 run 扩展」合并长重复（8-36/72-100 不再被切成 10 行小块），并做了两项防爆保护：
+        //      a) 不用 Set 标记已处理位置对：V8 的 Set/Map 元素上限为 2^24（nodejs/node#37320），
+        //         大型配置文件的高频模板窗口对数可达千万级，Set.add 会抛
+        //         RangeError: Value undefined out of range for undefined options property undefined。
+        //         改用「对角线连续性剪枝」：若 (i-1, j-1) 处窗口哈希也相等，说明该对已被更早
+        //         起点的 run 覆盖，直接跳过——每个 run 只从其最左端点完整扩展一次。
+        //      b) 同一 hash 的出现段数超过 MAX_SELF_DUP_SEGS 时退回「所有段 union 成一组」：
+        //         超高频模板（同内容出现上百次）两两配对组合爆炸且展示价值低，整组输出即可。
+        const MAX_SELF_DUP_SEGS = 64;
+        for (const [rep, info] of repInfo) {
+            const winHashes = info.winHashes;
+            const len = winHashes.length;
+            for (const positions of info.hashToPos.values()) {
+                if (positions.length < 2)
+                    continue;
+                // 分段：连续窗口位置合段（段内为周期性重叠窗口，j-i < W 会被跳过，不参与配对）
+                const segs = [];
+                let segStart = positions[0];
+                for (let p = 1; p <= positions.length; p++) {
+                    const cur = positions[p];
+                    if (cur === undefined || cur !== positions[p - 1] + 1) {
+                        segs.push([segStart, positions[p - 1]]);
+                        segStart = cur;
+                    }
+                }
+                if (segs.length < 2)
+                    continue;
+                if (segs.length > MAX_SELF_DUP_SEGS) {
+                    // 超高频模板：所有段整组 union（每段一个节点），避免两两配对组合爆炸
+                    const segNodes = segs.map(([a, b]) => {
+                        const k = nodeKey(rep, a, b + W - 1);
+                        if (!parent.has(k))
+                            parent.set(k, k);
+                        return k;
+                    });
+                    for (let i = 1; i < segNodes.length; i++)
+                        union(segNodes[0], segNodes[i]);
+                    continue;
+                }
+                // 常规场景：跨段位置对做对角线 run 扩展（段数 ≤ MAX_SELF_DUP_SEGS，组合可控）
+                for (let si = 0; si < segs.length; si++) {
+                    for (let sj = si + 1; sj < segs.length; sj++) {
+                        for (let i = segs[si][0]; i <= segs[si][1]; i++) {
+                            for (let j = segs[sj][0]; j <= segs[sj][1]; j++) {
+                                // 只处理非重叠的后向重复位置：j ≥ i+W 保证两段窗口不重叠
+                                if (j < i + W)
+                                    continue;
+                                // 对角线连续性剪枝：(i-1, j-1) 也同哈希 → 该对属于已扩展过的 run，跳过
+                                if (i > 0 && winHashes[i - 1] === winHashes[j - 1])
+                                    continue;
+                                // 从 (i, j) 沿对角线扩展最大 run：(i+k, j+k) 窗口内容一致即同属一段重复
+                                let k = 0;
+                                while (i + k < len && j + k < len
+                                    && winHashes[i + k] === winHashes[j + k]) {
+                                    k++;
+                                }
+                                // run 覆盖的源代码索引区间（含窗口内所有行）
+                                const kA = nodeKey(rep, i, i + W - 1 + (k - 1));
+                                const kB = nodeKey(rep, j, j + W - 1 + (k - 1));
+                                if (!parent.has(kA))
+                                    parent.set(kA, kA);
+                                if (!parent.has(kB))
+                                    parent.set(kB, kB);
+                                union(kA, kB);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 按连通分量分组：每个分量 = 一条独立的重复关系组
+        const compNodes = new Map(); // root -> Set<nodeKey>
+        for (const k of parent.keys()) {
+            const r = find(k);
+            if (!compNodes.has(r))
+                compNodes.set(r, new Set());
+            compNodes.get(r).add(k);
+        }
+        for (const nodes of compNodes.values()) {
+            if (nodes.size < 2)
+                continue;
+            const fileOccs = [];
+            for (const nk of nodes) {
+                const parts = nk.split('\u0001');
+                const rep = parts[0];
+                const s = Number(parts[1]), e = Number(parts[2]);
+                const src = fileSourceLines.get(rep);
+                if (!src)
+                    continue;
+                fileOccs.push({
+                    file: rep,
+                    startLine: src[s].lineNum,
+                    endLine: src[e].lineNum
+                });
+            }
+            if (fileOccs.length < 2)
+                continue; // 少于 2 个出现位置不算重复
+            this.pushGroup(occurrences, fileOccs, sources, fileContents);
+        }
+        // 4) 处理「完全一致文件」组：同一内容哈希的 ≥2 个文件单独成一组，
+        //    每个成员各占一条出现记录（整文件为重复块）
+        //    只有源代码行数 ≥ minLines(10) 的文件才可能被滑窗检测为重复块，故以此作为阈值
+        for (const files of contentHashToFiles.values()) {
+            if (files.length < 2)
+                continue;
+            const fileOccs = [];
+            for (const f of files) {
+                const sourceLines = fileSourceLines.get(f);
+                if (!sourceLines || sourceLines.length < this.minLines)
+                    continue;
+                fileOccs.push({
+                    file: f,
+                    startLine: sourceLines[0].lineNum,
+                    endLine: sourceLines[sourceLines.length - 1].lineNum
+                });
+            }
+            if (fileOccs.length < 2)
+                continue;
+            this.pushGroup(occurrences, fileOccs, sources, fileContents);
+        }
+        // 5) 跨组去重保险：同一 (file, startLine, endLine) 若出现在多个组，
+        //    只保留行覆盖最大的那个组中的出现位置，从其余组删除。
+        //    （理论上精确分桶后不应出现，此处作为防御性兜底，避免任何边界情形造成跨组重复）
+        this.dedupOccurrencesAcrossGroups(occurrences);
+        return occurrences;
+    }
+    // 跨组去重：同一 (filePath, startLine, endLine) 出现在多个组时，
+    // 只保留组内「所有出现位置行覆盖并集」最大的那个组中的该出现位置，从其它组删除。
+    // 删除后若某组不足 2 条出现位置，则整组丢弃。
+    // 注意：此处以 occurrence 自身的 groupId 为分组依据，不依赖外部结构。
+    dedupOccurrencesAcrossGroups(occurrences) {
+        if (!occurrences || occurrences.length === 0)
+            return;
+        // 统计每个组的行覆盖并集大小，用于决定保留哪个组
+        const groupLineSpan = new Map(); // groupId -> Set<lineKey>
+        for (const o of occurrences) {
+            if (!groupLineSpan.has(o.groupId))
+                groupLineSpan.set(o.groupId, new Set());
+            const span = groupLineSpan.get(o.groupId);
+            for (let ln = o.startLine; ln <= o.endLine; ln++) {
+                span.add(`${o.filePath}:${ln}`);
+            }
+        }
+        // 对每个 (filePath, startLine, endLine) 找出它所在的所有组，保留 span 最大者
+        const blockToGroups = new Map(); // blockKey -> Set<groupId>
+        for (const o of occurrences) {
+            const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
+            if (!blockToGroups.has(k))
+                blockToGroups.set(k, new Set());
+            blockToGroups.get(k).add(o.groupId);
+        }
+        const dropGroupForBlock = new Map(); // blockKey -> Set<groupId>(要删除的组)
+        for (const [k, gids] of blockToGroups) {
+            if (gids.size < 2)
+                continue;
+            let best = null, bestSize = -1;
+            for (const gid of gids) {
+                const sz = groupLineSpan.get(gid) ? groupLineSpan.get(gid).size : 0;
+                if (sz > bestSize) {
+                    bestSize = sz;
+                    best = gid;
+                }
+            }
+            const drop = new Set();
+            for (const gid of gids)
+                if (gid !== best)
+                    drop.add(gid);
+            dropGroupForBlock.set(k, drop);
+        }
+        if (dropGroupForBlock.size === 0)
+            return;
+        // 执行删除：从被标记为删除的 (blockKey, groupId) 对中移除 occurrence
+        for (let i = occurrences.length - 1; i >= 0; i--) {
+            const o = occurrences[i];
+            const k = `${o.filePath}\u0001${o.startLine}\u0001${o.endLine}`;
+            const drop = dropGroupForBlock.get(k);
+            if (drop && drop.has(o.groupId)) {
+                occurrences.splice(i, 1);
+            }
+        }
+        // 删除后若某组不足 2 条，整组丢弃
+        const groupCount = new Map();
+        for (const o of occurrences) {
+            groupCount.set(o.groupId, (groupCount.get(o.groupId) || 0) + 1);
+        }
+        for (let i = occurrences.length - 1; i >= 0; i--) {
+            if (groupCount.get(occurrences[i].groupId) < 2) {
+                occurrences.splice(i, 1);
+            }
+        }
+    }
+    // 把一组出现位置(重复块)统一排序、生成 groupId 并写入 occurrences
+    pushGroup(occurrences, fileOccs, sources, fileContents) {
+        // 按 (filePath, startLine) 排序，occurrenceIndex 从 0 递增
+        fileOccs.sort((a, b) => {
+            const relA = this.toRelativePath(a.file, sources);
+            const relB = this.toRelativePath(b.file, sources);
+            if (relA !== relB)
+                return relA.localeCompare(relB);
+            return a.startLine - b.startLine;
+        });
+        // groupId 用组内所有出现位置(文件+起止行)的结构化哈希，保证不同重复关系唯一。
+        // 同一关系内各 occurrence 的内容可能不同（如共同部分与完全一致块），
+        // 因此不能再用「单一内容哈希」作为组 ID，否则不同关系可能因首块内容相同而碰撞。
+        const groupId = crypto.createHash('sha256')
+            .update(fileOccs
+            .map((o) => `${this.toRelativePath(o.file, sources)}:${o.startLine}-${o.endLine}`)
+            .sort()
+            .join('\u0001'))
+            .digest('hex');
+        fileOccs.forEach((occ, i) => {
+            const content = this.extractBlockContent(occ.file, occ.startLine, occ.endLine, fileContents);
+            occurrences.push({
+                groupId: groupId,
+                contentHash: groupId,
+                occurrenceIndex: i,
+                filePath: this.toRelativePath(occ.file, sources),
+                startLine: occ.startLine,
+                endLine: occ.endLine,
+                content: content
+            });
+        });
+    }
+    /**
+     * 提取文件中指定行号区间的代码内容
+     *
+     * @param {string} file 文件路径（可能是正斜杠或反斜杠格式）
+     * @param {number} startLine 起始行（1-based）
+     * @param {number} endLine 结束行（1-based）
+     * @param {Map} fileContents file(原始路径) → 内容
+     * @returns {string} 代码内容，找不到文件时返回空字符串
+     */
+    extractBlockContent(file, startLine, endLine, fileContents) {
+        // 兼容路径分隔符：fileContents 的 key 是原始路径（Windows 下含反斜杠）
+        const content = fileContents.get(file)
+            || fileContents.get(file.replace(/\//g, '\\'));
+        if (!content)
+            return '';
+        const lines = content.split('\n');
+        const start = Math.max(0, startLine - 1);
+        const end = Math.min(lines.length, endLine);
+        return lines.slice(start, end).join('\n');
+    }
+    /**
+     * 合并重叠/相邻的行号区间
+     *
+     * @param {Array} intervals [{startLine, endLine}]
+     * @param {boolean} mergeAdjacent 是否合并相邻区间（间隔 ≤1 行），默认 true。
+     *   重复块本身合并传 true（相邻重复块视为一个连续重复区域）；
+     *   扩展 ±contextLines 后的区间合并传 false（只有真正重叠才合并，避免上下文过长）。
+     * @returns {Array} 合并后的区间列表（按 startLine 排序）
+     */
+    mergeIntervals(intervals, mergeAdjacent = true) {
+        if (intervals.length === 0)
+            return [];
+        const sorted = intervals.slice().sort((a, b) => a.startLine - b.startLine);
+        const merged = [Object.assign({}, sorted[0])];
+        // mergeAdjacent=true: 间隔 ≤1 行也合并；false: 只有真正重叠（startLine ≤ last.endLine）才合并
+        const overlapThreshold = mergeAdjacent ? 1 : 0;
+        for (let i = 1; i < sorted.length; i++) {
+            const last = merged[merged.length - 1];
+            if (sorted[i].startLine <= last.endLine + overlapThreshold) {
+                last.endLine = Math.max(last.endLine, sorted[i].endLine);
+                // 合并时透传附加属性（如 oversized）：任一子区间为真则合并区间视为真
+                if (sorted[i].oversized)
+                    last.oversized = true;
+            }
+            else {
+                merged.push(Object.assign({}, sorted[i]));
+            }
+        }
+        return merged;
+    }
+    /**
+     * 为有重复的文件构建上下文片段快照（重复块±5行），挂到 fileDetail.snapshotData。
+     *
+     * segments 生成策略（完整输出，不截断）：
+     * - 所有重复块（含超大块）均完整保留其代码内容（含 ±contextLines 上下文），
+     *   保证前端能展示/高亮全部重复代码；相邻块的上下文重叠时会合并成一个连续区间。
+     * - 超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多个 segment（分段不丢内容），
+     *   不再对超大块做「头+省略+尾」截断；快照整体随全量上报文件上传 OBS。
+     * - 未覆盖的行段由前端根据相邻片段的行号差用 "... N lines omitted ..." 占位。
+     *
+     * snapshotData 结构（整体 Base64 编码）：
+     * {
+     *   totalLines: 原始文件总行数,
+     *   contextLines: 上下文行数(5),
+     *   truncated: 固定 false（保留字段做结构兼容，现已完整输出不再截断）,
+     *   segments: [{originalStartLine, originalEndLine, contentB64}]
+     *   // 每个 segment 的 contentB64 为该片段代码内容再次 Base64 编码
+     * }
+     *
+     * @param {Array} fileDetails 文件明细列表
+     * @param {Array} duplicationOccurrences 重复块出现位置列表
+     * @param {Map} fileContents file(原始路径) → 内容
+     * @param {string[]} sources 源目录列表
+     * @param {number} contextLines 上下文行数，默认 5
+     * @returns {Array} 更新后的 fileDetails（每个有重复的 fileDetail 增加 snapshotData 字段）
+     */
+    buildContextSegments(fileDetails, duplicationOccurrences, fileContents, sources, contextLines = 5) {
+        if (!duplicationOccurrences || duplicationOccurrences.length === 0) {
+            return fileDetails;
+        }
+        // 按 filePath 分组出现位置，得到每个文件的重复块区间
+        const blocksByFile = new Map(); // relativePath → [{startLine, endLine}]
+        for (const occ of duplicationOccurrences) {
+            if (!blocksByFile.has(occ.filePath))
+                blocksByFile.set(occ.filePath, []);
+            blocksByFile.get(occ.filePath).push({ startLine: occ.startLine, endLine: occ.endLine });
+        }
+        // 构建 relativePath → content 的映射，便于按 fileDetail.filePath 查找
+        const relativeToContent = new Map();
+        for (const [absPath, content] of fileContents) {
+            relativeToContent.set(this.toRelativePath(absPath, sources), content);
+        }
+        for (const fileDetail of fileDetails) {
+            // 只有有重复的文件才生成快照
+            if (!fileDetail.duplicationLineCount || fileDetail.duplicationLineCount === 0)
+                continue;
+            const blocks = blocksByFile.get(fileDetail.filePath);
+            if (!blocks || blocks.length === 0)
+                continue;
+            // 1. 合并重叠的重复块区间
+            const mergedBlocks = this.mergeIntervals(blocks);
+            // 2. 获取文件内容和总行数
+            const content = relativeToContent.get(fileDetail.filePath);
+            if (!content)
+                continue;
+            const lines = content.split('\n');
+            const totalLines = lines.length;
+            // 3. 每个块扩展 ±contextLines，再次合并重叠的扩展区间
+            //    传 mergeAdjacent=false：只有真正重叠才合并，避免相邻重复块的上下文被合并成大区间。
+            const extended = mergedBlocks.map((b) => ({
+                startLine: Math.max(1, b.startLine - contextLines),
+                endLine: b.endLine + contextLines
+            }));
+            const mergedExtended = this.mergeIntervals(extended, false);
+            // 4. 构建 segments：所有区间（含超大块）完整保留代码内容，不做任何省略。
+            //    超长内容仅按 MAX_SEGMENT_CHARS 字符预算拆分为多段（分段不丢内容），
+            //    避免 Base64/JSON 单字符串过大影响传输与解析。
+            const MAX_SEGMENT_CHARS = 24 * 1024; // 单段原始内容字符数上限（仅分段用，不截断内容）
+            const segments = [];
+            // 闭合一段：把 [segStart, segEnd] 行内容写入 segments
+            const pushSegment = (segStart, segEnd, contentText) => {
+                segments.push({
+                    originalStartLine: segStart,
+                    originalEndLine: segEnd,
+                    contentB64: Buffer.from(contentText, 'utf8').toString('base64')
+                });
+            };
+            for (const interval of mergedExtended) {
+                const start = Math.max(1, interval.startLine);
+                const end = Math.min(totalLines, interval.endLine);
+                // 完整保留路径：按字符预算切段（分段间行号连续，内容无丢失）
+                let segStart = start;
+                let segChars = 0;
+                for (let ln = start; ln <= end; ln++) {
+                    const lineText = lines[ln - 1] == null ? '' : lines[ln - 1];
+                    const lineLen = lineText.length + 1; // 行内容 + 换行符
+                    if (segChars > 0 && segChars + lineLen > MAX_SEGMENT_CHARS) {
+                        pushSegment(segStart, ln - 1, lines.slice(segStart - 1, ln - 1).join('\n'));
+                        segStart = ln;
+                        segChars = 0;
+                    }
+                    segChars += lineLen;
+                }
+                if (segChars > 0) {
+                    pushSegment(segStart, end, lines.slice(segStart - 1, end).join('\n'));
+                }
+            }
+            // 5. 构建 snapshotData JSON 并整体 Base64 编码（完整内容随全量上报文件上传 OBS，
+            //    DB snapshot_data 为 LONGTEXT 可承载 MB 级快照，不再做 512KB 截断兜底）
+            const snapshotDataObj = {
+                totalLines: totalLines,
+                contextLines: contextLines,
+                segments: segments,
+                truncated: false // 结构兼容字段：现已完整输出，恒为 false
+            };
+            const snapshotJson = JSON.stringify(snapshotDataObj);
+            fileDetail.snapshotData = Buffer.from(snapshotJson, 'utf8').toString('base64');
+        }
+        return fileDetails;
+    }
+    getEmptyResult() {
+        return {
+            totalCodeDuplicationRate: 0,
+            totalFileDuplicationRate: 0,
+            duplicatedBlocks: 0,
+            duplicatedLines: 0,
+            totalLines: 0,
+            duplicatedFiles: 0,
+            totalFiles: 0,
+            fileDetails: [],
+            identicalFileDetails: [],
+            duplicationOccurrences: []
+        };
+    }
+    getName() {
+        return 'duplication';
+    }
 }
-
 module.exports = DuplicationDetector;
 
 
 /***/ }),
 
-/***/ 843:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ 5005:
+/***/ ((module, exports, __nccwpck_require__) => {
 
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 const { execSync } = __nccwpck_require__(5317);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
 const os = __nccwpck_require__(857);
-const BaseDetector = __nccwpck_require__(658);
-const FileCollector = __nccwpck_require__(6790);
-
+const BaseDetector = __nccwpck_require__(1504);
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+const fileCollector_1 = __nccwpck_require__(8124);
 class LizardDetector extends BaseDetector {
-  constructor(config = {}) {
-    super(config);
-    this.tempJsonFile = './lizard_output.json';
-    this.allowedExtensions = config.allowedExtensions || [];
-  }
-
-  async detect(source) {
-    // 支持单个路径或多个路径
-    const sources = Array.isArray(source) ? source : [source];
-    const excludeDirs = this.config.excludeDirs || [];
-
-    // 收集所有文件
-    const allFiles = [];
-    for (const src of sources) {
-      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-      allFiles.push(...files);
+    constructor(config = {}) {
+        super(config);
+        this.tempJsonFile = './lizard_output.json';
+        this.allowedExtensions = config.allowedExtensions || [];
     }
-
-    // 去重
-    const uniqueFiles = [...new Set(allFiles)];
-
-    if (uniqueFiles.length === 0) {
-      return this.getEmptyResult();
-    }
-
-    // Lizard 处理所有文件，统一获取函数数、函数代码行数和圈复杂度
-    let lizardResult = { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-    if (uniqueFiles.length > 0) {
-      lizardResult = this.runLizard(uniqueFiles);
-    }
-
-    const totalFunctions = lizardResult.totalFunctions;
-    const totalNloc = lizardResult.totalNloc;
-    const totalCC = lizardResult.totalCC;
-
-    if (totalFunctions === 0) {
-      return this.getEmptyResult();
-    }
-
-    // 按文件聚合函数数据，计算文件级指标
-    const fileDetails = this.aggregateFileDetails(lizardResult.functions, sources);
-
-    // 到达此处 totalFunctions 必然大于 0（为 0 时已提前返回 getEmptyResult）
-    return {
-      totalFunctions,
-      totalNloc,
-      averageFunctionLoc: parseFloat((totalNloc / totalFunctions).toFixed(2)),
-      totalCyclomaticComplexity: totalCC,
-      averageCyclomaticComplexity: parseFloat((totalCC / totalFunctions).toFixed(2)),
-      // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（区别于方法维度的 averageCyclomaticComplexity）
-      cyclomaticComplexityPerFile: fileDetails.length > 0
-        ? parseFloat((totalCC / fileDetails.length).toFixed(2))
-        : 0,
-      fileDetails: fileDetails
-    };
-  }
-
-  // 将文件列表写入临时文件，供 lizard 的 -f 参数读取
-  writeInputFile(files) {
-    const tempInputPath = path.join(os.tmpdir(), `lizard_input_${Date.now()}.txt`);
-    fs.writeFileSync(tempInputPath, files.join('\n'), 'utf8');
-    return tempInputPath;
-  }
-
-  runLizard(files) {
-    const tempJsonPath = path.resolve(this.tempJsonFile);
-    let tempInputPath = null;
-
-    try {
-      if (fs.existsSync(tempJsonPath)) {
-        fs.unlinkSync(tempJsonPath);
-      }
-
-      // 使用 -f 参数从临时文件读取文件列表，避免命令行长度限制
-      tempInputPath = this.writeInputFile(files);
-      const args = ['-f', tempInputPath, '-o', tempJsonPath];
-
-      execSync('python3 -m lizard ' + args.join(' '), {
-        encoding: 'utf8',
-        maxBuffer: 50 * 1024 * 1024,
-        timeout: 300000,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-
-      if (tempInputPath) {
-        fs.unlinkSync(tempInputPath);
-        tempInputPath = null;
-      }
-
-      if (!fs.existsSync(tempJsonPath)) {
-        return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-      }
-
-      const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
-      if (fs.existsSync(tempJsonPath)) fs.unlinkSync(tempJsonPath);
-
-      if (!content) {
-        return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-      }
-
-      if (content.startsWith('{')) {
-        const results = JSON.parse(content);
-        return this.calculateMetricsFromLizard(results);
-      } else {
-        return this.parseTextOutput(content);
-      }
-    } catch (error) {
-      if (tempInputPath && fs.existsSync(tempInputPath)) {
-        fs.unlinkSync(tempInputPath);
-        tempInputPath = null;
-      }
-      if (fs.existsSync(tempJsonPath)) {
-        try {
-          const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
-          if (fs.existsSync(tempJsonPath)) fs.unlinkSync(tempJsonPath);
-          if (content) {
-            if (content.startsWith('{')) {
-              return this.calculateMetricsFromLizard(JSON.parse(content));
-            } else {
-              return this.parseTextOutput(content);
-            }
-          }
-        } catch (parseError) {
-          console.warn(`Failed to parse lizard output: ${parseError.message}`);
-        }
-      }
-      console.warn(`Lizard detection warning: ${error.message}`);
-      return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
-    }
-  }
-
-  parseTextOutput(content) {
-    let totalFunctions = 0;
-    let totalNloc = 0;
-    let totalCC = 0;
-    const functions = [];
-
-    const lines = content.split('\n');
-    for (const line of lines) {
-      if (!line.trim() || line.includes('NLOC') || line.includes('===') || line.includes('----')) {
-        continue;
-      }
-
-      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+?)@(\d+)-(\d+)@(.+)$/);
-      if (match) {
-        totalFunctions++;
-        const cc = parseInt(match[2], 10);
-        totalCC += cc;
-
-        // 从源文件中计算函数体有效代码行（排除方法签名和参数行）
-        const startLine = parseInt(match[7], 10);
-        const endLine = parseInt(match[8], 10);
-        const filePath = match[9].trim();
-
-        let bodyNloc = parseInt(match[1], 10);
-        try {
-          const fileContent = fs.readFileSync(filePath, 'utf8');
-          const defLines = this.countDefinitionLines(fileContent, startLine);
-          bodyNloc = this.calculateBodyNloc(fileContent, startLine, endLine, defLines);
-        } catch (e) {
-          // 读取源文件失败时，回退到 nloc - 1
-          bodyNloc = Math.max(0, bodyNloc - 1);
-        }
-
-        totalNloc += bodyNloc;
-        // 保留 filename 用于按文件聚合
-        functions.push({
-          // match[6] 是正则捕获的函数名（如 MyClass.myMethod）
-          name: match[6] || '',
-          nloc: bodyNloc,
-          cc: cc,
-          startLine: startLine,
-          endLine: endLine,
-          filename: filePath
-        });
-      }
-    }
-
-    return { totalFunctions, totalNloc, totalCC, functions };
-  }
-
-  getEmptyResult() {
-    // 函数总数为 0（lizard 不支持的语言、纯配置/文本仓等）时两个均值指标不适用，
-    // 返回 null 表示无数据，避免 0 被当成真实指标展示与排序
-    return {
-      totalFunctions: 0,
-      totalNloc: 0,
-      averageFunctionLoc: null,
-      totalCyclomaticComplexity: 0,
-      averageCyclomaticComplexity: null,
-      cyclomaticComplexityPerFile: 0,
-      fileDetails: []
-    };
-  }
-
-  // 根据源文件内容，计算函数定义占用的行数
-  countDefinitionLines(fileContent, startLine) {
-    const lines = fileContent.split('\n');
-    const startIndex = startLine - 1;
-    if (startIndex < 0 || startIndex >= lines.length) return 1;
-
-    for (let i = startIndex; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.endsWith(':')) {
-        return i - startIndex + 1;
-      }
-      if (line.endsWith('{')) {
-        return i - startIndex + 1;
-      }
-      if (line.endsWith(')') && i + 1 < lines.length && lines[i + 1].trim() === '{') {
-        return i - startIndex + 1;
-      }
-    }
-
-    return 1;
-  }
-
-  // 判断一行是否为有效代码行（非空行、非纯注释行）
-  static isSourceLine(line) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) return false;
-    if (trimmed.startsWith('#')) return false;
-    if (trimmed.startsWith('//')) return false;
-    if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/')) return false;
-    return true;
-  }
-
-  // 从源文件中精确计算函数体的有效代码行数（排除定义行）
-  calculateBodyNloc(fileContent, startLine, endLine, defLines) {
-    const lines = fileContent.split('\n');
-    let bodyNloc = 0;
-
-    const bodyStart = startLine - 1 + defLines;
-    const bodyEnd = endLine;
-
-    for (let i = bodyStart; i < bodyEnd && i < lines.length; i++) {
-      if (LizardDetector.isSourceLine(lines[i])) {
-        bodyNloc++;
-      }
-    }
-
-    return bodyNloc;
-  }
-
-  calculateMetricsFromLizard(results) {
-    let totalFunctions = 0;
-    let totalNloc = 0;
-    let totalCC = 0;
-    const functions = [];
-
-    if (results && results.functions) {
-      for (const func of results.functions) {
-        totalFunctions++;
-        totalCC += func.cyclomatic_complexity || 1;
-
-        // 读取源文件，精确计算函数定义行数，从 nloc 中排除
-        let bodyNloc = func.nloc || 0;
-        if (func.start_line && func.end_line && func.filename) {
-          try {
-            const fileContent = fs.readFileSync(func.filename, 'utf8');
-            const defLines = this.countDefinitionLines(fileContent, func.start_line);
-            bodyNloc = this.calculateBodyNloc(fileContent, func.start_line, func.end_line, defLines);
-          } catch (e) {
-            bodyNloc = Math.max(0, (func.nloc || 0) - 1);
-          }
-        } else {
-          bodyNloc = Math.max(0, (func.nloc || 0) - 1);
-        }
-
-        totalNloc += bodyNloc;
-        functions.push({
-          name: func.name,
-          nloc: bodyNloc,
-          cc: func.cyclomatic_complexity || 1,
-          startLine: func.start_line,
-          endLine: func.end_line,
-          filename: func.filename || ''
-        });
-      }
-    }
-
-    return { totalFunctions, totalNloc, totalCC, functions };
-  }
-
-  // 按文件聚合函数数据，保留每个函数的明细（函数名、行数、开始行、结束行）
-  aggregateFileDetails(functions, sources) {
-    if (!functions || functions.length === 0) return [];
-
-    // 按文件名分组
-    const fileMap = new Map();
-    for (const func of functions) {
-      const filename = func.filename || '';
-      if (!filename) continue;
-      if (!fileMap.has(filename)) {
-        fileMap.set(filename, []);
-      }
-      fileMap.get(filename).push(func);
-    }
-
-    const fileDetails = [];
-    for (const [filename, funcs] of fileMap) {
-      const functionCount = funcs.length;
-      const totalNloc = funcs.reduce((sum, f) => sum + (f.nloc || 0), 0);
-      const totalCC = funcs.reduce((sum, f) => sum + (f.cc || 0), 0);
-
-      // 将绝对路径转为相对路径
-      let filePath = filename;
-      if (sources && sources.length > 0) {
+    async detect(source) {
+        // 支持单个路径或多个路径
+        const sources = Array.isArray(source) ? source : [source];
+        const excludeDirs = this.config.excludeDirs || [];
+        // 收集所有文件
+        const allFiles = [];
         for (const src of sources) {
-          const normalizedSrc = src.replace(/\\/g, '/');
-          const normalizedPath = filePath.replace(/\\/g, '/');
-          if (normalizedPath.startsWith(normalizedSrc)) {
-            filePath = path.relative(src, filename);
-            break;
-          }
+            const files = fileCollector_1.FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+            allFiles.push(...files);
         }
-      }
-      filePath = filePath.replace(/\\/g, '/');
-
-      // 保留每个函数的明细信息
-      const functionDetails = funcs.map(f => ({
-        functionName: f.name || '',
-        functionLoc: f.nloc || 0,
-        startLine: f.startLine || 0,
-        endLine: f.endLine || 0
-      }));
-
-      fileDetails.push({
-        filePath: filePath,
-        functionCount: functionCount,
-        avgFunctionLoc: parseFloat((totalNloc / functionCount).toFixed(2)),
-        avgCyclomaticComplexity: parseFloat((totalCC / functionCount).toFixed(2)),
-        functionDetails: functionDetails
-      });
+        // 去重
+        const uniqueFiles = [...new Set(allFiles)];
+        if (uniqueFiles.length === 0) {
+            return this.getEmptyResult();
+        }
+        // Lizard 处理所有文件，统一获取函数数、函数代码行数和圈复杂度
+        let lizardResult = { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+        if (uniqueFiles.length > 0) {
+            lizardResult = this.runLizard(uniqueFiles);
+        }
+        const totalFunctions = lizardResult.totalFunctions;
+        const totalNloc = lizardResult.totalNloc;
+        const totalCC = lizardResult.totalCC;
+        if (totalFunctions === 0) {
+            return this.getEmptyResult();
+        }
+        // 按文件聚合函数数据，计算文件级指标
+        const fileDetails = this.aggregateFileDetails(lizardResult.functions, sources);
+        // 到达此处 totalFunctions 必然大于 0（为 0 时已提前返回 getEmptyResult）
+        return {
+            totalFunctions,
+            totalNloc,
+            averageFunctionLoc: parseFloat((totalNloc / totalFunctions).toFixed(2)),
+            totalCyclomaticComplexity: totalCC,
+            averageCyclomaticComplexity: parseFloat((totalCC / totalFunctions).toFixed(2)),
+            // 文件维度圈复杂度：Σ函数圈复杂度 ÷ 含函数的文件数（区别于方法维度的 averageCyclomaticComplexity）
+            cyclomaticComplexityPerFile: fileDetails.length > 0
+                ? parseFloat((totalCC / fileDetails.length).toFixed(2))
+                : 0,
+            fileDetails: fileDetails
+        };
     }
-
-    return fileDetails;
-  }
-
-  getName() {
-    return 'lizard';
-  }
+    // 将文件列表写入临时文件，供 lizard 的 -f 参数读取
+    writeInputFile(files) {
+        const tempInputPath = path.join(os.tmpdir(), `lizard_input_${Date.now()}.txt`);
+        fs.writeFileSync(tempInputPath, files.join('\n'), 'utf8');
+        return tempInputPath;
+    }
+    runLizard(files) {
+        const tempJsonPath = path.resolve(this.tempJsonFile);
+        let tempInputPath = null;
+        try {
+            if (fs.existsSync(tempJsonPath)) {
+                fs.unlinkSync(tempJsonPath);
+            }
+            // 使用 -f 参数从临时文件读取文件列表，避免命令行长度限制
+            tempInputPath = this.writeInputFile(files);
+            const args = ['-f', tempInputPath, '-o', tempJsonPath];
+            execSync('python3 -m lizard ' + args.join(' '), {
+                encoding: 'utf8',
+                maxBuffer: 50 * 1024 * 1024,
+                timeout: 300000,
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+            if (tempInputPath) {
+                fs.unlinkSync(tempInputPath);
+                tempInputPath = null;
+            }
+            if (!fs.existsSync(tempJsonPath)) {
+                return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+            }
+            const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
+            if (fs.existsSync(tempJsonPath))
+                fs.unlinkSync(tempJsonPath);
+            if (!content) {
+                return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+            }
+            if (content.startsWith('{')) {
+                const results = JSON.parse(content);
+                return this.calculateMetricsFromLizard(results);
+            }
+            else {
+                return this.parseTextOutput(content);
+            }
+        }
+        catch (error) {
+            if (tempInputPath && fs.existsSync(tempInputPath)) {
+                fs.unlinkSync(tempInputPath);
+                tempInputPath = null;
+            }
+            if (fs.existsSync(tempJsonPath)) {
+                try {
+                    const content = fs.readFileSync(tempJsonPath, 'utf8').trim();
+                    if (fs.existsSync(tempJsonPath))
+                        fs.unlinkSync(tempJsonPath);
+                    if (content) {
+                        if (content.startsWith('{')) {
+                            return this.calculateMetricsFromLizard(JSON.parse(content));
+                        }
+                        else {
+                            return this.parseTextOutput(content);
+                        }
+                    }
+                }
+                catch (parseError) {
+                    console.warn(`Failed to parse lizard output: ${parseError.message}`);
+                }
+            }
+            console.warn(`Lizard detection warning: ${error.message}`);
+            return { totalFunctions: 0, totalNloc: 0, totalCC: 0, functions: [] };
+        }
+    }
+    parseTextOutput(content) {
+        let totalFunctions = 0;
+        let totalNloc = 0;
+        let totalCC = 0;
+        const functions = [];
+        const lines = content.split('\n');
+        for (const line of lines) {
+            if (!line.trim() || line.includes('NLOC') || line.includes('===') || line.includes('----')) {
+                continue;
+            }
+            const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+?)@(\d+)-(\d+)@(.+)$/);
+            if (match) {
+                totalFunctions++;
+                const cc = parseInt(match[2], 10);
+                totalCC += cc;
+                // 从源文件中计算函数体有效代码行（排除方法签名和参数行）
+                const startLine = parseInt(match[7], 10);
+                const endLine = parseInt(match[8], 10);
+                const filePath = match[9].trim();
+                let bodyNloc = parseInt(match[1], 10);
+                try {
+                    const fileContent = fs.readFileSync(filePath, 'utf8');
+                    const defLines = this.countDefinitionLines(fileContent, startLine);
+                    bodyNloc = this.calculateBodyNloc(fileContent, startLine, endLine, defLines);
+                }
+                catch (e) {
+                    // 读取源文件失败时，回退到 nloc - 1
+                    bodyNloc = Math.max(0, bodyNloc - 1);
+                }
+                totalNloc += bodyNloc;
+                // 保留 filename 用于按文件聚合
+                functions.push({
+                    // match[6] 是正则捕获的函数名（如 MyClass.myMethod）
+                    name: match[6] || '',
+                    nloc: bodyNloc,
+                    cc: cc,
+                    startLine: startLine,
+                    endLine: endLine,
+                    filename: filePath
+                });
+            }
+        }
+        return { totalFunctions, totalNloc, totalCC, functions };
+    }
+    getEmptyResult() {
+        // 函数总数为 0（lizard 不支持的语言、纯配置/文本仓等）时两个均值指标不适用，
+        // 返回 null 表示无数据，避免 0 被当成真实指标展示与排序
+        return {
+            totalFunctions: 0,
+            totalNloc: 0,
+            averageFunctionLoc: null,
+            totalCyclomaticComplexity: 0,
+            averageCyclomaticComplexity: null,
+            cyclomaticComplexityPerFile: 0,
+            fileDetails: []
+        };
+    }
+    // 根据源文件内容，计算函数定义占用的行数
+    countDefinitionLines(fileContent, startLine) {
+        const lines = fileContent.split('\n');
+        const startIndex = startLine - 1;
+        if (startIndex < 0 || startIndex >= lines.length)
+            return 1;
+        for (let i = startIndex; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (line.endsWith(':')) {
+                return i - startIndex + 1;
+            }
+            if (line.endsWith('{')) {
+                return i - startIndex + 1;
+            }
+            if (line.endsWith(')') && i + 1 < lines.length && lines[i + 1].trim() === '{') {
+                return i - startIndex + 1;
+            }
+        }
+        return 1;
+    }
+    // 判断一行是否为有效代码行（非空行、非纯注释行）
+    static isSourceLine(line) {
+        const trimmed = line.trim();
+        if (trimmed.length === 0)
+            return false;
+        if (trimmed.startsWith('#'))
+            return false;
+        if (trimmed.startsWith('//'))
+            return false;
+        if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/'))
+            return false;
+        return true;
+    }
+    // 从源文件中精确计算函数体的有效代码行数（排除定义行）
+    calculateBodyNloc(fileContent, startLine, endLine, defLines) {
+        const lines = fileContent.split('\n');
+        let bodyNloc = 0;
+        const bodyStart = startLine - 1 + defLines;
+        const bodyEnd = endLine;
+        for (let i = bodyStart; i < bodyEnd && i < lines.length; i++) {
+            if (LizardDetector.isSourceLine(lines[i])) {
+                bodyNloc++;
+            }
+        }
+        return bodyNloc;
+    }
+    calculateMetricsFromLizard(results) {
+        let totalFunctions = 0;
+        let totalNloc = 0;
+        let totalCC = 0;
+        const functions = [];
+        if (results && results.functions) {
+            for (const func of results.functions) {
+                totalFunctions++;
+                totalCC += func.cyclomatic_complexity || 1;
+                // 读取源文件，精确计算函数定义行数，从 nloc 中排除
+                let bodyNloc = func.nloc || 0;
+                if (func.start_line && func.end_line && func.filename) {
+                    try {
+                        const fileContent = fs.readFileSync(func.filename, 'utf8');
+                        const defLines = this.countDefinitionLines(fileContent, func.start_line);
+                        bodyNloc = this.calculateBodyNloc(fileContent, func.start_line, func.end_line, defLines);
+                    }
+                    catch (e) {
+                        bodyNloc = Math.max(0, (func.nloc || 0) - 1);
+                    }
+                }
+                else {
+                    bodyNloc = Math.max(0, (func.nloc || 0) - 1);
+                }
+                totalNloc += bodyNloc;
+                functions.push({
+                    name: func.name,
+                    nloc: bodyNloc,
+                    cc: func.cyclomatic_complexity || 1,
+                    startLine: func.start_line,
+                    endLine: func.end_line,
+                    filename: func.filename || ''
+                });
+            }
+        }
+        return { totalFunctions, totalNloc, totalCC, functions };
+    }
+    // 按文件聚合函数数据，保留每个函数的明细（函数名、行数、开始行、结束行）
+    aggregateFileDetails(functions, sources) {
+        if (!functions || functions.length === 0)
+            return [];
+        // 按文件名分组
+        const fileMap = new Map();
+        for (const func of functions) {
+            const filename = func.filename || '';
+            if (!filename)
+                continue;
+            if (!fileMap.has(filename)) {
+                fileMap.set(filename, []);
+            }
+            fileMap.get(filename).push(func);
+        }
+        const fileDetails = [];
+        for (const [filename, funcs] of fileMap) {
+            const functionCount = funcs.length;
+            const totalNloc = funcs.reduce((sum, f) => sum + (f.nloc || 0), 0);
+            const totalCC = funcs.reduce((sum, f) => sum + (f.cc || 0), 0);
+            // 将绝对路径转为相对路径
+            let filePath = filename;
+            if (sources && sources.length > 0) {
+                for (const src of sources) {
+                    const normalizedSrc = src.replace(/\\/g, '/');
+                    const normalizedPath = filePath.replace(/\\/g, '/');
+                    if (normalizedPath.startsWith(normalizedSrc)) {
+                        filePath = path.relative(src, filename);
+                        break;
+                    }
+                }
+            }
+            filePath = filePath.replace(/\\/g, '/');
+            // 保留每个函数的明细信息
+            const functionDetails = funcs.map((f) => ({
+                functionName: f.name || '',
+                functionLoc: f.nloc || 0,
+                startLine: f.startLine || 0,
+                endLine: f.endLine || 0
+            }));
+            fileDetails.push({
+                filePath: filePath,
+                functionCount: functionCount,
+                avgFunctionLoc: parseFloat((totalNloc / functionCount).toFixed(2)),
+                avgCyclomaticComplexity: parseFloat((totalCC / functionCount).toFixed(2)),
+                functionDetails: functionDetails
+            });
+        }
+        return fileDetails;
+    }
+    getName() {
+        return 'lizard';
+    }
 }
-
 module.exports = LizardDetector;
 
 
 /***/ }),
 
-/***/ 2034:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ 7160:
+/***/ ((module, exports, __nccwpck_require__) => {
 
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 const { execSync, execFileSync } = __nccwpck_require__(5317);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
-const BaseDetector = __nccwpck_require__(658);
-const FileCollector = __nccwpck_require__(6790);
-
+const BaseDetector = __nccwpck_require__(1504);
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+const fileCollector_1 = __nccwpck_require__(8124);
 // scc 二进制文件路径：依次探测多个候选位置，全部失败时返回 null（调用方直接回退本地统计）
 function getSccPath() {
-  // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
-  // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
-  // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 src/detectors
-  const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
-    ? __nccwpck_require2_.ab
-    : null;
-  // 候选顺序：
-  // 1. bundle 根 + bin/（标准 ncc 打包形态，asset 随目录分发）
-  // 2. bundle 根根目录平铺（部分平台分发时把 asset 平铺到 dist/ 根）
-  // 3. 源码结构：__dirname=src/detectors，上溯一层为 src/（即 src/bin/scc）
-  const candidates = [];
-  if (bundleRoot) {
-    candidates.push(path.join(bundleRoot, 'bin', 'scc'));
-    candidates.push(path.join(bundleRoot, 'scc'));
-  }
-  candidates.push(path.join(__dirname, 'bin', 'scc'));
-  candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
-  candidates.push(path.join(__dirname, 'scc'));
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755，保证可执行
-      try {
-        fs.chmodSync(candidate, 0o755);
-      } catch (e) {
-        console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
-      }
-      return candidate;
+    // 兼容两种运行形态（typeof 探测未声明变量不抛错）：
+    // - ncc bundle：用 ncc 注入的 __nccwpck_require2_.ab（bundle 根 = dist/）定位内置 bin
+    // - 源码结构：无 __nccwpck_require2_ 全局，__dirname 即 src/detectors
+    const bundleRoot = (typeof __nccwpck_require2_ !== 'undefined')
+        ? __nccwpck_require2_.ab
+        : null;
+    // 候选顺序：
+    // 1. bundle 根 + bin/（标准 ncc 打包形态，asset 随目录分发）
+    // 2. bundle 根根目录平铺（部分平台分发时把 asset 平铺到 dist/ 根）
+    // 3. 源码结构：__dirname=src/detectors，上溯一层为 src/（即 src/bin/scc）
+    const candidates = [];
+    if (bundleRoot) {
+        candidates.push(path.join(bundleRoot, 'bin', 'scc'));
+        candidates.push(path.join(bundleRoot, 'scc'));
     }
-  }
-  // PATH 探测：确认 runner 环境本身安装了 scc 才使用裸命令名，
-  // 避免执行注定失败的命令产生误导性报错
-  try {
-    execSync('command -v scc', { stdio: 'ignore' });
-    return 'scc';
-  } catch (e) {
-    console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
-    return null;
-  }
-}
-
-class SlocDetector extends BaseDetector {
-  constructor(config = {}) {
-    super(config);
-    this.allowedExtensions = config.allowedExtensions || [];
-    this.sccPath = getSccPath();
-  }
-
-  async detect(source) {
-    const sources = Array.isArray(source) ? source : [source];
-    const excludeDirs = this.config.excludeDirs || [];
-
-    const sccArgs = this.buildSccArgs(sources, excludeDirs);
-
-    // 未找到可用 scc（内置 bin 与 PATH 均无）：直接回退本地逐文件统计，
-    // 跳过注定失败的命令执行
-    if (!this.sccPath) {
-      return this.fallbackDetect(sources, excludeDirs);
-    }
-
-    try {
-      const result = this.runScc(sccArgs, sources);
-      return result;
-    } catch (error) {
-      console.warn(`[WARN] scc 执行失败: ${error.message}，回退到逐文件统计`);
-      return this.fallbackDetect(sources, excludeDirs);
-    }
-  }
-
-  // 构建 scc 命令行参数
-  buildSccArgs(sources, excludeDirs) {
-    const args = ['-f', 'json', '--no-cocomo', '--no-size', '--by-file'];
-
-    // 不再向 scc 传 --exclude-dir：scc 自身的排除规则不支持 ** 等 glob 通配符，
-    // 无法与 FileCollector 的 exclude-dirs 语义对齐。改为扫描全量后，在 runScc 里
-    // 用 FileCollector.isPathExcluded 对每个文件做后置过滤，保证与其余指标完全一致。
-
-    // 限制文件扩展名
-    if (this.allowedExtensions.length > 0) {
-      const exts = this.allowedExtensions
-        .map(e => e.replace(/^\./, ''))
-        .join(',');
-      args.push('--include-ext', exts);
-    }
-
-    // 源目录
-    for (const src of sources) {
-      args.push(src);
-    }
-
-    return args;
-  }
-
-  // 执行 scc 并解析 JSON 输出。
-  // execFileSync 参数数组直传，不经 shell 解析（Ref #49 #57 #29，与 pre-commit-action #26 同款）：
-  // 消除 sources / --include-ext（来自 allowed-extensions input）等外部输入包含
-  // shell 特殊字符（; ` $() 等）时的命令注入面
-  runScc(args, sources) {
-    const output = execFileSync(this.sccPath, args, {
-      encoding: 'utf8',
-      maxBuffer: 100 * 1024 * 1024,
-      timeout: 300000,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    const sccResult = JSON.parse(output.trim());
-
-    // scc JSON 输出格式: 按语言分组
-    // [{ Name, Code, Comment, Blank, Lines, Complexity, Count, Bytes, Files:[...] }]
-    const excludeDirs = this.config.excludeDirs || [];
-    let totalCode = 0;
-    let totalComment = 0;
-    let totalBlank = 0;
-    let totalLines = 0;
-    let totalComplexity = 0;
-    let totalFiles = 0;
-
-    // 收集文件级指标
-    const fileDetails = [];
-
-    for (const lang of sccResult) {
-      // 注意：不再累加语言级汇总（含被 exclude-dirs 排除的文件），改为逐文件统计并
-      // 过滤后累加，保证 codeScale 等与 FileCollector 收集的文件范围口径一致。
-      const langFiles = lang.Files;
-      if (!langFiles || !Array.isArray(langFiles) || langFiles.length === 0) {
-        // 兜底：若某语言条目缺少/为空按文件明细（Files 缺失或为空数组），无法做文件级
-        // 排除，则按语言级汇总计入，避免该语言整体被丢弃导致总代码量/总文件数/总复杂度偏小。
-        totalCode += lang.Code || 0;
-        totalComment += lang.Comment || 0;
-        totalBlank += lang.Blank || 0;
-        totalLines += lang.Lines || 0;
-        totalComplexity += lang.Complexity || 0;
-        totalFiles += lang.Count || 0;
-        continue;
-      }
-      for (const file of langFiles) {
-          // scc 不同版本的 --by-file JSON 输出字段名可能不同：
-          //   - 旧版：Name 是完整路径
-          //   - 新版（3.x+）：Name 是文件名，Location 是完整路径
-          // 优先取完整路径字段（Location），其次 Name（可能是文件名或完整路径）
-          const fileName = file.Location || file.Name || file.Path || file.File || '';
-          // 过滤掉语言汇总行（字段为空或不含路径分隔符/扩展名的语言名）
-          if (!fileName || !this.isFilePath(fileName)) {
-            console.log(`[DEBUG] 跳过非文件条目: Name="${fileName}", Code=${file.Code || 0}, keys=${Object.keys(file).join(',')}`);
-            continue;
-          }
-          // 将绝对路径转为相对路径
-          let filePath = this.toRelativePath(fileName, sources);
-          // 后置过滤：用 FileCollector 的目录剪枝语义排除命中 exclude-dirs 的文件，
-          // 保证与 FileCollector / lizard / duplication 收集的文件范围完全一致
-          if (excludeDirs.length > 0 && FileCollector.isPathExcluded(filePath, excludeDirs)) {
-            continue;
-          }
-          const code = file.Code || 0;
-          const comment = file.Comment || 0;
-          const blank = file.Blank || 0;
-          totalCode += code;
-          totalComment += comment;
-          totalBlank += blank;
-          totalLines += (file.Lines || (code + comment + blank));
-          totalComplexity += (file.Complexity || 0);
-          totalFiles++;
-          fileDetails.push({
-            filePath: filePath,
-            language: lang.Name || '',
-            loc: code,
-            commentLines: comment
-          });
-        }
-    }
-
-    console.log(`  - Total files: ${totalFiles}`);
-    console.log(`  - Code lines (codeScale): ${totalCode}`);
-    console.log(`  - Comment lines: ${totalComment}`);
-    console.log(`  - Blank lines: ${totalBlank}`);
-    console.log(`  - Total lines: ${totalLines}`);
-    console.log(`  - Complexity: ${totalComplexity}`);
-    console.log(`  - File details count: ${fileDetails.length}`);
-
-    // 如果 scc --by-file 未产出有效文件明细，回退到逐文件统计获取明细
-    if (fileDetails.length === 0) {
-      console.log('[DEBUG] scc --by-file 未产出文件明细，回退到逐文件统计');
-      const FileCollector = __nccwpck_require__(6790);
-      const excludeDirs = this.config.excludeDirs || [];
-      const allFiles = [];
-      for (const src of sources) {
-        const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-        allFiles.push(...files);
-      }
-      const uniqueFiles = [...new Set(allFiles)];
-      for (const file of uniqueFiles) {
-        try {
-          const content = fs.readFileSync(file, 'utf8');
-          let sourceCount = 0;
-          let commentCount = 0;
-          const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('/*') && !trimmed.startsWith('*') && !trimmed.startsWith('#')) {
-              sourceCount++;
-            } else if (trimmed) {
-              commentCount++;
+    candidates.push(path.join(__dirname, 'bin', 'scc'));
+    candidates.push(path.join(__dirname, '..', 'bin', 'scc'));
+    candidates.push(path.join(__dirname, 'scc'));
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            // zip 打包 / git clone 解压后可能丢失可执行权限位，运行时强制赋予 0o755，保证可执行
+            try {
+                fs.chmodSync(candidate, 0o755);
             }
-          }
-          const filePath = this.toRelativePath(file, sources);
-          const ext = path.extname(file).toLowerCase();
-          const langMap = {
-            '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
-            '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
-            '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
-            '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
-            '.scala': 'Scala', '.swift': 'Swift'
-          };
-          fileDetails.push({
-            filePath: filePath,
-            language: langMap[ext] || ext.replace('.', ''),
-            loc: sourceCount,
-            commentLines: commentCount
-          });
-        } catch (e) {
-          // 只输出文件基名，不落 runner 绝对路径（Ref #60）
-          console.warn(`[WARN] 跳过文件 ${path.basename(file)}: ${e.message}`);
+            catch (e) {
+                console.warn(`[WARN] 无法设置 scc 可执行权限: ${e.message}`);
+            }
+            return candidate;
         }
-      }
     }
-
-    return {
-      codeScale: totalCode,
-      rawLines: totalLines,
-      commentLines: totalComment,
-      blankLines: totalBlank,
-      sourceLines: totalCode,
-      complexity: totalComplexity,
-      fileDetails: fileDetails
-    };
-  }
-
-  // 判断 Name 是否为文件路径（而非语言名）
-  isFilePath(name) {
-    if (!name) return false;
-    // 文件路径应包含扩展名（含点号）或路径分隔符
-    return name.includes('.') || name.includes('/') || name.includes('\\');
-  }
-
-  // 将绝对路径转为相对路径（统一使用 / 分隔符）
-  toRelativePath(filePath, sources) {
-    if (sources && sources.length > 0) {
-      for (const src of sources) {
-        const normalizedSrc = src.replace(/\\/g, '/');
-        const normalizedPath = filePath.replace(/\\/g, '/');
-        if (normalizedPath.startsWith(normalizedSrc)) {
-          filePath = path.relative(src, filePath);
-          break;
-        }
-      }
+    // PATH 探测：确认 runner 环境本身安装了 scc 才使用裸命令名，
+    // 避免执行注定失败的命令产生误导性报错
+    try {
+        execSync('command -v scc', { stdio: 'ignore' });
+        return 'scc';
     }
-    return filePath.replace(/\\/g, '/');
-  }
-
-  // 回退方案：当 scc 不可用时，逐文件读取并统计行数
-  fallbackDetect(sources, excludeDirs) {
-    const FileCollector = __nccwpck_require__(6790);
-    const allFiles = [];
-    for (const src of sources) {
-      const files = FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
-      allFiles.push(...files);
+    catch (e) {
+        console.warn('[WARN] 未找到可用的 scc（内置 bin 与 PATH 均无），回退到本地逐文件统计');
+        return null;
     }
-    const uniqueFiles = [...new Set(allFiles)];
-
-    if (uniqueFiles.length === 0) {
-      return { codeScale: 0, rawLines: 0, commentLines: 0, blankLines: 0, sourceLines: 0, complexity: 0, fileDetails: [] };
-    }
-
-    let totalSource = 0;
-    let totalAll = 0;
-    let totalComment = 0;
-    let totalEmpty = 0;
-
-    // 收集文件级指标
-    const fileDetails = [];
-
-    for (const file of uniqueFiles) {
-      try {
-        const content = fs.readFileSync(file, 'utf8');
-        let normalized = content.replace(/\r\n|\r/g, '\n');
-        if (normalized.slice(-1) === '\n') normalized = normalized.slice(0, -1);
-        const lines = normalized.split('\n');
-        totalAll += lines.length;
-
-        let fileSourceLines = 0;
-        let fileCommentLines = 0;
-        let inBlock = false;
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (inBlock) {
-            totalComment++;
-            fileCommentLines++;
-            if (trimmed.includes('*/')) inBlock = false;
-            continue;
-          }
-          if (trimmed === '') { totalEmpty++; continue; }
-          if (trimmed.startsWith('/*')) {
-            totalComment++;
-            fileCommentLines++;
-            if (!trimmed.includes('*/')) inBlock = true;
-            continue;
-          }
-          if (trimmed.startsWith('//')) { totalComment++; fileCommentLines++; continue; }
-          totalSource++;
-          fileSourceLines++;
-        }
-
-        // 将绝对路径转为相对路径
-        let filePath = file;
-        for (const src of sources) {
-          const normalizedSrc = src.replace(/\\/g, '/');
-          const normalizedPath = filePath.replace(/\\/g, '/');
-          if (normalizedPath.startsWith(normalizedSrc)) {
-            filePath = path.relative(src, file);
-            break;
-          }
-        }
-        filePath = filePath.replace(/\\/g, '/');
-
-        // 根据扩展名推断语言
-        const ext = path.extname(file).toLowerCase();
-        const langMap = {
-          '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
-          '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
-          '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
-          '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
-          '.scala': 'Scala', '.swift': 'Swift'
-        };
-
-        fileDetails.push({
-          filePath: filePath,
-          language: langMap[ext] || ext.replace('.', ''),
-          loc: fileSourceLines,
-          commentLines: fileCommentLines
-        });
-      } catch (e) {
-        // 只输出文件基名，不落 runner 绝对路径（Ref #60）
-        console.warn(`[WARN] 跳过文件 ${path.basename(file)}: ${e.message}`);
-      }
-    }
-
-    console.log(`[DEBUG] Fallback statistics (scc 不可用):`);
-    console.log(`  - Code scale: ${totalSource}`);
-
-    return {
-      codeScale: totalSource,
-      rawLines: totalAll,
-      commentLines: totalComment,
-      blankLines: totalEmpty,
-      sourceLines: totalSource,
-      complexity: 0,
-      fileDetails: fileDetails
-    };
-  }
-
-  getName() {
-    return 'sloc';
-  }
 }
-
+class SlocDetector extends BaseDetector {
+    constructor(config = {}) {
+        super(config);
+        this.allowedExtensions = config.allowedExtensions || [];
+        this.sccPath = getSccPath();
+    }
+    async detect(source) {
+        const sources = Array.isArray(source) ? source : [source];
+        const excludeDirs = this.config.excludeDirs || [];
+        const sccArgs = this.buildSccArgs(sources, excludeDirs);
+        // 未找到可用 scc（内置 bin 与 PATH 均无）：直接回退本地逐文件统计，
+        // 跳过注定失败的命令执行
+        if (!this.sccPath) {
+            return this.fallbackDetect(sources, excludeDirs);
+        }
+        try {
+            const result = this.runScc(sccArgs, sources);
+            return result;
+        }
+        catch (error) {
+            console.warn(`[WARN] scc 执行失败: ${error.message}，回退到逐文件统计`);
+            return this.fallbackDetect(sources, excludeDirs);
+        }
+    }
+    // 构建 scc 命令行参数
+    buildSccArgs(sources, excludeDirs) {
+        const args = ['-f', 'json', '--no-cocomo', '--no-size', '--by-file'];
+        // 不再向 scc 传 --exclude-dir：scc 自身的排除规则不支持 ** 等 glob 通配符，
+        // 无法与 FileCollector 的 exclude-dirs 语义对齐。改为扫描全量后，在 runScc 里
+        // 用 FileCollector.isPathExcluded 对每个文件做后置过滤，保证与其余指标完全一致。
+        // 限制文件扩展名
+        if (this.allowedExtensions.length > 0) {
+            const exts = this.allowedExtensions
+                .map((e) => e.replace(/^\./, ''))
+                .join(',');
+            args.push('--include-ext', exts);
+        }
+        // 源目录
+        for (const src of sources) {
+            args.push(src);
+        }
+        return args;
+    }
+    // 执行 scc 并解析 JSON 输出。
+    // execFileSync 参数数组直传，不经 shell 解析（Ref #49 #57 #29，与 pre-commit-action #26 同款）：
+    // 消除 sources / --include-ext（来自 allowed-extensions input）等外部输入包含
+    // shell 特殊字符（; ` $() 等）时的命令注入面
+    runScc(args, sources) {
+        const output = execFileSync(this.sccPath, args, {
+            encoding: 'utf8',
+            maxBuffer: 100 * 1024 * 1024,
+            timeout: 300000,
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+        const sccResult = JSON.parse(output.trim());
+        // scc JSON 输出格式: 按语言分组
+        // [{ Name, Code, Comment, Blank, Lines, Complexity, Count, Bytes, Files:[...] }]
+        const excludeDirs = this.config.excludeDirs || [];
+        let totalCode = 0;
+        let totalComment = 0;
+        let totalBlank = 0;
+        let totalLines = 0;
+        let totalComplexity = 0;
+        let totalFiles = 0;
+        // 收集文件级指标
+        const fileDetails = [];
+        for (const lang of sccResult) {
+            // 注意：不再累加语言级汇总（含被 exclude-dirs 排除的文件），改为逐文件统计并
+            // 过滤后累加，保证 codeScale 等与 FileCollector 收集的文件范围口径一致。
+            const langFiles = lang.Files;
+            if (!langFiles || !Array.isArray(langFiles) || langFiles.length === 0) {
+                // 兜底：若某语言条目缺少/为空按文件明细（Files 缺失或为空数组），无法做文件级
+                // 排除，则按语言级汇总计入，避免该语言整体被丢弃导致总代码量/总文件数/总复杂度偏小。
+                totalCode += lang.Code || 0;
+                totalComment += lang.Comment || 0;
+                totalBlank += lang.Blank || 0;
+                totalLines += lang.Lines || 0;
+                totalComplexity += lang.Complexity || 0;
+                totalFiles += lang.Count || 0;
+                continue;
+            }
+            for (const file of langFiles) {
+                // scc 不同版本的 --by-file JSON 输出字段名可能不同：
+                //   - 旧版：Name 是完整路径
+                //   - 新版（3.x+）：Name 是文件名，Location 是完整路径
+                // 优先取完整路径字段（Location），其次 Name（可能是文件名或完整路径）
+                const fileName = file.Location || file.Name || file.Path || file.File || '';
+                // 过滤掉语言汇总行（字段为空或不含路径分隔符/扩展名的语言名）
+                if (!fileName || !this.isFilePath(fileName)) {
+                    console.log(`[DEBUG] 跳过非文件条目: Name="${fileName}", Code=${file.Code || 0}, keys=${Object.keys(file).join(',')}`);
+                    continue;
+                }
+                // 将绝对路径转为相对路径
+                const filePath = this.toRelativePath(fileName, sources);
+                // 后置过滤：用 FileCollector 的目录剪枝语义排除命中 exclude-dirs 的文件，
+                // 保证与 FileCollector / lizard / duplication 收集的文件范围完全一致
+                if (excludeDirs.length > 0 && fileCollector_1.FileCollector.isPathExcluded(filePath, excludeDirs)) {
+                    continue;
+                }
+                const code = file.Code || 0;
+                const comment = file.Comment || 0;
+                const blank = file.Blank || 0;
+                totalCode += code;
+                totalComment += comment;
+                totalBlank += blank;
+                totalLines += (file.Lines || (code + comment + blank));
+                totalComplexity += (file.Complexity || 0);
+                totalFiles++;
+                fileDetails.push({
+                    filePath: filePath,
+                    language: lang.Name || '',
+                    loc: code,
+                    commentLines: comment
+                });
+            }
+        }
+        console.log(`  - Total files: ${totalFiles}`);
+        console.log(`  - Code lines (codeScale): ${totalCode}`);
+        console.log(`  - Comment lines: ${totalComment}`);
+        console.log(`  - Blank lines: ${totalBlank}`);
+        console.log(`  - Total lines: ${totalLines}`);
+        console.log(`  - Complexity: ${totalComplexity}`);
+        console.log(`  - File details count: ${fileDetails.length}`);
+        // 如果 scc --by-file 未产出有效文件明细，回退到逐文件统计获取明细
+        if (fileDetails.length === 0) {
+            console.log('[DEBUG] scc --by-file 未产出文件明细，回退到逐文件统计');
+            const excludeDirs = this.config.excludeDirs || [];
+            const allFiles = [];
+            for (const src of sources) {
+                const files = fileCollector_1.FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+                allFiles.push(...files);
+            }
+            const uniqueFiles = [...new Set(allFiles)];
+            for (const file of uniqueFiles) {
+                try {
+                    const content = fs.readFileSync(file, 'utf8');
+                    let sourceCount = 0;
+                    let commentCount = 0;
+                    const lines = content.replace(/\r\n|\r/g, '\n').split('\n');
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('/*') && !trimmed.startsWith('*') && !trimmed.startsWith('#')) {
+                            sourceCount++;
+                        }
+                        else if (trimmed) {
+                            commentCount++;
+                        }
+                    }
+                    const filePath = this.toRelativePath(file, sources);
+                    const ext = path.extname(file).toLowerCase();
+                    const langMap = {
+                        '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
+                        '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
+                        '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
+                        '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
+                        '.scala': 'Scala', '.swift': 'Swift'
+                    };
+                    fileDetails.push({
+                        filePath: filePath,
+                        language: langMap[ext] || ext.replace('.', ''),
+                        loc: sourceCount,
+                        commentLines: commentCount
+                    });
+                }
+                catch (e) {
+                    // 只输出文件基名，不落 runner 绝对路径（Ref #60）
+                    console.warn(`[WARN] 跳过文件 ${path.basename(file)}: ${e.message}`);
+                }
+            }
+        }
+        return {
+            codeScale: totalCode,
+            rawLines: totalLines,
+            commentLines: totalComment,
+            blankLines: totalBlank,
+            sourceLines: totalCode,
+            complexity: totalComplexity,
+            fileDetails: fileDetails
+        };
+    }
+    // 判断 Name 是否为文件路径（而非语言名）
+    isFilePath(name) {
+        if (!name)
+            return false;
+        // 文件路径应包含扩展名（含点号）或路径分隔符
+        return name.includes('.') || name.includes('/') || name.includes('\\');
+    }
+    // 将绝对路径转为相对路径（统一使用 / 分隔符）
+    toRelativePath(filePath, sources) {
+        if (sources && sources.length > 0) {
+            for (const src of sources) {
+                const normalizedSrc = src.replace(/\\/g, '/');
+                const normalizedPath = filePath.replace(/\\/g, '/');
+                if (normalizedPath.startsWith(normalizedSrc)) {
+                    filePath = path.relative(src, filePath);
+                    break;
+                }
+            }
+        }
+        return filePath.replace(/\\/g, '/');
+    }
+    // 回退方案：当 scc 不可用时，逐文件读取并统计行数
+    fallbackDetect(sources, excludeDirs) {
+        const allFiles = [];
+        for (const src of sources) {
+            const files = fileCollector_1.FileCollector.collectFiles(src, excludeDirs, this.allowedExtensions);
+            allFiles.push(...files);
+        }
+        const uniqueFiles = [...new Set(allFiles)];
+        if (uniqueFiles.length === 0) {
+            return { codeScale: 0, rawLines: 0, commentLines: 0, blankLines: 0, sourceLines: 0, complexity: 0, fileDetails: [] };
+        }
+        let totalSource = 0;
+        let totalAll = 0;
+        let totalComment = 0;
+        let totalEmpty = 0;
+        // 收集文件级指标
+        const fileDetails = [];
+        for (const file of uniqueFiles) {
+            try {
+                const content = fs.readFileSync(file, 'utf8');
+                let normalized = content.replace(/\r\n|\r/g, '\n');
+                if (normalized.slice(-1) === '\n')
+                    normalized = normalized.slice(0, -1);
+                const lines = normalized.split('\n');
+                totalAll += lines.length;
+                let fileSourceLines = 0;
+                let fileCommentLines = 0;
+                let inBlock = false;
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (inBlock) {
+                        totalComment++;
+                        fileCommentLines++;
+                        if (trimmed.includes('*/'))
+                            inBlock = false;
+                        continue;
+                    }
+                    if (trimmed === '') {
+                        totalEmpty++;
+                        continue;
+                    }
+                    if (trimmed.startsWith('/*')) {
+                        totalComment++;
+                        fileCommentLines++;
+                        if (!trimmed.includes('*/'))
+                            inBlock = true;
+                        continue;
+                    }
+                    if (trimmed.startsWith('//')) {
+                        totalComment++;
+                        fileCommentLines++;
+                        continue;
+                    }
+                    totalSource++;
+                    fileSourceLines++;
+                }
+                // 将绝对路径转为相对路径
+                let filePath = file;
+                for (const src of sources) {
+                    const normalizedSrc = src.replace(/\\/g, '/');
+                    const normalizedPath = filePath.replace(/\\/g, '/');
+                    if (normalizedPath.startsWith(normalizedSrc)) {
+                        filePath = path.relative(src, file);
+                        break;
+                    }
+                }
+                filePath = filePath.replace(/\\/g, '/');
+                // 根据扩展名推断语言
+                const ext = path.extname(file).toLowerCase();
+                const langMap = {
+                    '.java': 'Java', '.js': 'JavaScript', '.ts': 'TypeScript',
+                    '.py': 'Python', '.go': 'Go', '.c': 'C', '.cpp': 'C++',
+                    '.h': 'C/C++ Header', '.cs': 'C#', '.rb': 'Ruby',
+                    '.php': 'PHP', '.rs': 'Rust', '.kt': 'Kotlin',
+                    '.scala': 'Scala', '.swift': 'Swift'
+                };
+                fileDetails.push({
+                    filePath: filePath,
+                    language: langMap[ext] || ext.replace('.', ''),
+                    loc: fileSourceLines,
+                    commentLines: fileCommentLines
+                });
+            }
+            catch (e) {
+                // 只输出文件基名，不落 runner 绝对路径（Ref #60）
+                console.warn(`[WARN] 跳过文件 ${path.basename(file)}: ${e.message}`);
+            }
+        }
+        console.log(`[DEBUG] Fallback statistics (scc 不可用):`);
+        console.log(`  - Code scale: ${totalSource}`);
+        return {
+            codeScale: totalSource,
+            rawLines: totalAll,
+            commentLines: totalComment,
+            blankLines: totalEmpty,
+            sourceLines: totalSource,
+            complexity: 0,
+            fileDetails: fileDetails
+        };
+    }
+    getName() {
+        return 'sloc';
+    }
+}
 module.exports = SlocDetector;
 
 
 /***/ }),
 
-/***/ 5105:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ 1730:
+/***/ ((module, exports, __nccwpck_require__) => {
 
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __nccwpck_require__(7484);
-const { MetricsScanner, ConfigLoader } = __nccwpck_require__(9863);
+const { MetricsScanner, ConfigLoader } = __nccwpck_require__(4105);
 const path = __nccwpck_require__(6928);
 const fs = __nccwpck_require__(9896);
 const os = __nccwpck_require__(857);
 const { execSync, execFile, execFileSync } = __nccwpck_require__(5317);
-const { sanitize } = __nccwpck_require__(9900);
-const { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput } = __nccwpck_require__(7496);
-const { formatCstTime, buildSummaryMarkdown } = __nccwpck_require__(3111);
-
+const { sanitize } = __nccwpck_require__(3262);
+const { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput } = __nccwpck_require__(42);
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+const summary_1 = __nccwpck_require__(8633);
 // 兼容下划线格式的环境变量名（CI 平台 env 块通常不支持连字符变量名）
 // 优先读取 INPUT_<NAME> (连字符)，回退到 INPUT_<NAME> (下划线)
 function getInput(name) {
-  const hyphenKey = `INPUT_${name.toUpperCase().replace(/-/g, '-')}`;
-  const underscoreKey = `INPUT_${name.toUpperCase().replace(/-/g, '_')}`;
-  return process.env[hyphenKey] || process.env[underscoreKey] || core.getInput(name) || '';
+    const hyphenKey = `INPUT_${name.toUpperCase().replace(/-/g, '-')}`;
+    const underscoreKey = `INPUT_${name.toUpperCase().replace(/-/g, '_')}`;
+    return process.env[hyphenKey] || process.env[underscoreKey] || core.getInput(name) || '';
 }
-
 /**
  * 写入运行摘要：
  * - GitHub Actions 写 GITHUB_STEP_SUMMARY；
  * - GitCode Actions 写 ATOMGIT_STEP_SUMMARY（流水线 summary 页面）。
  */
 function appendStepSummary(markdown) {
-  const targets = new Set(
-    [process.env.GITHUB_STEP_SUMMARY, process.env.ATOMGIT_STEP_SUMMARY].filter(Boolean)
-  );
-  for (const file of targets) {
-    try {
-      fs.appendFileSync(file, markdown, 'utf8');
-    } catch (e) {
-      core.warning(`写入运行摘要失败: ${e.message}`);
+    const targets = new Set([process.env.GITHUB_STEP_SUMMARY, process.env.ATOMGIT_STEP_SUMMARY].filter(Boolean));
+    for (const file of targets) {
+        try {
+            fs.appendFileSync(file, markdown, 'utf8');
+        }
+        catch (e) {
+            core.warning(`写入运行摘要失败: ${e.message}`);
+        }
     }
-  }
 }
-
 /** 写入 GitCode 输出面板（ATOMGIT_OUTPUT，键值对） */
 function appendAtomgitOutput(lines, logLabel) {
-  const outputFile = process.env.ATOMGIT_OUTPUT;
-  if (!outputFile) {
-    return;
-  }
-  try {
-    fs.appendFileSync(outputFile, lines.join('\n') + '\n', 'utf8');
-  } catch (e) {
-    core.warning(`写入${logLabel}失败: ${e.message}`);
-  }
+    const outputFile = process.env.ATOMGIT_OUTPUT;
+    if (!outputFile) {
+        return;
+    }
+    try {
+        fs.appendFileSync(outputFile, lines.join('\n') + '\n', 'utf8');
+    }
+    catch (e) {
+        core.warning(`写入${logLabel}失败: ${e.message}`);
+    }
 }
-
 // ===== pip 依赖安装的索引源选择（参考 pre-commit-action 方案）=====
 // 不硬编码单一镜像：先测速 PyPI 源站与华为镜像，选可用且更快的一个作为本次安装的 PIP_INDEX_URL，
 // 避免执行机到某个源出网被重置（Connection reset by peer）时安装必然失败
@@ -58869,1270 +58842,1192 @@ function appendAtomgitOutput(lines, logLabel) {
 const PIP_MIRROR_DEFAULT = process.env.PIP_MIRROR_DEFAULT || 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const PIP_ORIGINAL = 'https://pypi.org/simple'; // gitleaks:allow 官方 PyPI 源，功能必需
 const PIP_SPEED_TEST_TIMEOUT = 5;
-
 // 探测索引源首字节耗时（毫秒），超时或不可达返回 -1。
 // 只请求该索引下 lizard 单包页面的首个字节（-r 0-0 + time_starttransfer）：
 // 整个 simple 索引页面体积很大，5 秒内拉不完会被误判为不可达，导致测速失去区分度
 function testUrlSpeed(indexUrl) {
-  const probeUrl = `${indexUrl.replace(/\/$/, '')}/lizard/`;
-  return new Promise((resolve) => {
-    execFile(
-      'curl',
-      [
-        '-s', '-o', '/dev/null', '-w', '%{time_starttransfer}',
-        '--max-time', String(PIP_SPEED_TEST_TIMEOUT),
-        '-r', '0-0', probeUrl
-      ],
-      { encoding: 'utf8', timeout: (PIP_SPEED_TEST_TIMEOUT + 2) * 1000 },
-      (err, stdout) => {
-        // 镜像忽略 Range 返回全量时会被 --max-time 截断（err 非空），
-        // 但首字节耗时已由 -w 写出，仍可据此比较，故 err 非空也尝试解析
-        const seconds = parseFloat((stdout || '').trim());
-        resolve(isNaN(seconds) || seconds <= 0 ? -1 : Math.round(seconds * 1000));
-      }
-    );
-  });
+    const probeUrl = `${indexUrl.replace(/\/$/, '')}/lizard/`;
+    return new Promise((resolve) => {
+        execFile('curl', [
+            '-s', '-o', '/dev/null', '-w', '%{time_starttransfer}',
+            '--max-time', String(PIP_SPEED_TEST_TIMEOUT),
+            '-r', '0-0', probeUrl
+        ], { encoding: 'utf8', timeout: (PIP_SPEED_TEST_TIMEOUT + 2) * 1000 }, (err, stdout) => {
+            // 镜像忽略 Range 返回全量时会被 --max-time 截断（err 非空），
+            // 但首字节耗时已由 -w 写出，仍可据此比较，故 err 非空也尝试解析
+            const seconds = parseFloat((stdout || '').trim());
+            resolve(isNaN(seconds) || seconds <= 0 ? -1 : Math.round(seconds * 1000));
+        });
+    });
 }
-
 // 并行测速 PyPI 源站与华为镜像（串行探测在双超时场景下要白等两倍时间），
 // 返回可用且更快的索引地址
 async function detectPipIndexUrl() {
-  core.info('Probing pip index reachability...');
-  const [originalMs, mirrorMs] = await Promise.all([
-    testUrlSpeed(PIP_ORIGINAL),
-    testUrlSpeed(PIP_MIRROR_DEFAULT)
-  ]);
-  core.info(`pypi.org: ${originalMs >= 0 ? originalMs + 'ms' : 'unreachable'}`);
-  core.info(`huaweicloud mirror: ${mirrorMs >= 0 ? mirrorMs + 'ms' : 'unreachable'}`);
-  // 两侧都不可达时回退源站（与 pre-commit-action 行为一致）
-  if (originalMs < 0 && mirrorMs < 0) {
-    core.warning('Both pypi.org and huaweicloud mirror are unreachable, fallback to pypi.org');
-    return PIP_ORIGINAL;
-  }
-  if (originalMs < 0) {
-    return PIP_MIRROR_DEFAULT;
-  }
-  if (mirrorMs < 0) {
-    return PIP_ORIGINAL;
-  }
-  return originalMs <= mirrorMs ? PIP_ORIGINAL : PIP_MIRROR_DEFAULT;
+    core.info('Probing pip index reachability...');
+    const [originalMs, mirrorMs] = await Promise.all([
+        testUrlSpeed(PIP_ORIGINAL),
+        testUrlSpeed(PIP_MIRROR_DEFAULT)
+    ]);
+    core.info(`pypi.org: ${originalMs >= 0 ? originalMs + 'ms' : 'unreachable'}`);
+    core.info(`huaweicloud mirror: ${mirrorMs >= 0 ? mirrorMs + 'ms' : 'unreachable'}`);
+    // 两侧都不可达时回退源站（与 pre-commit-action 行为一致）
+    if (originalMs < 0 && mirrorMs < 0) {
+        core.warning('Both pypi.org and huaweicloud mirror are unreachable, fallback to pypi.org');
+        return PIP_ORIGINAL;
+    }
+    if (originalMs < 0) {
+        return PIP_MIRROR_DEFAULT;
+    }
+    if (mirrorMs < 0) {
+        return PIP_ORIGINAL;
+    }
+    return originalMs <= mirrorMs ? PIP_ORIGINAL : PIP_MIRROR_DEFAULT;
 }
-
 async function run() {
-  try {
-    // 源代码目录固定为当前目录（线上环境由 checkout 步骤决定扫描内容）
-    const sourceDir = './';
-    const excludeDirs = getInput('exclude-dirs')
-      ? getInput('exclude-dirs').split(',').map(s => s.trim())
-      : [];
-    const allowedExtensions = getInput('allowed-extensions')
-      ? getInput('allowed-extensions').split(',').map(s => s.trim())
-      : [];
-    // 重复检测阈值：与华为云 cmetrics 官方定义对齐
-    // 官方定义："连续超过 10 行代码块在其他地方重复记为一次重复"
-    // - minLines=10：连续代码块至少 10 行才算一次重复
-    const minLines = parseInt(getInput('min-lines') || '10', 10);
-    const outputFile = getInput('output') || 'metrics.json';
-
-    // CI 上下文兜底分支：GitHub 取 GITHUB_REF_NAME（PR 取目标分支），GitCode 取 ATOMGIT_REF_NAME
-    const ciBranch = resolveCiBranch();
-
-    // coderepo 服务地址硬编码到插件（部署时确定的固定值）；
-    // 自家平台 APIG 网关端点，非第三方地址，登记白名单（合规例外）（Ref #22）
-    const coderepoUrl = 'https://apig.openlibing.com:443'; // gitleaks:allow 自家平台 APIG 网关，功能必需
-    // 认证模式判定（OIDC 联邦认证标识）：workflow 声明 permissions: id-token: write 时，
-    // runner 注入 ACTIONS_ID_TOKEN_REQUEST_URL，走新接口（/action-api/...）+ OIDC 免密认证；
-    // 未声明时走旧接口（/openlibing-coderepo/...）+ AK/SK 签名，兼容尚未适配的存量脚本
-    const useOidc = !!process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-    // AK/SK 凭证（仅 AK/SK 模式使用，OIDC 模式无需传入）：
-    // apig-app-key/apig-app-secret 用于 APIG 上报签名，obs-ak/obs-sk 用于 OBS 全量文件上传
-    const apigAppKey = getInput('apig-app-key') || '';
-    const apigAppSecret = getInput('apig-app-secret') || '';
-    const obsAk = getInput('obs-ak') || '';
-    const obsSk = getInput('obs-sk') || '';
-
-    // 上报用 git_url 和 branch_name：
-    // 从 sourceDir 沿目录树向上找 .git（修复：sourceDir 是构建产物子目录如 source-code/target 时，
-    //   .git 在 source-code/ 而非 sourceDir 内，旧逻辑只看 sourceDir/.git 会误用工作区根目录的 git）
-    // 沿目录树向上查找包含 .git 的目录。.git 既可能是目录（普通仓库），
-    // 也可能是文件（worktree/submodule 指向真正的 git dir），fs.existsSync 对二者均返回 true。
-    // 设置向上查找最大深度为 8 层，避免异常文件系统结构下死循环或越界。
-    function findGitRoot(startDir) {
-      let cur = path.resolve(startDir);
-      const root = path.parse(cur).root; // Windows: "D:\", Linux: "/"
-      for (let i = 0; i < 8 && cur && cur !== root; i++) {
-        const gitPath = path.join(cur, '.git');
-        if (fs.existsSync(gitPath)) return cur;
-        const parent = path.dirname(cur);
-        if (parent === cur) break; // 已到文件系统根
-        cur = parent;
-      }
-      return ''; // 找不到，返回空字符串让上层 fallback
-    }
-    let gitUrl = '';
-    let branchName = '';
-    const gitRoot = findGitRoot(sourceDir);
-    const gitCwd = gitRoot || process.cwd();
-    if (!gitRoot) {
-      core.warning(`未在 sourceDir(${sourceDir}) 的上级目录找到 .git，将使用工作区根目录的 git remote，可能与被扫描仓库不一致`);
-    }
     try {
-      const remoteUrl = execSync('git remote get-url origin', { encoding: 'utf8', cwd: gitCwd }).trim();
-      // 清洗掉 url 中可能存在的内嵌凭证（任意 scheme 的 userinfo，如 http://user:pass@host/），
-      // 保留 ssh://git@ 标准用户名（Ref #45 #66，与 sec-comp #38 已批准实施同款）
-      gitUrl = remoteUrl.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)(?!git@)[^@/]+@/, '$1');
-      branchName = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', cwd: gitCwd }).trim();
-      // detached HEAD（如 checkout 了 tag）时尝试获取 tag 名
-      if (branchName === 'HEAD') {
-        try {
-          branchName = execSync('git describe --tags --exact-match', { encoding: 'utf8', cwd: gitCwd }).trim();
-        } catch (e) {
-          core.warning('当前为 detached HEAD 且无法获取 tag 名');
+        // 源代码目录固定为当前目录（线上环境由 checkout 步骤决定扫描内容）
+        const sourceDir = './';
+        const excludeDirs = getInput('exclude-dirs')
+            ? getInput('exclude-dirs').split(',').map((s) => s.trim())
+            : [];
+        const allowedExtensions = getInput('allowed-extensions')
+            ? getInput('allowed-extensions').split(',').map((s) => s.trim())
+            : [];
+        // 重复检测阈值：与华为云 cmetrics 官方定义对齐
+        // 官方定义："连续超过 10 行代码块在其他地方重复记为一次重复"
+        // - minLines=10：连续代码块至少 10 行才算一次重复
+        const minLines = parseInt(getInput('min-lines') || '10', 10);
+        const outputFile = getInput('output') || 'metrics.json';
+        // CI 上下文兜底分支：GitHub 取 GITHUB_REF_NAME（PR 取目标分支），GitCode 取 ATOMGIT_REF_NAME
+        const ciBranch = resolveCiBranch();
+        // coderepo 服务地址硬编码到插件（部署时确定的固定值）；
+        // 自家平台 APIG 网关端点，非第三方地址，登记白名单（合规例外）（Ref #22）
+        const coderepoUrl = 'https://apig.openlibing.com:443'; // gitleaks:allow 自家平台 APIG 网关，功能必需
+        // 认证模式判定（OIDC 联邦认证标识）：workflow 声明 permissions: id-token: write 时，
+        // runner 注入 ACTIONS_ID_TOKEN_REQUEST_URL，走新接口（/action-api/...）+ OIDC 免密认证；
+        // 未声明时走旧接口（/openlibing-coderepo/...）+ AK/SK 签名，兼容尚未适配的存量脚本
+        const useOidc = !!process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+        // AK/SK 凭证（仅 AK/SK 模式使用，OIDC 模式无需传入）：
+        // apig-app-key/apig-app-secret 用于 APIG 上报签名，obs-ak/obs-sk 用于 OBS 全量文件上传
+        const apigAppKey = getInput('apig-app-key') || '';
+        const apigAppSecret = getInput('apig-app-secret') || '';
+        const obsAk = getInput('obs-ak') || '';
+        const obsSk = getInput('obs-sk') || '';
+        // 上报用 git_url 和 branch_name：
+        // 从 sourceDir 沿目录树向上找 .git（修复：sourceDir 是构建产物子目录如 source-code/target 时，
+        //   .git 在 source-code/ 而非 sourceDir 内，旧逻辑只看 sourceDir/.git 会误用工作区根目录的 git）
+        // 沿目录树向上查找包含 .git 的目录。.git 既可能是目录（普通仓库），
+        // 也可能是文件（worktree/submodule 指向真正的 git dir），fs.existsSync 对二者均返回 true。
+        // 设置向上查找最大深度为 8 层，避免异常文件系统结构下死循环或越界。
+        function findGitRoot(startDir) {
+            let cur = path.resolve(startDir);
+            const root = path.parse(cur).root; // Windows: "D:\", Linux: "/"
+            for (let i = 0; i < 8 && cur && cur !== root; i++) {
+                const gitPath = path.join(cur, '.git');
+                if (fs.existsSync(gitPath))
+                    return cur;
+                const parent = path.dirname(cur);
+                if (parent === cur)
+                    break; // 已到文件系统根
+                cur = parent;
+            }
+            return ''; // 找不到，返回空字符串让上层 fallback
         }
-      }
-    } catch (e) {
-      core.warning(`从 git 命令获取仓库信息失败: ${e.message}`);
-    }
-    // GitHub 兜底：git 命令不可用时（如浅克隆异常），用平台上下文拼仓库地址
-    if (!gitUrl) {
-      gitUrl = resolveRepoUrlFromEnv();
-    }
-    // 游离 HEAD（GitHub PR 合并引用）与空值均回落到平台上下文分支（PR 事件为目标分支）
-    branchName = resolveBranchName(branchName, ciBranch);
-
-    // repository 字段已移除：写死 source-dir 后，工作流所在仓 git_url 即扫描仓，
-    // 后端从 gitUrl 提取 owner/repo 拼接流水线链接
-    // pipelineRunId / runNumber / commitId / pipelineName：
-    // 按已判定的平台只读取对应变量（GitHub: GITHUB_*，GitCode: ATOMGIT_*）
-    const pipelineRunId = ciEnv('runId');
-    // runNumber 从环境变量获取，仅作记录
-    const runNumber = ciEnv('runNumber');
-    // commitId：触发本次工作流的提交 SHA，口径与 CodeQL 上报（openlibing-upload-sarif）一致
-    const commitId = ciEnv('sha');
-    // pipelineName：流水线名称，供度量数据下钻页展示来源流水线
-    const pipelineName = ciEnv('workflow');
-
-    // 加载内置默认配置（配置文件能力已移除，运行参数统一由 action 输入覆盖）
-    const config = ConfigLoader.getDefaultConfig();
-
-    // 用 action 输入覆盖配置
-    config.sourceDir = path.resolve(sourceDir);
-    // excludeDirs: 如果用户显式传入了值，则覆盖默认值
-    // 空数组表示不排除任何目录
-    if (getInput('exclude-dirs') !== '') {
-      config.excludeDirs = excludeDirs;
-    }
-    // allowedExtensions: 如果用户显式传入了值（包括空字符串），则覆盖默认值
-    // 空数组表示不限制扩展名（检查所有文件）
-    if (getInput('allowed-extensions') !== '') {
-      config.allowedExtensions = allowedExtensions;
-    }
-    config.detectors.duplication.minLines = minLines;
-    config.output = outputFile;
-
-    // 上传配置：插件默认上传到 openLiBing（已移除 upload 开关）
-    if (coderepoUrl) {
-      config.uploader = {
-        enabled: true,
-        coderepoUrl: coderepoUrl,
-        timeout: 60000,
-        useOidc: useOidc,
-        apigAppKey: apigAppKey,
-        apigAppSecret: apigAppSecret,
-        obsAk: obsAk,
-        obsSk: obsSk
-      };
-    }
-
-    core.info(`Upload auth mode: ${useOidc ? 'oidc (new endpoint /action-api)' : 'aksk (legacy endpoint /openlibing-coderepo)'}`);
-
-    // 自动安装 Python 依赖（用户无需在 workflow 中手动配置 install_dependency 步骤）
-    // 固定 lizard 版本，避免不同执行机装到不同版本导致指标基线不可比
-    const LIZARD_VERSION = '1.24.0';
-    // 先测速选定 pip 索引源；仅在本次安装子进程中通过 PIP_INDEX_URL 注入，
-    // 不改写执行机的 pip 配置文件（self-hosted 常驻机上写全局配置会跨任务持久生效）
-    const pipIndexUrl = await detectPipIndexUrl();
-    // pip 探测与安装统一在临时空目录执行（Ref #71，与 sec-comp #39 同款）：
-    // python -m 会把 cwd 置于 sys.path 首位，被测仓根目录的 pip.py / pip/ 可遮蔽官方 pip
-    // 实现任意代码执行；空目录 cwd 使工作区不再位于 sys.path，遮蔽面消除。
-    // 同时改用 execFileSync 参数数组直传，不经 shell 解析（Ref #26 同类面）
-    const pipCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pip-install-'));
-    try {
-      // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
-      // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
-      let supportsBreakSystemPackages = false;
-      try {
-        const pipInstallHelp = execFileSync('python3', ['-m', 'pip', 'install', '--help'], {
-          encoding: 'utf8',
-          timeout: 30000,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          cwd: pipCwd
+        let gitUrl = '';
+        let branchName = '';
+        const gitRoot = findGitRoot(sourceDir);
+        const gitCwd = gitRoot || process.cwd();
+        if (!gitRoot) {
+            core.warning(`未在 sourceDir(${sourceDir}) 的上级目录找到 .git，将使用工作区根目录的 git remote，可能与被扫描仓库不一致`);
+        }
+        try {
+            const remoteUrl = execSync('git remote get-url origin', { encoding: 'utf8', cwd: gitCwd }).trim();
+            // 清洗掉 url 中可能存在的内嵌凭证（任意 scheme 的 userinfo，如 http://user:pass@host/），
+            // 保留 ssh://git@ 标准用户名（Ref #45 #66，与 sec-comp #38 已批准实施同款）
+            gitUrl = remoteUrl.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)(?!git@)[^@/]+@/, '$1');
+            branchName = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', cwd: gitCwd }).trim();
+            // detached HEAD（如 checkout 了 tag）时尝试获取 tag 名
+            if (branchName === 'HEAD') {
+                try {
+                    branchName = execSync('git describe --tags --exact-match', { encoding: 'utf8', cwd: gitCwd }).trim();
+                }
+                catch (e) {
+                    core.warning('当前为 detached HEAD 且无法获取 tag 名');
+                }
+            }
+        }
+        catch (e) {
+            core.warning(`从 git 命令获取仓库信息失败: ${e.message}`);
+        }
+        // GitHub 兜底：git 命令不可用时（如浅克隆异常），用平台上下文拼仓库地址
+        if (!gitUrl) {
+            gitUrl = resolveRepoUrlFromEnv();
+        }
+        // 游离 HEAD（GitHub PR 合并引用）与空值均回落到平台上下文分支（PR 事件为目标分支）
+        branchName = resolveBranchName(branchName, ciBranch);
+        // repository 字段已移除：写死 source-dir 后，工作流所在仓 git_url 即扫描仓，
+        // 后端从 gitUrl 提取 owner/repo 拼接流水线链接
+        // pipelineRunId / runNumber / commitId / pipelineName：
+        // 按已判定的平台只读取对应变量（GitHub: GITHUB_*，GitCode: ATOMGIT_*）
+        const pipelineRunId = ciEnv('runId');
+        // runNumber 从环境变量获取，仅作记录
+        const runNumber = ciEnv('runNumber');
+        // commitId：触发本次工作流的提交 SHA，口径与 CodeQL 上报（openlibing-upload-sarif）一致
+        const commitId = ciEnv('sha');
+        // pipelineName：流水线名称，供度量数据下钻页展示来源流水线
+        const pipelineName = ciEnv('workflow');
+        // 加载内置默认配置（配置文件能力已移除，运行参数统一由 action 输入覆盖）
+        const config = ConfigLoader.getDefaultConfig();
+        // 用 action 输入覆盖配置
+        config.sourceDir = path.resolve(sourceDir);
+        // excludeDirs: 如果用户显式传入了值，则覆盖默认值
+        // 空数组表示不排除任何目录
+        if (getInput('exclude-dirs') !== '') {
+            config.excludeDirs = excludeDirs;
+        }
+        // allowedExtensions: 如果用户显式传入了值（包括空字符串），则覆盖默认值
+        // 空数组表示不限制扩展名（检查所有文件）
+        if (getInput('allowed-extensions') !== '') {
+            config.allowedExtensions = allowedExtensions;
+        }
+        config.detectors.duplication.minLines = minLines;
+        config.output = outputFile;
+        // 上传配置：插件默认上传到 openLiBing（已移除 upload 开关）
+        if (coderepoUrl) {
+            config.uploader = {
+                enabled: true,
+                coderepoUrl: coderepoUrl,
+                timeout: 60000,
+                useOidc: useOidc,
+                apigAppKey: apigAppKey,
+                apigAppSecret: apigAppSecret,
+                obsAk: obsAk,
+                obsSk: obsSk
+            };
+        }
+        core.info(`Upload auth mode: ${useOidc ? 'oidc (new endpoint /action-api)' : 'aksk (legacy endpoint /openlibing-coderepo)'}`);
+        // 自动安装 Python 依赖（用户无需在 workflow 中手动配置 install_dependency 步骤）
+        // 固定 lizard 版本，避免不同执行机装到不同版本导致指标基线不可比
+        const LIZARD_VERSION = '1.24.0';
+        // 先测速选定 pip 索引源；仅在本次安装子进程中通过 PIP_INDEX_URL 注入，
+        // 不改写执行机的 pip 配置文件（self-hosted 常驻机上写全局配置会跨任务持久生效）
+        const pipIndexUrl = await detectPipIndexUrl();
+        // pip 探测与安装统一在临时空目录执行（Ref #71，与 sec-comp #39 同款）：
+        // python -m 会把 cwd 置于 sys.path 首位，被测仓根目录的 pip.py / pip/ 可遮蔽官方 pip
+        // 实现任意代码执行；空目录 cwd 使工作区不再位于 sys.path，遮蔽面消除。
+        // 同时改用 execFileSync 参数数组直传，不经 shell 解析（Ref #26 同类面）
+        const pipCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pip-install-'));
+        try {
+            // --break-system-packages 是 pip 23.0.1 起才提供的 PEP 668 放行开关，旧版 pip 传入会直接报
+            // "no such option" 导致 lizard 安装失败，故先探测 pip 是否支持该参数，再决定是否携带
+            let supportsBreakSystemPackages = false;
+            try {
+                const pipInstallHelp = execFileSync('python3', ['-m', 'pip', 'install', '--help'], {
+                    encoding: 'utf8',
+                    timeout: 30000,
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                    cwd: pipCwd
+                });
+                supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
+            }
+            catch (e) {
+                // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
+                core.debug(`pip install --help probe failed: ${e.message}`);
+            }
+            const pipInstallArgs = [
+                '-m', 'pip', 'install',
+                ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
+                `lizard==${LIZARD_VERSION}`
+            ];
+            try {
+                core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
+                execFileSync('python3', pipInstallArgs, {
+                    stdio: 'inherit',
+                    timeout: 120000,
+                    env: { ...process.env, PIP_INDEX_URL: pipIndexUrl },
+                    cwd: pipCwd
+                });
+                core.info('Python dependencies installed successfully');
+            }
+            catch (e) {
+                // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
+                core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
+            }
+        }
+        finally {
+            // 清理临时目录，不在 runner 上残留
+            try {
+                fs.rmSync(pipCwd, { recursive: true, force: true });
+            }
+            catch (e) {
+                // 忽略清理失败
+            }
+        }
+        core.info('Starting code metrics scan...');
+        // 只输出目录基名，不落 runner 绝对路径（Ref #60，与 sec-comp #36 同款）
+        core.info(`Source directory: ${path.basename(config.sourceDir)}`);
+        // 输出上报关键字段，便于排查 atomgit 上下文异常；
+        // gitUrl/branchName 为外部可控字符串（git remote / 环境变量），过 sanitize 防换行注入（Ref #64）
+        core.info(`gitUrl: ${sanitize(gitUrl) || '(empty)'}`);
+        core.info(`branchName: ${sanitize(branchName) || '(empty)'}`);
+        core.info(`pipelineRunId: ${pipelineRunId || '(empty)'}`);
+        core.info(`commitId: ${commitId || '(empty)'}`);
+        core.info(`pipelineName: ${pipelineName || '(empty)'}`);
+        const scanner = new MetricsScanner(config);
+        const result = await scanner.scan({
+            sourceDir: config.sourceDir,
+            output: config.output,
+            upload: true,
+            gitUrl: gitUrl,
+            branchName: branchName,
+            pipelineRunId: pipelineRunId,
+            runNumber: runNumber,
+            commitId: commitId,
+            pipelineName: pipelineName
         });
-        supportsBreakSystemPackages = pipInstallHelp.includes('--break-system-packages');
-      } catch (e) {
-        // 探测失败按不支持处理（旧版 pip 无该选项），走不带该参数的命令
-        core.debug(`pip install --help probe failed: ${e.message}`);
-      }
-      const pipInstallArgs = [
-        '-m', 'pip', 'install',
-        ...(supportsBreakSystemPackages ? ['--break-system-packages'] : []),
-        `lizard==${LIZARD_VERSION}`
-      ];
-      try {
-        core.info(`Installing Python dependencies (lizard==${LIZARD_VERSION}) via ${pipIndexUrl}...`);
-        execFileSync('python3', pipInstallArgs, {
-          stdio: 'inherit',
-          timeout: 120000,
-          env: { ...process.env, PIP_INDEX_URL: pipIndexUrl },
-          cwd: pipCwd
-        });
-        core.info('Python dependencies installed successfully');
-      } catch (e) {
-        // lizard 装不上时函数级指标会静默上报为 0，故按 error 记录便于及时发现
-        core.error(`Python dependency installation failed: ${e.message}. Function-level metrics may be 0.`);
-      }
-    } finally {
-      // 清理临时目录，不在 runner 上残留
-      try {
-        fs.rmSync(pipCwd, { recursive: true, force: true });
-      } catch (e) {
-        // 忽略清理失败
-      }
+        // 设置输出（仅 GitHub 写 action outputs；GitCode 结果面板只保留中文概览行，不写重复英文键）
+        setCiOutput('code-scale', result.codeScale);
+        setCiOutput('avg-function-loc', result.avgFunctionLoc);
+        setCiOutput('avg-cyclomatic-complexity', result.avgCyclomaticComplexity);
+        setCiOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
+        setCiOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
+        // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥）
+        // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出
+        const DETAIL_LINK_LABEL = '代码度量指标扫描结果';
+        // detailLink/tip 为服务端响应字段，拼进日志/输出行前过 sanitize 防换行注入（Ref #64）
+        const detailLink = sanitize(result.uploadInfo?.detailLink || '');
+        const detailTip = sanitize(result.uploadInfo?.tip || '');
+        if (detailLink) {
+            core.info(`${DETAIL_LINK_LABEL}: ${detailLink}`);
+        }
+        else if (detailTip) {
+            core.info(`${DETAIL_LINK_LABEL}: ${detailTip}`);
+        }
+        else {
+            core.info(`${DETAIL_LINK_LABEL}: 无链接（上报失败或链接构建异常，不输出）`);
+        }
+        // GitCode 输出面板：保持原有键值对输出（概览 + 详情链接），供流水线结果面板展示
+        // 无函数（分母为 0）时两个均值指标为 null，统一展示 -- 而不是 null
+        const displayValue = (value) => (value === null || value === undefined ? '--' : String(value));
+        const overviewDisplay = [
+            ['codeScale', '代码规模（codeScale）', String(result.codeScale)],
+            ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', displayValue(result.avgFunctionLoc)],
+            ['avgCyclomaticComplexity', '平均圈复杂度（avgCyclomaticComplexity）', displayValue(result.avgCyclomaticComplexity)],
+            ['totalCodeDuplicationRate', '总代码重复率（totalCodeDuplicationRate）', `${result.totalCodeDuplicationRate}%`],
+            ['totalFileDuplicationRate', '总文件重复率（totalFileDuplicationRate）', `${result.totalFileDuplicationRate}%`]
+        ];
+        appendAtomgitOutput(overviewDisplay.map((item) => `${item[1]}=${item[2]}`), '概览结果');
+        if (detailLink || detailTip) {
+            // 链接行 key 以 url 结尾：GitCode 按 key 末尾小写 url 判定 type=link 渲染为可点击链接
+            appendAtomgitOutput([detailLink ? `扫描结果url=${detailLink}` : `扫描结果=${detailTip}`], '扫描结果链接');
+        }
+        // 运行摘要：GitHub 写 GITHUB_STEP_SUMMARY，GitCode 写 ATOMGIT_STEP_SUMMARY，统一使用 Markdown 表格
+        // GitHub 平台摘要固定输出全英文，GitCode 保持原有中文文案
+        appendStepSummary((0, summary_1.buildSummaryMarkdown)({
+            gitUrl,
+            branchName,
+            commitId,
+            pipelineRunId,
+            runNumber,
+            finishedAt: (0, summary_1.formatCstTime)(new Date()),
+            detailLink,
+            detailTip
+        }, result, { english: IS_GITHUB }));
+        core.info('Code metrics scan completed successfully');
+        core.info(`Code scale: ${result.codeScale}`);
+        core.info(`Avg function LOC: ${displayValue(result.avgFunctionLoc)}`);
+        core.info(`Avg cyclomatic complexity: ${displayValue(result.avgCyclomaticComplexity)}`);
+        core.info(`Code duplication rate: ${result.totalCodeDuplicationRate}%`);
+        core.info(`File duplication rate: ${result.totalFileDuplicationRate}%`);
     }
-
-    core.info('Starting code metrics scan...');
-    // 只输出目录基名，不落 runner 绝对路径（Ref #60，与 sec-comp #36 同款）
-    core.info(`Source directory: ${path.basename(config.sourceDir)}`);
-    // 输出上报关键字段，便于排查 atomgit 上下文异常；
-    // gitUrl/branchName 为外部可控字符串（git remote / 环境变量），过 sanitize 防换行注入（Ref #64）
-    core.info(`gitUrl: ${sanitize(gitUrl) || '(empty)'}`);
-    core.info(`branchName: ${sanitize(branchName) || '(empty)'}`);
-    core.info(`pipelineRunId: ${pipelineRunId || '(empty)'}`);
-    core.info(`commitId: ${commitId || '(empty)'}`);
-    core.info(`pipelineName: ${pipelineName || '(empty)'}`);
-
-    const scanner = new MetricsScanner(config);
-    const result = await scanner.scan({
-      sourceDir: config.sourceDir,
-      output: config.output,
-      upload: true,
-      gitUrl: gitUrl,
-      branchName: branchName,
-      pipelineRunId: pipelineRunId,
-      runNumber: runNumber,
-      commitId: commitId,
-      pipelineName: pipelineName
-    });
-
-    // 设置输出（仅 GitHub 写 action outputs；GitCode 结果面板只保留中文概览行，不写重复英文键）
-    setCiOutput('code-scale', result.codeScale);
-    setCiOutput('avg-function-loc', result.avgFunctionLoc);
-    setCiOutput('avg-cyclomatic-complexity', result.avgCyclomaticComplexity);
-    setCiOutput('total-code-duplication-rate', result.totalCodeDuplicationRate);
-    setCiOutput('total-file-duplication-rate', result.totalFileDuplicationRate);
-
-    // 平台详情链接输出：固定 1 行（链接行或提示行，服务端保证二者互斥）
-    // 单一通道独立判环境变量与兜底：未设置环境变量或写入失败仅告警降级，不影响上报结果；无链接且无提示（上报失败/链接构建异常）不输出
-    const DETAIL_LINK_LABEL = '代码度量指标扫描结果';
-    // detailLink/tip 为服务端响应字段，拼进日志/输出行前过 sanitize 防换行注入（Ref #64）
-    const detailLink = sanitize(result.uploadInfo?.detailLink || '');
-    const detailTip = sanitize(result.uploadInfo?.tip || '');
-    if (detailLink) {
-      core.info(`${DETAIL_LINK_LABEL}: ${detailLink}`);
-    } else if (detailTip) {
-      core.info(`${DETAIL_LINK_LABEL}: ${detailTip}`);
-    } else {
-      core.info(`${DETAIL_LINK_LABEL}: 无链接（上报失败或链接构建异常，不输出）`);
+    catch (error) {
+        core.setFailed(`Action failed with error: ${error.message}`);
     }
-
-    // GitCode 输出面板：保持原有键值对输出（概览 + 详情链接），供流水线结果面板展示
-    // 无函数（分母为 0）时两个均值指标为 null，统一展示 -- 而不是 null
-    const displayValue = (value) => (value === null || value === undefined ? '--' : String(value));
-    const overviewDisplay = [
-      ['codeScale', '代码规模（codeScale）', String(result.codeScale)],
-      ['avgFunctionLoc', '平均代码行数（avgFunctionLoc）', displayValue(result.avgFunctionLoc)],
-      ['avgCyclomaticComplexity', '平均圈复杂度（avgCyclomaticComplexity）', displayValue(result.avgCyclomaticComplexity)],
-      ['totalCodeDuplicationRate', '总代码重复率（totalCodeDuplicationRate）', `${result.totalCodeDuplicationRate}%`],
-      ['totalFileDuplicationRate', '总文件重复率（totalFileDuplicationRate）', `${result.totalFileDuplicationRate}%`]
-    ];
-    appendAtomgitOutput(overviewDisplay.map(item => `${item[1]}=${item[2]}`), '概览结果');
-    if (detailLink || detailTip) {
-      // 链接行 key 以 url 结尾：GitCode 按 key 末尾小写 url 判定 type=link 渲染为可点击链接
-      appendAtomgitOutput(
-        [detailLink ? `扫描结果url=${detailLink}` : `扫描结果=${detailTip}`],
-        '扫描结果链接'
-      );
-    }
-
-    // 运行摘要：GitHub 写 GITHUB_STEP_SUMMARY，GitCode 写 ATOMGIT_STEP_SUMMARY，统一使用 Markdown 表格
-    // GitHub 平台摘要固定输出全英文，GitCode 保持原有中文文案
-    appendStepSummary(
-      buildSummaryMarkdown(
-        {
-          gitUrl,
-          branchName,
-          commitId,
-          pipelineRunId,
-          runNumber,
-          finishedAt: formatCstTime(new Date()),
-          detailLink,
-          detailTip
-        },
-        result,
-        { english: IS_GITHUB }
-      )
-    );
-
-    core.info('Code metrics scan completed successfully');
-    core.info(`Code scale: ${result.codeScale}`);
-    core.info(`Avg function LOC: ${displayValue(result.avgFunctionLoc)}`);
-    core.info(`Avg cyclomatic complexity: ${displayValue(result.avgCyclomaticComplexity)}`);
-    core.info(`Code duplication rate: ${result.totalCodeDuplicationRate}%`);
-    core.info(`File duplication rate: ${result.totalFileDuplicationRate}%`);
-
-  } catch (error) {
-    core.setFailed(`Action failed with error: ${error.message}`);
-  }
 }
-
-// 作为 action 入口直接执行时启动扫描；被单测 require 时不自动执行
-if (require.main === require.cache[eval('__filename')]) {
-  run();
-}
-
+// 业务主流程由入口壳 src/index.ts 调用；此处导出 run 供入口与调试复用
 module.exports = { run };
 
 
 /***/ }),
 
-/***/ 9863:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ 4105:
+/***/ ((module, exports, __nccwpck_require__) => {
 
-const SlocDetector = __nccwpck_require__(2034);
-const LizardDetector = __nccwpck_require__(843);
-const DuplicationDetector = __nccwpck_require__(1223);
-const MetricsCalculator = __nccwpck_require__(5378);
-const CoderepoUploader = __nccwpck_require__(2890);
-const ConfigLoader = __nccwpck_require__(6145);
-const Logger = __nccwpck_require__(8467);
-const FileUtils = __nccwpck_require__(7248);
-const FileCollector = __nccwpck_require__(6790);
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const SlocDetector = __nccwpck_require__(7160);
+const LizardDetector = __nccwpck_require__(5005);
+const DuplicationDetector = __nccwpck_require__(8137);
+// 纯逻辑层模块以 ES import 引入，获得跨模块类型契约（strict 下不再退化为 any）
+const MetricsCalculator_1 = __nccwpck_require__(4264);
+const CoderepoUploader = __nccwpck_require__(8024);
+const ConfigLoader = __nccwpck_require__(1839);
+const Logger = __nccwpck_require__(7893);
+const FileUtils = __nccwpck_require__(5213);
+const fileCollector_1 = __nccwpck_require__(8124);
 const path = __nccwpck_require__(6928);
-const { sanitize } = __nccwpck_require__(9900);
-
+const { sanitize } = __nccwpck_require__(3262);
 // 将日期格式化为 yyyy-MM-dd HH:mm:ss
 function formatDateTime(date) {
-  // 固定按东八区输出：CI runner 容器时区多为 UTC，用本地组件取值会使检测时间比实际早 8 小时
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hourCycle: 'h23'
-  });
-  // en-CA 输出形如 "2026-08-24, 11:05:29"，把逗号替换为空格统一为 yyyy-MM-dd HH:mm:ss
-  return fmt.format(date).replace(',', '');
+    // 固定按东八区输出：CI runner 容器时区多为 UTC，用本地组件取值会使检测时间比实际早 8 小时
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hourCycle: 'h23'
+    });
+    // en-CA 输出形如 "2026-08-24, 11:05:29"，把逗号替换为空格统一为 yyyy-MM-dd HH:mm:ss
+    return fmt.format(date).replace(',', '');
 }
-
 class MetricsScanner {
-  constructor(config = {}) {
-    this.config = config;
-    this.logger = new Logger();
-    this.workingDir = config.workingDir || process.cwd();
-
-    const allowedExtensions = config.allowedExtensions || [];
-
-    this.slocDetector = new SlocDetector({
-      excludeDirs: config.excludeDirs,
-      allowedExtensions: allowedExtensions
-    });
-
-    this.lizardDetector = new LizardDetector({
-      excludeDirs: config.excludeDirs,
-      allowedExtensions: allowedExtensions,
-      lizardPath: config.detectors?.lizard?.path || 'lizard',
-      workingDir: this.workingDir
-    });
-
-    this.duplicationDetector = new DuplicationDetector({
-      excludeDirs: config.excludeDirs,
-      allowedExtensions: allowedExtensions,
-      // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"
-      // - minLines=10：连续代码块至少 10 行才算一次重复
-      minLines: config.detectors?.duplication?.minLines || 10
-    });
-
-    this.uploader = new CoderepoUploader({
-      coderepoUrl: config.uploader?.coderepoUrl,
-      timeout: (config.uploader?.timeout || 30) * 1000,
-      useOidc: config.uploader?.useOidc,
-      apigAppKey: config.uploader?.apigAppKey,
-      apigAppSecret: config.uploader?.apigAppSecret,
-      obsAk: config.uploader?.obsAk,
-      obsSk: config.uploader?.obsSk
-    });
-  }
-
-  async scan(options = {}) {
-    const startTime = new Date();
-    const startTimeFormatted = formatDateTime(startTime);
-    this.logger.info('Starting code metrics scan...');
-
-    const sourceInput = options.sourceDir || this.config.sourceDir;
-    const sources = Array.isArray(sourceInput) ? sourceInput : [sourceInput];
-    const resolvedSources = sources.map(src =>
-      path.isAbsolute(src) ? src : path.resolve(this.workingDir, src)
-    );
-
-    const previewFiles = FileCollector.collectFiles(
-      resolvedSources,
-      this.config.excludeDirs || [],
-      this.config.allowedExtensions || []
-    );
-    let slocResult = {};
-    let lizardResult = {};
-    let duplicationResult = {};
-    let status = 0;
-
-    try {
-      if (this.config.detectors?.sloc?.enabled !== false) {
-        this.logger.info('Running scc detector (code size)...');
-        slocResult = await this.slocDetector.detect(resolvedSources);
-      }
-
-      if (this.config.detectors?.lizard?.enabled !== false) {
-        this.logger.info('Running lizard detector (function complexity)...');
-        lizardResult = await this.lizardDetector.detect(resolvedSources);
-      }
-
-      if (this.config.detectors?.duplication?.enabled !== false) {
-        this.logger.info('Running duplication detector (code duplication)...');
-        // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
-        duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
-      }
-
-      const mergedMetrics = MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
-      MetricsCalculator.validate(mergedMetrics);
-      const formattedMetrics = MetricsCalculator.formatForReport(mergedMetrics);
-
-      // 从格式化结果中分离 fileDetails 和总体指标
-      const { fileDetails, ...overallMetrics } = formattedMetrics;
-
-      const endTime = new Date();
-      const endTimeFormatted = formatDateTime(endTime);
-      const durationMs = endTime.getTime() - startTime.getTime();
-
-      const result = {
-        ...overallMetrics,
-        fileDetails: fileDetails,
-        detectionInfo: {
-          startTime: startTimeFormatted,
-          endTime: endTimeFormatted,
-          durationMs: durationMs,
-          sources: resolvedSources,
-          tools: {
-            sloc: this.config.detectors?.sloc?.enabled !== false,
-            lizard: this.config.detectors?.lizard?.enabled !== false,
-            duplication: this.config.detectors?.duplication?.enabled !== false
-          }
-        }
-      };
-
-      this.logger.info(`Scan completed in ${durationMs}ms`);
-
-      // 诊断日志：输出扫描结果规模，用于定位大数据量下的序列化超限问题
-      let snapshotTotal = 0;
-      for (const fd of fileDetails || []) {
-        if (fd.snapshotData) snapshotTotal += fd.snapshotData.length;
-      }
-      this.logger.info(
-        `Result scale: fileDetails=${(fileDetails || []).length}, snapshotDataTotal=${snapshotTotal} bytes, occurrences=${(formattedMetrics.duplicationOccurrences || []).length}`
-      );
-
-      if (options.output || this.config.output) {
-        const outputPath = path.isAbsolute(options.output || this.config.output)
-          ? (options.output || this.config.output)
-          : path.resolve(this.workingDir, options.output || this.config.output);
-        // 本地输出文件剥离大数据字段（snapshotData 与 duplicationOccurrences 的明文 content），
-        // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length。
-        // - snapshotData 仅详情页展示用，DB 上报另有一份
-        // - occurrence 的明文 content 仅上报用（uploader 已 Base64 编码后分批上报），
-        //   本地保留 groupId/filePath/起止行等元数据即可
-        const compactResult = {
-          ...result,
-          fileDetails: (result.fileDetails || []).map(fd => {
-            const { snapshotData, ...rest } = fd;
-            return rest;
-          }),
-          // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
-          // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
-          duplicationOccurrences: (result.duplicationOccurrences || []).map(occ => {
-            const MAX_CONTENT_CHARS = 15 * 1024;
-            if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
-              return {
-                ...occ,
-                content: this.uploader.clipOversizeContent(occ.content, MAX_CONTENT_CHARS)
-              };
-            }
-            return occ;
-          })
-        };
-        FileUtils.writeJsonFile(outputPath, compactResult);
-        // 只输出文件基名，不落 runner 绝对路径（Ref #60）
-        this.logger.info(`Results saved to: ${path.basename(outputPath)}`);
-        this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
-      }
-
-      if (options.upload || this.config.uploader?.enabled) {
-        const uploadResult = await this.uploader.upload(formattedMetrics, {
-          gitUrl: options.gitUrl,
-          branchName: options.branchName,
-          pipelineRunId: options.pipelineRunId,
-          commitId: options.commitId,
-          runNumber: options.runNumber,
-          pipelineName: options.pipelineName,
-          startTime: startTimeFormatted,
-          endTime: endTimeFormatted,
-          status: status
+    constructor(config = {}) {
+        this.config = config;
+        this.logger = new Logger();
+        this.workingDir = config.workingDir || process.cwd();
+        const allowedExtensions = config.allowedExtensions || [];
+        this.slocDetector = new SlocDetector({
+            excludeDirs: config.excludeDirs,
+            allowedExtensions: allowedExtensions
         });
-
-        if (uploadResult.success) {
-          // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯；
-          // obsUrl 内嵌从 gitUrl 提取的 owner/repo（外部可控），过 sanitize 防换行注入（Ref #64）
-          this.logger.info(`Successfully uploaded metrics, obsUrl: ${sanitize(uploadResult.obsUrl)}`);
-          // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
-          result.uploadInfo = {
-            success: true,
-            obsUrl: uploadResult.obsUrl,
-            detailLink: uploadResult.detailLink || '',
-            tip: uploadResult.tip || ''
-          };
-        } else {
-          this.logger.error(`Failed to upload metrics: ${sanitize(uploadResult.error)}`);
-          result.uploadInfo = { success: false, error: uploadResult.error };
-        }
-      }
-
-      return result;
-
-    } catch (error) {
-      this.logger.error(`Scan failed: ${error.message}`);
-      if (error && error.stack) {
-        // 输出堆栈头部，辅助定位是哪个 JSON.stringify / 哪个阶段抛错
-        this.logger.error(`Stack head: ${error.stack.split('\n').slice(0, 12).join('\n')}`);
-      }
-
-      // 失败时也上传报告，附带错误信息
-      if (options.upload || this.config.uploader?.enabled) {
-        const endTimeFormatted = formatDateTime(new Date());
-        try {
-          await this.uploader.upload({}, {
-            gitUrl: options.gitUrl,
-            branchName: options.branchName,
-            pipelineRunId: options.pipelineRunId,
-            commitId: options.commitId,
-            runNumber: options.runNumber,
-            pipelineName: options.pipelineName,
-            startTime: startTimeFormatted,
-            endTime: endTimeFormatted,
-            status: 1,
-            errorMessage: error.message
-          });
-        } catch (uploadError) {
-          this.logger.error(`Failed to upload error report: ${uploadError.message}`);
-        }
-      }
-
-      throw error;
+        this.lizardDetector = new LizardDetector({
+            excludeDirs: config.excludeDirs,
+            allowedExtensions: allowedExtensions,
+            lizardPath: config.detectors?.lizard?.path || 'lizard',
+            workingDir: this.workingDir
+        });
+        this.duplicationDetector = new DuplicationDetector({
+            excludeDirs: config.excludeDirs,
+            allowedExtensions: allowedExtensions,
+            // 与华为云 cmetrics 官方定义对齐："连续超过 10 行代码块在其他地方重复记为一次重复"
+            // - minLines=10：连续代码块至少 10 行才算一次重复
+            minLines: config.detectors?.duplication?.minLines || 10
+        });
+        this.uploader = new CoderepoUploader({
+            coderepoUrl: config.uploader?.coderepoUrl,
+            timeout: (config.uploader?.timeout || 30) * 1000,
+            useOidc: config.uploader?.useOidc,
+            apigAppKey: config.uploader?.apigAppKey,
+            apigAppSecret: config.uploader?.apigAppSecret,
+            obsAk: config.uploader?.obsAk,
+            obsSk: config.uploader?.obsSk
+        });
     }
-  }
+    async scan(options = {}) {
+        const startTime = new Date();
+        const startTimeFormatted = formatDateTime(startTime);
+        this.logger.info('Starting code metrics scan...');
+        const sourceInput = options.sourceDir || this.config.sourceDir;
+        const sources = Array.isArray(sourceInput) ? sourceInput : [sourceInput];
+        const resolvedSources = sources.map((src) => path.isAbsolute(src) ? src : path.resolve(this.workingDir, src));
+        const previewFiles = fileCollector_1.FileCollector.collectFiles(resolvedSources, this.config.excludeDirs || [], this.config.allowedExtensions || []);
+        let slocResult = {};
+        let lizardResult = {};
+        let duplicationResult = {};
+        const status = 0;
+        try {
+            if (this.config.detectors?.sloc?.enabled !== false) {
+                this.logger.info('Running scc detector (code size)...');
+                slocResult = await this.slocDetector.detect(resolvedSources);
+            }
+            if (this.config.detectors?.lizard?.enabled !== false) {
+                this.logger.info('Running lizard detector (function complexity)...');
+                lizardResult = await this.lizardDetector.detect(resolvedSources);
+            }
+            if (this.config.detectors?.duplication?.enabled !== false) {
+                this.logger.info('Running duplication detector (code duplication)...');
+                // 传入 slocResult：既提供 codeScale（总重复率分母），也提供每个文件的 scc loc（文件重复率分母）
+                duplicationResult = await this.duplicationDetector.detect(resolvedSources, slocResult);
+            }
+            const mergedMetrics = MetricsCalculator_1.MetricsCalculator.mergeResults(slocResult, lizardResult, duplicationResult);
+            MetricsCalculator_1.MetricsCalculator.validate(mergedMetrics);
+            const formattedMetrics = MetricsCalculator_1.MetricsCalculator.formatForReport(mergedMetrics);
+            // 从格式化结果中分离 fileDetails 和总体指标
+            const { fileDetails, ...overallMetrics } = formattedMetrics;
+            const endTime = new Date();
+            const endTimeFormatted = formatDateTime(endTime);
+            const durationMs = endTime.getTime() - startTime.getTime();
+            const result = {
+                ...overallMetrics,
+                fileDetails: fileDetails,
+                detectionInfo: {
+                    startTime: startTimeFormatted,
+                    endTime: endTimeFormatted,
+                    durationMs: durationMs,
+                    sources: resolvedSources,
+                    tools: {
+                        sloc: this.config.detectors?.sloc?.enabled !== false,
+                        lizard: this.config.detectors?.lizard?.enabled !== false,
+                        duplication: this.config.detectors?.duplication?.enabled !== false
+                    }
+                }
+            };
+            this.logger.info(`Scan completed in ${durationMs}ms`);
+            // 诊断日志：输出扫描结果规模，用于定位大数据量下的序列化超限问题
+            let snapshotTotal = 0;
+            for (const fd of fileDetails || []) {
+                if (fd.snapshotData)
+                    snapshotTotal += fd.snapshotData.length;
+            }
+            this.logger.info(`Result scale: fileDetails=${(fileDetails || []).length}, snapshotDataTotal=${snapshotTotal} bytes, occurrences=${(formattedMetrics.duplicationOccurrences || []).length}`);
+            if (options.output || this.config.output) {
+                const outputPath = path.isAbsolute(options.output || this.config.output)
+                    ? (options.output || this.config.output)
+                    : path.resolve(this.workingDir, options.output || this.config.output);
+                // 本地输出文件剥离大数据字段（snapshotData 与 duplicationOccurrences 的明文 content），
+                // 避免超大代码库的 metrics.json 序列化触发 V8 Invalid string length。
+                // - snapshotData 仅详情页展示用，DB 上报另有一份
+                // - occurrence 的明文 content 仅上报用（uploader 已 Base64 编码后分批上报），
+                //   本地保留 groupId/filePath/起止行等元数据即可
+                const compactResult = {
+                    ...result,
+                    fileDetails: (result.fileDetails || []).map((fd) => {
+                        const { snapshotData, ...rest } = fd;
+                        return rest;
+                    }),
+                    // 重复块出现位置：超长明文 content 裁剪为「头部 + 省略标记 + 尾部」，
+                    // 防止累计超 V8 单字符串上限（复用上报侧 clipOversizeContent，按行省略）
+                    duplicationOccurrences: (result.duplicationOccurrences || []).map((occ) => {
+                        const MAX_CONTENT_CHARS = 15 * 1024;
+                        if (typeof occ.content === 'string' && occ.content.length > MAX_CONTENT_CHARS) {
+                            return {
+                                ...occ,
+                                content: this.uploader.clipOversizeContent(occ.content, MAX_CONTENT_CHARS)
+                            };
+                        }
+                        return occ;
+                    })
+                };
+                FileUtils.writeJsonFile(outputPath, compactResult);
+                // 只输出文件基名，不落 runner 绝对路径（Ref #60）
+                this.logger.info(`Results saved to: ${path.basename(outputPath)}`);
+                this.logger.info(`Local output size approx: ${JSON.stringify(compactResult).length} bytes`);
+            }
+            if (options.upload || this.config.uploader?.enabled) {
+                const uploadResult = await this.uploader.upload(formattedMetrics, {
+                    gitUrl: options.gitUrl,
+                    branchName: options.branchName,
+                    pipelineRunId: options.pipelineRunId,
+                    commitId: options.commitId,
+                    runNumber: options.runNumber,
+                    pipelineName: options.pipelineName,
+                    startTime: startTimeFormatted,
+                    endTime: endTimeFormatted,
+                    status: status
+                });
+                if (uploadResult.success) {
+                    // report 接口已不返回 recordId，改为输出 OBS 全量文件地址便于追溯；
+                    // obsUrl 内嵌从 gitUrl 提取的 owner/repo（外部可控），过 sanitize 防换行注入（Ref #64）
+                    this.logger.info(`Successfully uploaded metrics, obsUrl: ${sanitize(uploadResult.obsUrl)}`);
+                    // detailLink/tip：平台跳转链接或提示（两者最多其一，均为空表示上报失败/链接构建异常），供入口输出
+                    result.uploadInfo = {
+                        success: true,
+                        obsUrl: uploadResult.obsUrl,
+                        detailLink: uploadResult.detailLink || '',
+                        tip: uploadResult.tip || ''
+                    };
+                }
+                else {
+                    this.logger.error(`Failed to upload metrics: ${sanitize(uploadResult.error)}`);
+                    result.uploadInfo = { success: false, error: uploadResult.error };
+                }
+            }
+            return result;
+        }
+        catch (error) {
+            this.logger.error(`Scan failed: ${error.message}`);
+            if (error && error.stack) {
+                // 输出堆栈头部，辅助定位是哪个 JSON.stringify / 哪个阶段抛错
+                this.logger.error(`Stack head: ${error.stack.split('\n').slice(0, 12).join('\n')}`);
+            }
+            // 失败时也上传报告，附带错误信息
+            if (options.upload || this.config.uploader?.enabled) {
+                const endTimeFormatted = formatDateTime(new Date());
+                try {
+                    await this.uploader.upload({}, {
+                        gitUrl: options.gitUrl,
+                        branchName: options.branchName,
+                        pipelineRunId: options.pipelineRunId,
+                        commitId: options.commitId,
+                        runNumber: options.runNumber,
+                        pipelineName: options.pipelineName,
+                        startTime: startTimeFormatted,
+                        endTime: endTimeFormatted,
+                        status: 1,
+                        errorMessage: error.message
+                    });
+                }
+                catch (uploadError) {
+                    this.logger.error(`Failed to upload error report: ${uploadError.message}`);
+                }
+            }
+            throw error;
+        }
+    }
 }
-
 module.exports = {
-  MetricsScanner,
-  ConfigLoader,
-  SlocDetector,
-  LizardDetector,
-  DuplicationDetector,
-  MetricsCalculator
+    MetricsScanner,
+    ConfigLoader,
+    SlocDetector,
+    LizardDetector,
+    DuplicationDetector,
+    MetricsCalculator: MetricsCalculator_1.MetricsCalculator
 };
 
 
 /***/ }),
 
-/***/ 2890:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ 8024:
+/***/ ((module, exports, __nccwpck_require__) => {
 
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 const axios = __nccwpck_require__(7269);
 const crypto = __nccwpck_require__(6982);
 const { callApig, getCredentials } = __nccwpck_require__(6239);
-const { IS_GITHUB } = __nccwpck_require__(7496);
-
+const { IS_GITHUB } = __nccwpck_require__(42);
 const ObsClient = __nccwpck_require__(1728);
 const fs = __nccwpck_require__(9896);
 const os = __nccwpck_require__(857);
 const path = __nccwpck_require__(6928);
-const { sanitize } = __nccwpck_require__(9900);
-
+const { sanitize } = __nccwpck_require__(3262);
 // 上报接口路径前缀：新旧网关接口与认证方式一一对应
 // - OIDC 联邦认证（新）：workflow 声明 permissions: id-token: write 时启用
 // - AK/SK 签名（旧）：存量脚本兼容，接口与认证方式保持不变
 const OIDC_API_PREFIX = '/action-api';
 const AKSK_API_PREFIX = '/openlibing-coderepo';
-
 /**
  * 华为云 APIG 签名器（SDK-HMAC-SHA256，AK/SK 模式使用）
  * 基于官方 SDK APIGW-javascript-sdk-2.0.6 的 signer.js 完全对齐
  * 签名流程：CanonicalRequest → StringToSign → HMAC-SHA256 → Authorization
  */
 class ApigSigner {
-  constructor(ak, sk) {
-    this.ak = ak;
-    this.sk = sk;
-  }
-
-  /**
-   * 对请求进行签名，返回包含签名头的完整 headers
-   * 与官方 SDK 的 Signer.prototype.Sign() 方法对齐
-   */
-  sign({ method, url, headers = {}, body = '' }) {
-    // 解析 URL，提取 host、pathname、查询参数
-    const parsed = new URL(url);
-    const host = parsed.host;
-
-    // 解析 URI 和查询参数（与官方 SDK 的 HttpRequest 构造函数对齐）
-    const uri = decodeURIComponent(parsed.pathname);
-    const query = {};
-    if (parsed.search) {
-      const searchStr = parsed.search.substring(1);
-      for (const pair of searchStr.split('&')) {
-        const idx = pair.indexOf('=');
-        const key = idx >= 0 ? pair.substring(0, idx) : pair;
-        const value = idx >= 0 ? pair.substring(idx + 1) : '';
-        if (key) {
-          const decodedKey = decodeURIComponent(key);
-          const decodedValue = decodeURIComponent(value);
-          if (query[decodedKey] === undefined) {
-            query[decodedKey] = [decodedValue];
-          } else {
-            query[decodedKey].push(decodedValue);
-          }
+    constructor(ak, sk) {
+        this.ak = ak;
+        this.sk = sk;
+    }
+    /**
+     * 对请求进行签名，返回包含签名头的完整 headers
+     * 与官方 SDK 的 Signer.prototype.Sign() 方法对齐
+     */
+    sign({ method, url, headers = {}, body = '' }) {
+        // 解析 URL，提取 host、pathname、查询参数
+        const parsed = new URL(url);
+        const host = parsed.host;
+        // 解析 URI 和查询参数（与官方 SDK 的 HttpRequest 构造函数对齐）
+        const uri = decodeURIComponent(parsed.pathname);
+        const query = {};
+        if (parsed.search) {
+            const searchStr = parsed.search.substring(1);
+            for (const pair of searchStr.split('&')) {
+                const idx = pair.indexOf('=');
+                const key = idx >= 0 ? pair.substring(0, idx) : pair;
+                const value = idx >= 0 ? pair.substring(idx + 1) : '';
+                if (key) {
+                    const decodedKey = decodeURIComponent(key);
+                    const decodedValue = decodeURIComponent(value);
+                    if (query[decodedKey] === undefined) {
+                        query[decodedKey] = [decodedValue];
+                    }
+                    else {
+                        query[decodedKey].push(decodedValue);
+                    }
+                }
+            }
         }
-      }
+        // 设置时间戳（检查是否已有 X-Sdk-Date 头）
+        let datetime = null;
+        for (const k of Object.keys(headers)) {
+            if (k.toLowerCase() === 'x-sdk-date') {
+                datetime = headers[k];
+                break;
+            }
+        }
+        if (!datetime) {
+            datetime = this._getDateTime();
+            headers['X-Sdk-Date'] = datetime;
+        }
+        // 非 PUT/PATCH/POST 时 body 不参与签名（官方 SDK 规范）
+        if (method !== 'PUT' && method !== 'PATCH' && method !== 'POST') {
+            body = '';
+        }
+        // 确保 host 头存在
+        let hasHost = false;
+        for (const k of Object.keys(headers)) {
+            if (k.toLowerCase() === 'host') {
+                hasHost = true;
+                break;
+            }
+        }
+        if (!hasHost) {
+            headers['Host'] = host;
+        }
+        // 获取参与签名的 header 列表（所有 header 名称小写排序）
+        const signedHeaderNames = Object.keys(headers).map((k) => k.toLowerCase()).sort();
+        // 构造规范化 URI：每段 URL 编码后用 / 拼接，末尾强制补 /
+        const canonicalUri = this._canonicalUri(uri);
+        // 构造规范化查询字符串
+        const canonicalQs = this._canonicalQueryString(query);
+        // 构造规范化 Headers
+        const lowerHeaders = {};
+        for (const [k, v] of Object.entries(headers)) {
+            lowerHeaders[k.toLowerCase()] = v;
+        }
+        const canonicalHeaders = signedHeaderNames
+            .map((name) => `${name}:${lowerHeaders[name].trim()}`)
+            .join('\n') + '\n';
+        const signedHeadersStr = signedHeaderNames.join(';');
+        // 计算 body 哈希（如果请求头中有 x-sdk-content-sha256，直接使用其值）
+        let hashedPayload;
+        let hasContentSha256 = false;
+        for (const k of Object.keys(headers)) {
+            if (k.toLowerCase() === 'x-sdk-content-sha256') {
+                hashedPayload = headers[k];
+                hasContentSha256 = true;
+                break;
+            }
+        }
+        if (!hasContentSha256) {
+            hashedPayload = this._sha256Hex(body);
+        }
+        // 构造规范化请求
+        const canonicalRequest = [
+            method.toUpperCase(),
+            canonicalUri,
+            canonicalQs,
+            canonicalHeaders,
+            signedHeadersStr,
+            hashedPayload
+        ].join('\n');
+        // 构造待签名字符串
+        const stringToSign = [
+            'SDK-HMAC-SHA256',
+            datetime,
+            this._sha256Hex(canonicalRequest)
+        ].join('\n');
+        // 计算签名
+        const signature = this._hmacSha256Hex(this.sk, stringToSign);
+        // 构造 Authorization 头
+        headers['Authorization'] = `SDK-HMAC-SHA256 Access=${this.ak}, SignedHeaders=${signedHeadersStr}, Signature=${signature}`;
+        return headers;
     }
-
-    // 设置时间戳（检查是否已有 X-Sdk-Date 头）
-    let datetime = null;
-    for (const k of Object.keys(headers)) {
-      if (k.toLowerCase() === 'x-sdk-date') {
-        datetime = headers[k];
-        break;
-      }
+    /**
+     * 构造规范化 URI：每段用 SDK 的 urlEncode 编码，末尾强制补 /
+     * 与官方 SDK 的 CanonicalURI() 函数完全对齐
+     */
+    _canonicalUri(uri) {
+        if (!uri || uri === '')
+            return '/';
+        const parts = uri.split('/');
+        const encoded = parts.map((s) => this._urlEncode(s));
+        let urlpath = encoded.join('/');
+        // 末尾强制补 /（官方 SDK 规范，APIG 网关签名校验要求）
+        if (urlpath[urlpath.length - 1] !== '/') {
+            urlpath = urlpath + '/';
+        }
+        return urlpath;
     }
-    if (!datetime) {
-      datetime = this._getDateTime();
-      headers['X-Sdk-Date'] = datetime;
+    /**
+     * 构造规范化查询字符串
+     * 与官方 SDK 的 CanonicalQueryString() 函数对齐
+     */
+    _canonicalQueryString(query) {
+        const keys = Object.keys(query).sort();
+        if (keys.length === 0)
+            return '';
+        const parts = [];
+        for (const key of keys) {
+            const k = this._urlEncode(key);
+            const values = Array.isArray(query[key]) ? [...query[key]].sort() : [query[key]];
+            for (const v of values) {
+                parts.push(`${k}=${this._urlEncode(v)}`);
+            }
+        }
+        return parts.join('&');
     }
-
-    // 非 PUT/PATCH/POST 时 body 不参与签名（官方 SDK 规范）
-    if (method !== 'PUT' && method !== 'PATCH' && method !== 'POST') {
-      body = '';
+    /**
+     * URL 编码：基于 Node.js querystring 模块改写，与官方 SDK 的 urlEncode() 完全对齐
+     * 不编码字符：A-Z a-z 0-9 - . _ ~
+     * 与 encodeURIComponent 的区别：! * ' ( ) 会被编码（encodeURIComponent 不编码这些）
+     */
+    _urlEncode(str) {
+        if (typeof str !== 'string') {
+            if (typeof str === 'object')
+                str = String(str);
+            else
+                str += '';
+        }
+        const hexTable = [];
+        for (let i = 0; i < 256; ++i) {
+            hexTable[i] = '%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase();
+        }
+        const noEscape = [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
+            0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1,
+            0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0
+        ];
+        let out = '';
+        let lastPos = 0;
+        for (let i = 0; i < str.length; ++i) {
+            // 代理对场景下需在下方重新赋值（c = 0x10000 + ...），此处必须用 let
+            let c = str.charCodeAt(i);
+            if (c < 0x80) {
+                if (noEscape[c] === 1)
+                    continue;
+                if (lastPos < i)
+                    out += str.slice(lastPos, i);
+                lastPos = i + 1;
+                out += hexTable[c];
+                continue;
+            }
+            if (lastPos < i)
+                out += str.slice(lastPos, i);
+            if (c < 0x800) {
+                lastPos = i + 1;
+                out += hexTable[0xC0 | (c >> 6)] + hexTable[0x80 | (c & 0x3F)];
+                continue;
+            }
+            if (c < 0xD800 || c >= 0xE000) {
+                lastPos = i + 1;
+                out += hexTable[0xE0 | (c >> 12)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
+                continue;
+            }
+            ++i;
+            if (i >= str.length)
+                throw new URIError('ERR_INVALID_URI');
+            const c2 = str.charCodeAt(i) & 0x3FF;
+            lastPos = i + 1;
+            c = 0x10000 + (((c & 0x3FF) << 10) | c2);
+            out += hexTable[0xF0 | (c >> 18)] + hexTable[0x80 | ((c >> 12) & 0x3F)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
+        }
+        if (lastPos === 0)
+            return str;
+        if (lastPos < str.length)
+            return out + str.slice(lastPos);
+        return out;
     }
-
-    // 确保 host 头存在
-    let hasHost = false;
-    for (const k of Object.keys(headers)) {
-      if (k.toLowerCase() === 'host') { hasHost = true; break; }
+    _getDateTime() {
+        const now = new Date();
+        const p = (n) => String(n).padStart(2, '0');
+        return `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}T${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}Z`;
     }
-    if (!hasHost) {
-      headers['Host'] = host;
+    _sha256Hex(data) {
+        return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
     }
-
-    // 获取参与签名的 header 列表（所有 header 名称小写排序）
-    const signedHeaderNames = Object.keys(headers).map(k => k.toLowerCase()).sort();
-
-    // 构造规范化 URI：每段 URL 编码后用 / 拼接，末尾强制补 /
-    const canonicalUri = this._canonicalUri(uri);
-
-    // 构造规范化查询字符串
-    const canonicalQs = this._canonicalQueryString(query);
-
-    // 构造规范化 Headers
-    const lowerHeaders = {};
-    for (const [k, v] of Object.entries(headers)) {
-      lowerHeaders[k.toLowerCase()] = v;
+    _hmacSha256Hex(key, data) {
+        return crypto.createHmac('sha256', key).update(data, 'utf8').digest('hex');
     }
-    const canonicalHeaders = signedHeaderNames
-      .map(name => `${name}:${lowerHeaders[name].trim()}`)
-      .join('\n') + '\n';
-
-    const signedHeadersStr = signedHeaderNames.join(';');
-
-    // 计算 body 哈希（如果请求头中有 x-sdk-content-sha256，直接使用其值）
-    let hashedPayload;
-    let hasContentSha256 = false;
-    for (const k of Object.keys(headers)) {
-      if (k.toLowerCase() === 'x-sdk-content-sha256') {
-        hashedPayload = headers[k];
-        hasContentSha256 = true;
-        break;
-      }
-    }
-    if (!hasContentSha256) {
-      hashedPayload = this._sha256Hex(body);
-    }
-
-    // 构造规范化请求
-    const canonicalRequest = [
-      method.toUpperCase(),
-      canonicalUri,
-      canonicalQs,
-      canonicalHeaders,
-      signedHeadersStr,
-      hashedPayload
-    ].join('\n');
-
-    // 构造待签名字符串
-    const stringToSign = [
-      'SDK-HMAC-SHA256',
-      datetime,
-      this._sha256Hex(canonicalRequest)
-    ].join('\n');
-
-    // 计算签名
-    const signature = this._hmacSha256Hex(this.sk, stringToSign);
-
-    // 构造 Authorization 头
-    headers['Authorization'] = `SDK-HMAC-SHA256 Access=${this.ak}, SignedHeaders=${signedHeadersStr}, Signature=${signature}`;
-
-    return headers;
-  }
-
-  /**
-   * 构造规范化 URI：每段用 SDK 的 urlEncode 编码，末尾强制补 /
-   * 与官方 SDK 的 CanonicalURI() 函数完全对齐
-   */
-  _canonicalUri(uri) {
-    if (!uri || uri === '') return '/';
-    const parts = uri.split('/');
-    const encoded = parts.map(s => this._urlEncode(s));
-    let urlpath = encoded.join('/');
-    // 末尾强制补 /（官方 SDK 规范，APIG 网关签名校验要求）
-    if (urlpath[urlpath.length - 1] !== '/') {
-      urlpath = urlpath + '/';
-    }
-    return urlpath;
-  }
-
-  /**
-   * 构造规范化查询字符串
-   * 与官方 SDK 的 CanonicalQueryString() 函数对齐
-   */
-  _canonicalQueryString(query) {
-    const keys = Object.keys(query).sort();
-    if (keys.length === 0) return '';
-    const parts = [];
-    for (const key of keys) {
-      const k = this._urlEncode(key);
-      const values = Array.isArray(query[key]) ? [...query[key]].sort() : [query[key]];
-      for (const v of values) {
-        parts.push(`${k}=${this._urlEncode(v)}`);
-      }
-    }
-    return parts.join('&');
-  }
-
-  /**
-   * URL 编码：基于 Node.js querystring 模块改写，与官方 SDK 的 urlEncode() 完全对齐
-   * 不编码字符：A-Z a-z 0-9 - . _ ~
-   * 与 encodeURIComponent 的区别：! * ' ( ) 会被编码（encodeURIComponent 不编码这些）
-   */
-  _urlEncode(str) {
-    if (typeof str !== 'string') {
-      if (typeof str === 'object') str = String(str);
-      else str += '';
-    }
-    const hexTable = [];
-    for (let i = 0; i < 256; ++i) {
-      hexTable[i] = '%' + ((i < 16 ? '0' : '') + i.toString(16)).toUpperCase();
-    }
-    const noEscape = [
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0,
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1,
-      0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0
-    ];
-    let out = '';
-    let lastPos = 0;
-    for (let i = 0; i < str.length; ++i) {
-      // 代理对场景下需在下方重新赋值（c = 0x10000 + ...），此处必须用 let
-      let c = str.charCodeAt(i);
-      if (c < 0x80) {
-        if (noEscape[c] === 1) continue;
-        if (lastPos < i) out += str.slice(lastPos, i);
-        lastPos = i + 1;
-        out += hexTable[c];
-        continue;
-      }
-      if (lastPos < i) out += str.slice(lastPos, i);
-      if (c < 0x800) {
-        lastPos = i + 1;
-        out += hexTable[0xC0 | (c >> 6)] + hexTable[0x80 | (c & 0x3F)];
-        continue;
-      }
-      if (c < 0xD800 || c >= 0xE000) {
-        lastPos = i + 1;
-        out += hexTable[0xE0 | (c >> 12)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
-        continue;
-      }
-      ++i;
-      if (i >= str.length) throw new URIError('ERR_INVALID_URI');
-      const c2 = str.charCodeAt(i) & 0x3FF;
-      lastPos = i + 1;
-      c = 0x10000 + (((c & 0x3FF) << 10) | c2);
-      out += hexTable[0xF0 | (c >> 18)] + hexTable[0x80 | ((c >> 12) & 0x3F)] + hexTable[0x80 | ((c >> 6) & 0x3F)] + hexTable[0x80 | (c & 0x3F)];
-    }
-    if (lastPos === 0) return str;
-    if (lastPos < str.length) return out + str.slice(lastPos);
-    return out;
-  }
-
-  _getDateTime() {
-    const now = new Date();
-    const p = (n) => String(n).padStart(2, '0');
-    return `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}T${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}Z`;
-  }
-
-  _sha256Hex(data) {
-    return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
-  }
-
-  _hmacSha256Hex(key, data) {
-    return crypto.createHmac('sha256', key).update(data, 'utf8').digest('hex');
-  }
 }
-
 class CoderepoUploader {
-  constructor(config = {}) {
-    // coderepoUrl 由调用方恒传（src/index.js 部署固定常量），无 localhost 死 fallback
-    // （Ref #51，与 sec-comp #26/#31 同款：原 fallback 在真实调用链下不可达，删除即等价加固）
-    this.baseUrl = config.coderepoUrl;
-    this.timeout = config.timeout || 30000;
-    // 认证模式：useOidc=true 走新接口（/action-api/...）+ OIDC 免密联邦认证；
-    // 否则走旧接口（/openlibing-coderepo/...）+ AK/SK（SDK-HMAC-SHA256）签名，兼容存量脚本
-    this.useOidc = !!config.useOidc;
-    this.apigAppKey = config.apigAppKey || '';
-    this.apigAppSecret = config.apigAppSecret || '';
-    // OBS 上传凭证（AK/SK 模式使用）：复用 openlibing 平台统一桶（私有对象，供后端按 objectKey 下载）
-    this.obsAk = config.obsAk || '';
-    this.obsSk = config.obsSk || '';
-    // OBS 桶按平台隔离：GitCode 上传到 openlibing-gitcode-action，GitHub 上传到 openlibing-github-action；
-    // 两个桶均用于插件上报结果中转，code-metrics-action/ 目录存放代码度量上报
-    this.obsBucket =
-      config.obsBucket || (IS_GITHUB ? 'openlibing-github-action' : 'openlibing-gitcode-action');
-    // OBS 写/读 endpoint（华为云西南-贵阳一）
-    this.obsEndpoint = config.obsEndpoint || 'obs.cn-southwest-2.myhuaweicloud.com';
-  }
-
-  /**
-   * 上报代码度量指标。
-   *
-   * 认证模式（由 workflow 是否声明 permissions: id-token: write 决定）：
-   * - OIDC 联邦认证（新）：APIG 上报走 callApig 自动换证签名；OBS 上传走 STS 临时凭证
-   * - AK/SK 签名（旧）：APIG 上报走 ApigSigner 签名；OBS 上传走 obs-ak/obs-sk 静态凭证
-   *
-   * 流程（OBS 中转 + 单接口，彻底规避 APIG 12MB 请求体上限）：
-   * 1. 组装全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences），写本地临时 json
-   * 2. 上传到平台对应的 OBS 桶（GitCode: openlibing-gitcode-action，GitHub: openlibing-github-action），
-   *    objectKey 统一为 code-metrics-action/ 前缀，私有对象
-   * 3. 仅调一次 POST /metrics/code/report：只传元数据 + obsUrl（固定格式下载链接），后端按 objectKey 下载解析入库
-   *
-   * 兜底：即使第 3 步上报失败（网络原因），第 2 步 OBS 文件已完整上传，可通过平台保底定时任务
-   * （入参 objectKey）下载补导入，保证数据不丢失。
-   *
-   * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
-   */
-  async upload(metricsData, options = {}) {
-    // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
-    const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
-
-    // 1. 组装全量上报文件：元数据 + 全部指标明细（含 snapshotData / contentB64 等大 payload）
-    const fullPayload = {
-      gitUrl: options.gitUrl,
-      branchName: options.branchName,
-      pipelineRunId: options.pipelineRunId,
-      commitId: options.commitId,
-      runNumber: options.runNumber,
-      // pipelineName：流水线名称（GitHub 取 GITHUB_WORKFLOW，GitCode 取 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
-      pipelineName: options.pipelineName,
-      metricsData: overallMetrics,
-      detectionStartedAt: options.startTime,
-      detectionCompletedAt: options.endTime,
-      status: options.status || 0,
-      fileDetails: fileDetails || [],
-      identicalFileDetails: identicalFileDetails || [],
-      duplicationOccurrences: this.encodeOccurrences(duplicationOccurrences || [])
-    };
-    if (options.errorMessage) {
-      fullPayload.errorMessage = options.errorMessage;
+    constructor(config = {}) {
+        // coderepoUrl 由调用方恒传（src/index.js 部署固定常量），无 localhost 死 fallback
+        // （Ref #51，与 sec-comp #26/#31 同款：原 fallback 在真实调用链下不可达，删除即等价加固）
+        this.baseUrl = config.coderepoUrl;
+        this.timeout = config.timeout || 30000;
+        // 认证模式：useOidc=true 走新接口（/action-api/...）+ OIDC 免密联邦认证；
+        // 否则走旧接口（/openlibing-coderepo/...）+ AK/SK（SDK-HMAC-SHA256）签名，兼容存量脚本
+        this.useOidc = !!config.useOidc;
+        this.apigAppKey = config.apigAppKey || '';
+        this.apigAppSecret = config.apigAppSecret || '';
+        // OBS 上传凭证（AK/SK 模式使用）：复用 openlibing 平台统一桶（私有对象，供后端按 objectKey 下载）
+        this.obsAk = config.obsAk || '';
+        this.obsSk = config.obsSk || '';
+        // OBS 桶按平台隔离：GitCode 上传到 openlibing-gitcode-action，GitHub 上传到 openlibing-github-action；
+        // 两个桶均用于插件上报结果中转，code-metrics-action/ 目录存放代码度量上报
+        this.obsBucket =
+            config.obsBucket || (IS_GITHUB ? 'openlibing-github-action' : 'openlibing-gitcode-action');
+        // OBS 写/读 endpoint（华为云西南-贵阳一）
+        this.obsEndpoint = config.obsEndpoint || 'obs.cn-southwest-2.myhuaweicloud.com';
     }
-
-    // 2. 上传全量文件到 OBS，得到固定格式下载链接
-    const obsResult = await this.uploadFullPayloadToOBS(fullPayload, options);
-    if (!obsResult.success) {
-      // OBS 上传失败：数据未落盘，直接返回失败（可整体重扫重传）
-      return obsResult;
-    }
-
-    // 3. 单次 /report：只传元数据 + obsUrl（body 恒定极小，远低于 APIG 12MB 上限）
-    const payload = {
-      gitUrl: options.gitUrl,
-      branchName: options.branchName,
-      pipelineRunId: options.pipelineRunId,
-      commitId: options.commitId,
-      runNumber: options.runNumber,
-      detectionStartedAt: options.startTime,
-      detectionCompletedAt: options.endTime,
-      status: options.status || 0,
-      obsUrl: obsResult.obsUrl
-    };
-    if (options.errorMessage) {
-      payload.errorMessage = options.errorMessage;
-    }
-
-    const mainUrl = this.buildUrl('/metrics/code/report');
-    const mainBody = JSON.stringify(payload);
-    // obsUrl 内嵌从 gitUrl 提取的 owner/repo（外部可控），过 sanitize 防换行注入（Ref #64）
-    console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${sanitize(obsResult.obsUrl)}`);
-    const mainResult = await this.report(mainUrl, mainBody);
-    if (!mainResult.success) {
-      // 上报失败但 OBS 文件已完整上传：打印固定格式链接，提示可走保底定时任务补导入
-      console.warn(
-        `[upload] report failed: ${sanitize(mainResult.error)}. 全量数据已上传 OBS(${sanitize(obsResult.obsUrl)})，` +
-          '可通过平台保底定时任务(入参 objectKey)补导入'
-      );
-      return { ...mainResult, obsUrl: obsResult.obsUrl };
-    }
-
-    // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口输出
-    return {
-      success: true,
-      recordId: mainResult.recordId,
-      obsUrl: obsResult.obsUrl,
-      detailLink: mainResult.detailLink,
-      tip: mainResult.tip
-    };
-  }
-
-  /**
-   * 组装全量上报文件并上传到 OBS，返回固定格式下载链接与 objectKey。
-   * OBS 凭证按认证模式选择：
-   * - OIDC 模式：getCredentials 获取 STS 临时凭证（短时效，仅本次流水线运行有效）
-   * - AK/SK 模式：workflow 传入的 obs-ak / obs-sk 静态凭证
-   */
-  async uploadFullPayloadToOBS(fullPayload, options) {
-    let cred;
-    if (this.useOidc) {
-      try {
-        // 获取 STS 临时凭证（SDK 内部缓存，同一次流水线运行内只换证一次）
-        cred = await getCredentials();
-      } catch (e) {
-        return { success: false, error: `获取 OIDC 临时凭证失败: ${e.message}` };
-      }
-    } else if (!this.obsAk || !this.obsSk) {
-      return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
-    }
-    // 写本地临时文件（runner 上临时目录，用完即删）
-    // 随机文件名（crypto.randomUUID，不可预测）+ 0600 权限（同机其他账户/进程不可读）
-    // （Ref #50 #42：原毫秒时间戳文件名可预测、默认权限 644 可读）
-    const tmpFile = path.join(os.tmpdir(), `code-metrics-${crypto.randomUUID()}.json`);
-    fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), { encoding: 'utf8', mode: 0o600 });
-
-    const objectKey = this.buildObjectKey(options);
-    try {
-      await this.uploadToOBS(cred, tmpFile, objectKey);
-      const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
-      console.log(`[upload] OBS uploaded: ${sanitize(obsUrl)}`);
-      return { success: true, obsUrl: obsUrl, objectKey: objectKey };
-    } catch (e) {
-      return { success: false, error: `OBS 上传失败: ${e.message}` };
-    } finally {
-      // 清理本地临时文件，避免在 runner 上残留大文件
-      try {
-        fs.unlinkSync(tmpFile);
-      } catch (e) {
-        // 忽略清理失败
-      }
-    }
-  }
-
-  /**
-   * 用 esdk-obs-nodejs SDK 上传本地文件到 OBS（Ref #36 #46 #55 #59 #23 #24 #47，
-   * 与 upload-sarif-action 已验证的 SDK 迁移同款路径）。
-   * 私有对象（不设置 ACL）；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
-   *
-   * 凭证全程内存传递（ObsClient 构造参数），消除 obsutil 子进程 argv 暴露面
-   * （同机进程可经 /proc/<pid>/cmdline 读取 -i/-k/-t 凭证；CI 平台掩码只覆盖日志）：
-   * - OIDC 模式：STS 临时凭证（accessKeyId / secretAccessKey / securityToken）
-   * - AK/SK 模式：静态 obs-ak / obs-sk
-   *
-   * 迁移同时删除 ensureObsutil() 在线下载链路（Ref #58 #69 #63 #33：
-   * 下载/解压/执行行为不复存在）与 obsutil 执行日志（Ref #47：掩码不完整的
-   * -i/-k/-t 命令行打印随之消失）。
-   */
-  async uploadToOBS(cred, localFilePath, objectKey) {
-    const server = `https://${this.obsEndpoint}`;
-    const client = this.useOidc
-      ? new ObsClient({
-          access_key_id: cred.accessKeyId,
-          secret_access_key: cred.secretAccessKey,
-          security_token: cred.securityToken,
-          server,
-          sslVerify: true
-        })
-      : new ObsClient({
-          access_key_id: this.obsAk,
-          secret_access_key: this.obsSk,
-          server,
-          sslVerify: true
-        });
-    // esdk-obs-nodejs 的 initFactory 为 fire-and-forget（内部 await refresh 后才设置签名上下文），
-    // 构造后立即 putObject 会读到 null signatureContext，让出一个微任务等待初始化完成
-    await Promise.resolve();
-    try {
-      const result = await client.putObject({
-        Bucket: this.obsBucket,
-        Key: objectKey,
-        SourceFile: localFilePath
-      });
-      // putObject 结果校验：HTTP 状态 2xx 视为成功，否则抛错（供上层返回失败原因）
-      const msg = (result && result.CommonMsg) || {};
-      if (!(msg.Status >= 200 && msg.Status < 300)) {
-        throw new Error(`OBS putObject failed (${msg.Status})${msg.Code ? ` [${msg.Code}]` : ''}: ${msg.Message || '未知错误'}`);
-      }
-    } finally {
-      try {
-        await client.close();
-      } catch (e) {
-        // 忽略关闭异常
-      }
-    }
-  }
-
-  /**
-   * 构造 OBS 对象 key（固定格式，供后端/保底任务按 objectKey 下载解析入库）。
-   * 规则：code-metrics-action/{owner}/{repo}/{pipelineRunId}/{ts}-metrics.json
-   * 平台差异由桶名区分（GitCode/GitHub 各一个桶），key 结构两平台保持一致，后端解析逻辑无需区分。
-   * branchName 不进入路径（远端分支可能含 / 造成路径歧义），只放在文件内元数据中。
-   */
-  buildObjectKey(options) {
-    const ownerRepo = this.extractOwnerRepo(options.gitUrl) || 'unknown';
-    const pipelineRunId = options.pipelineRunId || 'manual';
-    const ts = this.formatDateTime(new Date());
-    return `code-metrics-action/${ownerRepo}/${pipelineRunId}/${ts}-metrics.json`;
-  }
-
-  /**
-   * 从 gitUrl 提取 owner/repo（形如 git@host:owner/repo 或 https://host/owner/repo）。
-   */
-  extractOwnerRepo(gitUrl) {
-    if (!gitUrl) {
-      return '';
-    }
-    const url = String(gitUrl).replace(/\.git$/, '').replace(/\/+$/, '');
-    const match = url.match(/(?:git@[^:]+:|https?:\/\/[^/]+\/)(.+)$/);
-    return match ? match[1] : '';
-  }
-
-  /**
-   * 格式化时间为 yyyyMMddHHmmss（OBS 对象 key 用，UTC）。
-   */
-  formatDateTime(date) {
-    const p = (n) => String(n).padStart(2, '0');
-    return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}`;
-  }
-
-  /**
-   * 把出现位置列表中的明文 content 编码为 contentB64，移除明文字段。
-   * 已编码数据跳过（防二次编码）。
-   * 重复块内容完整编码不做截断：全量上报文件上传 OBS（不受 APIG body 限制），
-   * 入库 code_metrics_duplication_block.content_b64 为 LONGTEXT 可承载。
-   */
-  encodeOccurrences(occurrences) {
-    return occurrences.map(occ => {
-      return {
-        groupId: occ.groupId,
-        contentHash: occ.contentHash,
-        occurrenceIndex: occ.occurrenceIndex,
-        filePath: occ.filePath,
-        startLine: occ.startLine,
-        endLine: occ.endLine,
-        contentB64: this.encodeB64(occ.content)
-      };
-    });
-  }
-
-  /**
-   * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
-   * 按行省略：头/尾各保留若干整行，省略标记显示被省略的行数。
-   * 仅用于本地 metrics.json 输出文件的防护性裁剪（防 V8 单字符串上限）；
-   * 上报链路（encodeOccurrences）不截断，完整内容上传 OBS。
-   */
-  clipOversizeContent(content, maxChars) {
-    if (typeof content !== 'string' || content.length <= maxChars) {
-      return content;
-    }
-    // 按行拆分；头/尾各以预算的 35% 为字符配额累积整行，保证裁剪后总量仍受控
-    const lines = content.split('\n');
-    const totalLines = lines.length;
-    const sideChars = Math.floor(maxChars * 0.35);
-    // 头部：从首行开始累积整行，直到逼近 sideChars
-    let headLines = 0;
-    let headChars = 0;
-    for (let i = 0; i < totalLines; i++) {
-      const len = lines[i].length + 1; // 行内容 + 换行符
-      if (headLines > 0 && headChars + len > sideChars) break;
-      headChars += len;
-      headLines++;
-    }
-    // 尾部：从末行开始累积整行，直到逼近 sideChars
-    let tailLines = 0;
-    let tailChars = 0;
-    for (let i = totalLines - 1; i >= 0; i--) {
-      const len = lines[i].length + 1;
-      if (tailLines > 0 && tailChars + len > sideChars) break;
-      tailChars += len;
-      tailLines++;
-    }
-    const omittedLines = Math.max(0, totalLines - headLines - tailLines);
-    const head = lines.slice(0, headLines).join('\n');
-    const tail = lines.slice(totalLines - tailLines).join('\n');
-    const clipped =
-      (headLines > 0 ? head : '') +
-      (omittedLines > 0 ? `\n... ${omittedLines} lines omitted ...\n` : '') +
-      (tailLines > 0 ? tail : '');
-    // 兜底：单行超长导致按行裁剪后仍超限时，退化为按字符裁剪
-    if (clipped.length > maxChars) {
-      const headChars2 = Math.floor(maxChars * 0.35);
-      const tailChars2 = Math.floor(maxChars * 0.35);
-      const omittedChars = content.length - headChars2 - tailChars2;
-      return (
-        content.slice(0, headChars2) +
-        `\n... ${omittedChars} chars omitted ...\n` +
-        content.slice(content.length - tailChars2)
-      );
-    }
-    return clipped;
-  }
-
-  /**
-   * Base64 编码字符串（UTF-8）。
-   * 已编码数据（通过回检判定）跳过，防二次编码。
-   */
-  encodeB64(str) {
-    if (!str) return '';
-    // 简单回检：若解码后重新编码与原值一致，视为已编码
-    try {
-      const decoded = Buffer.from(str, 'base64').toString('utf8');
-      const reEncoded = Buffer.from(decoded, 'utf8').toString('base64');
-      if (reEncoded === str) return str;
-    } catch (e) {
-      // 解码失败说明是明文，继续编码
-    }
-    return Buffer.from(str, 'utf8').toString('base64');
-  }
-
-  /**
-   * 拼接完整请求 URL：按认证模式选择新旧接口前缀
-   * - OIDC 模式：/action-api/metrics/code/report
-   * - AK/SK 模式：/openlibing-coderepo/metrics/code/report
-   */
-  buildUrl(path) {
-    const prefix = this.useOidc ? OIDC_API_PREFIX : AKSK_API_PREFIX;
-    return this.baseUrl.replace(/\/+$/, '') + prefix + path;
-  }
-
-  /**
-   * 调用 APIG 上报接口并解析 DataResult 响应（按认证模式选择签名方式）。
-   * - OIDC 模式：SDK callApig 免密联邦认证（OIDC ID Token -> STS 临时凭证 ->
-   *   V11-HMAC-SHA256 签名 + X-Security-Token）
-   * - AK/SK 模式：ApigSigner SDK-HMAC-SHA256 签名（原有方式）
-   * 返回 { success, recordId?, detailLink?, tip?, error? }
-   */
-  async report(url, body) {
-    try {
-      let resData;
-      if (this.useOidc) {
-        const res = await callApig('POST', url, { 'Content-Type': 'application/json' }, body);
-        resData = res.data;
-
-        // 非 2xx：HTTP 层失败（网关拒绝、鉴权失败等）
-        if (res.status < 200 || res.status >= 300) {
-          const httpMsg = (resData && (resData.msg || resData.message || resData.error_msg)) || `HTTP ${res.status}`;
-          console.error(`Upload failed: HTTP ${res.status}, URL: ${url}`);
-          return { success: false, error: httpMsg };
+    /**
+     * 上报代码度量指标。
+     *
+     * 认证模式（由 workflow 是否声明 permissions: id-token: write 决定）：
+     * - OIDC 联邦认证（新）：APIG 上报走 callApig 自动换证签名；OBS 上传走 STS 临时凭证
+     * - AK/SK 签名（旧）：APIG 上报走 ApigSigner 签名；OBS 上传走 obs-ak/obs-sk 静态凭证
+     *
+     * 流程（OBS 中转 + 单接口，彻底规避 APIG 12MB 请求体上限）：
+     * 1. 组装全量上报文件（元数据 + 总体指标 + fileDetails + identicalFileDetails + duplicationOccurrences），写本地临时 json
+     * 2. 上传到平台对应的 OBS 桶（GitCode: openlibing-gitcode-action，GitHub: openlibing-github-action），
+     *    objectKey 统一为 code-metrics-action/ 前缀，私有对象
+     * 3. 仅调一次 POST /metrics/code/report：只传元数据 + obsUrl（固定格式下载链接），后端按 objectKey 下载解析入库
+     *
+     * 兜底：即使第 3 步上报失败（网络原因），第 2 步 OBS 文件已完整上传，可通过平台保底定时任务
+     * （入参 objectKey）下载补导入，保证数据不丢失。
+     *
+     * 注意：repository 字段已移除（写死 source-dir 后，工作流所在仓 git_url 即扫描仓）
+     */
+    async upload(metricsData, options = {}) {
+        // 从 metricsData 中分离出 fileDetails、identicalFileDetails、duplicationOccurrences 和总体指标
+        const { fileDetails, identicalFileDetails, duplicationOccurrences, ...overallMetrics } = metricsData;
+        // 1. 组装全量上报文件：元数据 + 全部指标明细（含 snapshotData / contentB64 等大 payload）
+        const fullPayload = {
+            gitUrl: options.gitUrl,
+            branchName: options.branchName,
+            pipelineRunId: options.pipelineRunId,
+            commitId: options.commitId,
+            runNumber: options.runNumber,
+            // pipelineName：流水线名称（GitHub 取 GITHUB_WORKFLOW，GitCode 取 ATOMGIT_WORKFLOW），供度量下钻页展示数据来源流水线
+            pipelineName: options.pipelineName,
+            metricsData: overallMetrics,
+            detectionStartedAt: options.startTime,
+            detectionCompletedAt: options.endTime,
+            status: options.status || 0,
+            fileDetails: fileDetails || [],
+            identicalFileDetails: identicalFileDetails || [],
+            duplicationOccurrences: this.encodeOccurrences(duplicationOccurrences || [])
+        };
+        if (options.errorMessage) {
+            fullPayload.errorMessage = options.errorMessage;
         }
-      } else {
-        // AK/SK 模式：凭证缺失时直接失败并给出明确提示
-        if (!this.apigAppKey || !this.apigAppSecret) {
-          return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 AK/SK 凭证（apig-app-key / apig-app-secret），无法上报' };
+        // 2. 上传全量文件到 OBS，得到固定格式下载链接
+        const obsResult = await this.uploadFullPayloadToOBS(fullPayload, options);
+        if (!obsResult.success) {
+            // OBS 上传失败：数据未落盘，直接返回失败（可整体重扫重传）
+            return obsResult;
         }
-        const signer = new ApigSigner(this.apigAppKey, this.apigAppSecret);
-        const headers = signer.sign({
-          method: 'POST',
-          url: url,
-          headers: { 'Content-Type': 'application/json' },
-          body: body
-        });
-        const response = await axios.post(url, body, { headers, timeout: this.timeout });
-        resData = response.data;
-      }
-
-      // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功
-      if (resData?.code !== 200) {
-        // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因；
-        // msg/adviceMsg 为服务端响应字段，过 sanitize 防换行注入（Ref #64）
-        console.error(
-          `[upload] report business failed: code=${resData?.code}, msg=${sanitize(resData?.msg)}, adviceMsg=${sanitize(resData?.adviceMsg)}`
-        );
-        return { success: false, error: resData?.msg || 'Unknown error' };
-      }
-
-      // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象；当前服务端返回 CodeMetricsReportVO
-      const recordId = resData?.data?.recordId
-        || resData?.data?.id
-        || (typeof resData?.data === 'number' || typeof resData?.data === 'string' ? resData.data : null)
-        || resData?.recordId
-        || resData?.id;
-
-      // data.detailLink：平台分支页固定单条跳转链接；data.tip：仓未录入/分支未登记提示（两者互斥，可均为空）
-      const detailLink = typeof resData?.data?.detailLink === 'string' ? resData.data.detailLink : '';
-      const tip = typeof resData?.data?.tip === 'string' ? resData.data.tip : '';
-
-      return { success: true, recordId: recordId, detailLink: detailLink, tip: tip };
-    } catch (error) {
-      // 输出详细错误信息以便排查网络问题
-      console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
-      const resData = error.response?.data;
-      const errorMsg = resData?.msg || resData?.message || error.message;
-      return { success: false, error: errorMsg };
+        // 3. 单次 /report：只传元数据 + obsUrl（body 恒定极小，远低于 APIG 12MB 上限）
+        const payload = {
+            gitUrl: options.gitUrl,
+            branchName: options.branchName,
+            pipelineRunId: options.pipelineRunId,
+            commitId: options.commitId,
+            runNumber: options.runNumber,
+            detectionStartedAt: options.startTime,
+            detectionCompletedAt: options.endTime,
+            status: options.status || 0,
+            obsUrl: obsResult.obsUrl
+        };
+        if (options.errorMessage) {
+            payload.errorMessage = options.errorMessage;
+        }
+        const mainUrl = this.buildUrl('/metrics/code/report');
+        const mainBody = JSON.stringify(payload);
+        // obsUrl 内嵌从 gitUrl 提取的 owner/repo（外部可控），过 sanitize 防换行注入（Ref #64）
+        console.log(`[upload] report serialized=${mainBody.length} bytes, obsUrl=${sanitize(obsResult.obsUrl)}`);
+        const mainResult = await this.report(mainUrl, mainBody);
+        if (!mainResult.success) {
+            // 上报失败但 OBS 文件已完整上传：打印固定格式链接，提示可走保底定时任务补导入
+            console.warn(`[upload] report failed: ${sanitize(mainResult.error)}. 全量数据已上传 OBS(${sanitize(obsResult.obsUrl)})，` +
+                '可通过平台保底定时任务(入参 objectKey)补导入');
+            return { ...mainResult, obsUrl: obsResult.obsUrl };
+        }
+        // detailLink/tip：平台跳转链接或提示（两者最多其一，服务端受理响应携带），供入口输出
+        return {
+            success: true,
+            recordId: mainResult.recordId,
+            obsUrl: obsResult.obsUrl,
+            detailLink: mainResult.detailLink,
+            tip: mainResult.tip
+        };
     }
-  }
+    /**
+     * 组装全量上报文件并上传到 OBS，返回固定格式下载链接与 objectKey。
+     * OBS 凭证按认证模式选择：
+     * - OIDC 模式：getCredentials 获取 STS 临时凭证（短时效，仅本次流水线运行有效）
+     * - AK/SK 模式：workflow 传入的 obs-ak / obs-sk 静态凭证
+     */
+    async uploadFullPayloadToOBS(fullPayload, options) {
+        let cred;
+        if (this.useOidc) {
+            try {
+                // 获取 STS 临时凭证（SDK 内部缓存，同一次流水线运行内只换证一次）
+                cred = await getCredentials();
+            }
+            catch (e) {
+                return { success: false, error: `获取 OIDC 临时凭证失败: ${e.message}` };
+            }
+        }
+        else if (!this.obsAk || !this.obsSk) {
+            return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 OBS 凭证(obs-ak / obs-sk)，无法上传上报结果' };
+        }
+        // 写本地临时文件（runner 上临时目录，用完即删）
+        // 随机文件名（crypto.randomUUID，不可预测）+ 0600 权限（同机其他账户/进程不可读）
+        // （Ref #50 #42：原毫秒时间戳文件名可预测、默认权限 644 可读）
+        const tmpFile = path.join(os.tmpdir(), `code-metrics-${crypto.randomUUID()}.json`);
+        fs.writeFileSync(tmpFile, JSON.stringify(fullPayload), { encoding: 'utf8', mode: 0o600 });
+        const objectKey = this.buildObjectKey(options);
+        try {
+            await this.uploadToOBS(cred, tmpFile, objectKey);
+            const obsUrl = `https://${this.obsBucket}.${this.obsEndpoint}/${objectKey}`;
+            console.log(`[upload] OBS uploaded: ${sanitize(obsUrl)}`);
+            return { success: true, obsUrl: obsUrl, objectKey: objectKey };
+        }
+        catch (e) {
+            return { success: false, error: `OBS 上传失败: ${e.message}` };
+        }
+        finally {
+            // 清理本地临时文件，避免在 runner 上残留大文件
+            try {
+                fs.unlinkSync(tmpFile);
+            }
+            catch (e) {
+                // 忽略清理失败
+            }
+        }
+    }
+    /**
+     * 用 esdk-obs-nodejs SDK 上传本地文件到 OBS（Ref #36 #46 #55 #59 #23 #24 #47，
+     * 与 upload-sarif-action 已验证的 SDK 迁移同款路径）。
+     * 私有对象（不设置 ACL）；后端/保底任务用平台 OBS 凭证按 objectKey 下载。
+     *
+     * 凭证全程内存传递（ObsClient 构造参数），消除 obsutil 子进程 argv 暴露面
+     * （同机进程可经 /proc/<pid>/cmdline 读取 -i/-k/-t 凭证；CI 平台掩码只覆盖日志）：
+     * - OIDC 模式：STS 临时凭证（accessKeyId / secretAccessKey / securityToken）
+     * - AK/SK 模式：静态 obs-ak / obs-sk
+     *
+     * 迁移同时删除 ensureObsutil() 在线下载链路（Ref #58 #69 #63 #33：
+     * 下载/解压/执行行为不复存在）与 obsutil 执行日志（Ref #47：掩码不完整的
+     * -i/-k/-t 命令行打印随之消失）。
+     */
+    async uploadToOBS(cred, localFilePath, objectKey) {
+        const server = `https://${this.obsEndpoint}`;
+        const client = this.useOidc
+            ? new ObsClient({
+                access_key_id: cred.accessKeyId,
+                secret_access_key: cred.secretAccessKey,
+                security_token: cred.securityToken,
+                server,
+                sslVerify: true
+            })
+            : new ObsClient({
+                access_key_id: this.obsAk,
+                secret_access_key: this.obsSk,
+                server,
+                sslVerify: true
+            });
+        // esdk-obs-nodejs 的 initFactory 为 fire-and-forget（内部 await refresh 后才设置签名上下文），
+        // 构造后立即 putObject 会读到 null signatureContext，让出一个微任务等待初始化完成
+        await Promise.resolve();
+        try {
+            const result = await client.putObject({
+                Bucket: this.obsBucket,
+                Key: objectKey,
+                SourceFile: localFilePath
+            });
+            // putObject 结果校验：HTTP 状态 2xx 视为成功，否则抛错（供上层返回失败原因）
+            const msg = (result && result.CommonMsg) || {};
+            if (!(msg.Status >= 200 && msg.Status < 300)) {
+                throw new Error(`OBS putObject failed (${msg.Status})${msg.Code ? ` [${msg.Code}]` : ''}: ${msg.Message || '未知错误'}`);
+            }
+        }
+        finally {
+            try {
+                await client.close();
+            }
+            catch (e) {
+                // 忽略关闭异常
+            }
+        }
+    }
+    /**
+     * 构造 OBS 对象 key（固定格式，供后端/保底任务按 objectKey 下载解析入库）。
+     * 规则：code-metrics-action/{owner}/{repo}/{pipelineRunId}/{ts}-metrics.json
+     * 平台差异由桶名区分（GitCode/GitHub 各一个桶），key 结构两平台保持一致，后端解析逻辑无需区分。
+     * branchName 不进入路径（远端分支可能含 / 造成路径歧义），只放在文件内元数据中。
+     */
+    buildObjectKey(options) {
+        const ownerRepo = this.extractOwnerRepo(options.gitUrl) || 'unknown';
+        const pipelineRunId = options.pipelineRunId || 'manual';
+        const ts = this.formatDateTime(new Date());
+        return `code-metrics-action/${ownerRepo}/${pipelineRunId}/${ts}-metrics.json`;
+    }
+    /**
+     * 从 gitUrl 提取 owner/repo（形如 git@host:owner/repo 或 https://host/owner/repo）。
+     */
+    extractOwnerRepo(gitUrl) {
+        if (!gitUrl) {
+            return '';
+        }
+        const url = String(gitUrl).replace(/\.git$/, '').replace(/\/+$/, '');
+        const match = url.match(/(?:git@[^:]+:|https?:\/\/[^/]+\/)(.+)$/);
+        return match ? match[1] : '';
+    }
+    /**
+     * 格式化时间为 yyyyMMddHHmmss（OBS 对象 key 用，UTC）。
+     */
+    formatDateTime(date) {
+        const p = (n) => String(n).padStart(2, '0');
+        return `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}`;
+    }
+    /**
+     * 把出现位置列表中的明文 content 编码为 contentB64，移除明文字段。
+     * 已编码数据跳过（防二次编码）。
+     * 重复块内容完整编码不做截断：全量上报文件上传 OBS（不受 APIG body 限制），
+     * 入库 code_metrics_duplication_block.content_b64 为 LONGTEXT 可承载。
+     */
+    encodeOccurrences(occurrences) {
+        return occurrences.map((occ) => {
+            return {
+                groupId: occ.groupId,
+                contentHash: occ.contentHash,
+                occurrenceIndex: occ.occurrenceIndex,
+                filePath: occ.filePath,
+                startLine: occ.startLine,
+                endLine: occ.endLine,
+                contentB64: this.encodeB64(occ.content)
+            };
+        });
+    }
+    /**
+     * 超长内容裁剪为「头部 + 省略标记 + 尾部」，中间直接省略。
+     * 按行省略：头/尾各保留若干整行，省略标记显示被省略的行数。
+     * 仅用于本地 metrics.json 输出文件的防护性裁剪（防 V8 单字符串上限）；
+     * 上报链路（encodeOccurrences）不截断，完整内容上传 OBS。
+     */
+    clipOversizeContent(content, maxChars) {
+        if (typeof content !== 'string' || content.length <= maxChars) {
+            return content;
+        }
+        // 按行拆分；头/尾各以预算的 35% 为字符配额累积整行，保证裁剪后总量仍受控
+        const lines = content.split('\n');
+        const totalLines = lines.length;
+        const sideChars = Math.floor(maxChars * 0.35);
+        // 头部：从首行开始累积整行，直到逼近 sideChars
+        let headLines = 0;
+        let headChars = 0;
+        for (let i = 0; i < totalLines; i++) {
+            const len = lines[i].length + 1; // 行内容 + 换行符
+            if (headLines > 0 && headChars + len > sideChars)
+                break;
+            headChars += len;
+            headLines++;
+        }
+        // 尾部：从末行开始累积整行，直到逼近 sideChars
+        let tailLines = 0;
+        let tailChars = 0;
+        for (let i = totalLines - 1; i >= 0; i--) {
+            const len = lines[i].length + 1;
+            if (tailLines > 0 && tailChars + len > sideChars)
+                break;
+            tailChars += len;
+            tailLines++;
+        }
+        const omittedLines = Math.max(0, totalLines - headLines - tailLines);
+        const head = lines.slice(0, headLines).join('\n');
+        const tail = lines.slice(totalLines - tailLines).join('\n');
+        const clipped = (headLines > 0 ? head : '') +
+            (omittedLines > 0 ? `\n... ${omittedLines} lines omitted ...\n` : '') +
+            (tailLines > 0 ? tail : '');
+        // 兜底：单行超长导致按行裁剪后仍超限时，退化为按字符裁剪
+        if (clipped.length > maxChars) {
+            const headChars2 = Math.floor(maxChars * 0.35);
+            const tailChars2 = Math.floor(maxChars * 0.35);
+            const omittedChars = content.length - headChars2 - tailChars2;
+            return (content.slice(0, headChars2) +
+                `\n... ${omittedChars} chars omitted ...\n` +
+                content.slice(content.length - tailChars2));
+        }
+        return clipped;
+    }
+    /**
+     * Base64 编码字符串（UTF-8）。
+     * 已编码数据（通过回检判定）跳过，防二次编码。
+     */
+    encodeB64(str) {
+        if (!str)
+            return '';
+        // 简单回检：若解码后重新编码与原值一致，视为已编码
+        try {
+            const decoded = Buffer.from(str, 'base64').toString('utf8');
+            const reEncoded = Buffer.from(decoded, 'utf8').toString('base64');
+            if (reEncoded === str)
+                return str;
+        }
+        catch (e) {
+            // 解码失败说明是明文，继续编码
+        }
+        return Buffer.from(str, 'utf8').toString('base64');
+    }
+    /**
+     * 拼接完整请求 URL：按认证模式选择新旧接口前缀
+     * - OIDC 模式：/action-api/metrics/code/report
+     * - AK/SK 模式：/openlibing-coderepo/metrics/code/report
+     */
+    buildUrl(path) {
+        const prefix = this.useOidc ? OIDC_API_PREFIX : AKSK_API_PREFIX;
+        return this.baseUrl.replace(/\/+$/, '') + prefix + path;
+    }
+    /**
+     * 调用 APIG 上报接口并解析 DataResult 响应（按认证模式选择签名方式）。
+     * - OIDC 模式：SDK callApig 免密联邦认证（OIDC ID Token -> STS 临时凭证 ->
+     *   V11-HMAC-SHA256 签名 + X-Security-Token）
+     * - AK/SK 模式：ApigSigner SDK-HMAC-SHA256 签名（原有方式）
+     * 返回 { success, recordId?, detailLink?, tip?, error? }
+     */
+    async report(url, body) {
+        try {
+            let resData;
+            if (this.useOidc) {
+                const res = await callApig('POST', url, { 'Content-Type': 'application/json' }, body);
+                resData = res.data;
+                // 非 2xx：HTTP 层失败（网关拒绝、鉴权失败等）
+                if (res.status < 200 || res.status >= 300) {
+                    const httpMsg = (resData && (resData.msg || resData.message || resData.error_msg)) || `HTTP ${res.status}`;
+                    console.error(`Upload failed: HTTP ${res.status}, URL: ${url}`);
+                    return { success: false, error: httpMsg };
+                }
+            }
+            else {
+                // AK/SK 模式：凭证缺失时直接失败并给出明确提示
+                if (!this.apigAppKey || !this.apigAppSecret) {
+                    return { success: false, error: '未启用 OIDC 联邦认证（workflow 未声明 permissions: id-token: write），且缺少 AK/SK 凭证（apig-app-key / apig-app-secret），无法上报' };
+                }
+                const signer = new ApigSigner(this.apigAppKey, this.apigAppSecret);
+                const headers = signer.sign({
+                    method: 'POST',
+                    url: url,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: body
+                });
+                const response = await axios.post(url, body, { headers, timeout: this.timeout });
+                resData = response.data;
+            }
+            // DataResult 响应格式：{ code, msg, adviceMsg, data }，code=200 表示业务成功
+            if (resData?.code !== 200) {
+                // 打印完整业务失败信息（code/msg/adviceMsg），便于定位后端拒绝原因；
+                // msg/adviceMsg 为服务端响应字段，过 sanitize 防换行注入（Ref #64）
+                console.error(`[upload] report business failed: code=${resData?.code}, msg=${sanitize(resData?.msg)}, adviceMsg=${sanitize(resData?.adviceMsg)}`);
+                return { success: false, error: resData?.msg || 'Unknown error' };
+            }
+            // data 可能直接是 recordId 值，也可能是 { recordId: ... } 对象；当前服务端返回 CodeMetricsReportVO
+            const recordId = resData?.data?.recordId
+                || resData?.data?.id
+                || (typeof resData?.data === 'number' || typeof resData?.data === 'string' ? resData.data : null)
+                || resData?.recordId
+                || resData?.id;
+            // data.detailLink：平台分支页固定单条跳转链接；data.tip：仓未录入/分支未登记提示（两者互斥，可均为空）
+            const detailLink = typeof resData?.data?.detailLink === 'string' ? resData.data.detailLink : '';
+            const tip = typeof resData?.data?.tip === 'string' ? resData.data.tip : '';
+            return { success: true, recordId: recordId, detailLink: detailLink, tip: tip };
+        }
+        catch (error) {
+            // 输出详细错误信息以便排查网络问题
+            console.error(`Upload error: ${error.code || error.message}, URL: ${url}`);
+            const resData = error.response?.data;
+            const errorMsg = resData?.msg || resData?.message || error.message;
+            return { success: false, error: errorMsg };
+        }
+    }
 }
-
 module.exports = CoderepoUploader;
 
 
 /***/ }),
 
-/***/ 7496:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ 42:
+/***/ ((module, exports, __nccwpck_require__) => {
 
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __nccwpck_require__(7484);
-
 /**
  * CI 平台上下文适配。
  * 进程启动时一次性判定平台，之后只读取该平台的变量，不跨平台混用：
@@ -60140,45 +60035,41 @@ const core = __nccwpck_require__(7484);
  * - GitCode Actions：无该标志，读取 ATOMGIT_*
  */
 const IS_GITHUB = process.env.GITHUB_ACTIONS === 'true';
-
 const ENV_KEYS = IS_GITHUB
-  ? {
-      eventName: 'GITHUB_EVENT_NAME',
-      baseRef: 'GITHUB_BASE_REF',
-      refName: 'GITHUB_REF_NAME',
-      runId: 'GITHUB_RUN_ID',
-      runNumber: 'GITHUB_RUN_NUMBER',
-      sha: 'GITHUB_SHA',
-      workflow: 'GITHUB_WORKFLOW',
-      repository: 'GITHUB_REPOSITORY',
-      serverUrl: 'GITHUB_SERVER_URL'
+    ? {
+        eventName: 'GITHUB_EVENT_NAME',
+        baseRef: 'GITHUB_BASE_REF',
+        refName: 'GITHUB_REF_NAME',
+        runId: 'GITHUB_RUN_ID',
+        runNumber: 'GITHUB_RUN_NUMBER',
+        sha: 'GITHUB_SHA',
+        workflow: 'GITHUB_WORKFLOW',
+        repository: 'GITHUB_REPOSITORY',
+        serverUrl: 'GITHUB_SERVER_URL'
     }
-  : {
-      eventName: 'ATOMGIT_EVENT_NAME',
-      // GitCode 的 ATOMGIT_HEAD_REF 是 PR 源分支，目标分支必须取 ATOMGIT_BASE_REF
-      baseRef: 'ATOMGIT_BASE_REF',
-      refName: 'ATOMGIT_REF_NAME',
-      runId: 'ATOMGIT_RUN_ID',
-      runNumber: 'ATOMGIT_RUN_NUMBER',
-      sha: 'ATOMGIT_SHA',
-      workflow: 'ATOMGIT_WORKFLOW'
+    : {
+        eventName: 'ATOMGIT_EVENT_NAME',
+        // GitCode 的 ATOMGIT_HEAD_REF 是 PR 源分支，目标分支必须取 ATOMGIT_BASE_REF
+        baseRef: 'ATOMGIT_BASE_REF',
+        refName: 'ATOMGIT_REF_NAME',
+        runId: 'ATOMGIT_RUN_ID',
+        runNumber: 'ATOMGIT_RUN_NUMBER',
+        sha: 'ATOMGIT_SHA',
+        workflow: 'ATOMGIT_WORKFLOW'
     };
-
 /** 读取当前平台的环境变量（未定义时返回空串） */
 function ciEnv(key) {
-  const envKey = ENV_KEYS[key];
-  return envKey ? String(process.env[envKey] || '').trim() : '';
+    const envKey = ENV_KEYS[key];
+    return envKey ? String(process.env[envKey] || '').trim() : '';
 }
-
 /** 当前运行所属分支：PR/MR 事件取目标分支，其余取当前 ref */
 function resolveCiBranch() {
-  const eventName = ciEnv('eventName').toLowerCase();
-  if (eventName === 'pull_request' || eventName === 'pull_request_target' || eventName === 'mr') {
-    return ciEnv('baseRef');
-  }
-  return ciEnv('refName');
+    const eventName = ciEnv('eventName').toLowerCase();
+    if (eventName === 'pull_request' || eventName === 'pull_request_target' || eventName === 'mr') {
+        return ciEnv('baseRef');
+    }
+    return ciEnv('refName');
 }
-
 /**
  * git 分支名兜底：游离 HEAD（字面量 HEAD）或空值时回落到平台上下文分支。
  * GitHub PR 事件 checkout refs/pull/<n>/merge 后 `git rev-parse --abbrev-ref HEAD` 返回字面量 HEAD，
@@ -60189,25 +60080,23 @@ function resolveCiBranch() {
  * @returns {string} 用于上报的分支名
  */
 function resolveBranchName(gitBranch, ciBranch) {
-  const branch = String(gitBranch || '').trim();
-  if (!branch || branch === 'HEAD') {
-    return ciBranch || '';
-  }
-  return branch;
+    const branch = String(gitBranch || '').trim();
+    if (!branch || branch === 'HEAD') {
+        return ciBranch || '';
+    }
+    return branch;
 }
-
 /** 仓库地址兜底：仅 GitHub 提供仓库环境变量，GitCode 主要由 git 命令获取 */
 function resolveRepoUrlFromEnv() {
-  if (!IS_GITHUB) {
-    return '';
-  }
-  const repository = ciEnv('repository');
-  if (!repository) {
-    return '';
-  }
-  return `${ciEnv('serverUrl') || 'https://github.com'}/${repository}`;
+    if (!IS_GITHUB) {
+        return '';
+    }
+    const repository = ciEnv('repository');
+    if (!repository) {
+        return '';
+    }
+    return `${ciEnv('serverUrl') || 'https://github.com'}/${repository}`;
 }
-
 /**
  * 写 action step output，仅 GitHub Actions 生效。
  * GitCode 的 ATOMGIT_OUTPUT 会直接渲染到流水线结果面板，写入英文指标键会与
@@ -60217,28 +60106,305 @@ function resolveRepoUrlFromEnv() {
  * @param {string|number} value 输出值
  */
 function setCiOutput(name, value) {
-  if (!IS_GITHUB) {
-    return;
-  }
-  // 无函数场景均值为 null：按 README 约定统一输出空字符串，避免 String(null) 落盘为字面量 null
-  core.setOutput(name, value === null || value === undefined ? '' : value);
+    if (!IS_GITHUB) {
+        return;
+    }
+    // 无函数场景均值为 null：按 README 约定统一输出空字符串，避免 String(null) 落盘为字面量 null
+    core.setOutput(name, value === null || value === undefined ? '' : value);
 }
-
 module.exports = { IS_GITHUB, ciEnv, resolveCiBranch, resolveBranchName, resolveRepoUrlFromEnv, setCiOutput };
 
 
 /***/ }),
 
-/***/ 6790:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ 8124:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
-const fs = __nccwpck_require__(9896);
-const path = __nccwpck_require__(6928);
+"use strict";
 
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FileCollector = void 0;
+const fs_1 = __importDefault(__nccwpck_require__(9896));
+const path_1 = __importDefault(__nccwpck_require__(6928));
 class FileCollector {
-  // 缺省代码扩展名白名单（allowed-extensions 未配置时生效，业界惯例为白名单制，
-  // 对齐 scc/cloc 内置语言的常见子集；.gn/.gni/.prelds 为 OHOS 构建体系特有脚本）
-  static DEFAULT_CODE_EXTENSIONS = [
+    /**
+     * 判断目录是否属于默认跳过的隐藏目录（版本控制/IDE 私有目录）
+     *
+     * @param dirName 目录名（不含路径）
+     * @return 命中默认跳过名单返回 true，否则返回 false
+     */
+    static isDefaultExcludedDir(dirName) {
+        return FileCollector.DEFAULT_EXCLUDED_DIRS.includes(String(dirName || '').toLowerCase());
+    }
+    /**
+     * 判断文件是否放行：文件名特例 > 显式 allowed-extensions > 缺省白名单。
+     * 扩展名统一小写比较；显式配置为覆盖式语义——用户指定扩展名后，
+     * 扫描范围 = 用户指定的扩展名 + 文件名特例（如指定 .h,.cpp 则只扫这两类 + CMakeLists.txt 等），
+     * 不再叠加缺省白名单。
+     */
+    static isAllowedFile(fileName, allowedExtensions) {
+        const lower = (fileName || '').toLowerCase();
+        if (FileCollector.SPECIAL_FILE_NAMES.includes(lower)) {
+            return true;
+        }
+        const normalized = (allowedExtensions || []).map((e) => String(e).toLowerCase());
+        const list = normalized.length > 0 ? normalized : FileCollector.DEFAULT_CODE_EXTENSIONS;
+        const ext = path_1.default.extname(lower);
+        return list.includes(ext);
+    }
+    /**
+     * 判断目录/文件是否被 excludeDirs 命中（大小写敏感）。匹配目标为条目相对扫描根的路径（正斜杠）。
+     * 规则：
+     * 1. 裸名称（不含 /）：
+     *    - 无通配符：仅顶层精确匹配。例：test.ts、docs（不命中 src/test.ts；排任意层级同名文件请用 globstar 路径）
+     *    - 含通配符：任意层级匹配条目名。例：*.test.js、*test*
+     * 2. 路径（含 /）：锚定扫描根，匹配相对路径，命中目录即整棵子树剪枝。
+     *    例：src/opensource/grapesjs、src/opensource/*
+     * 前导斜杠为可选显式写法（/test.ts 仅匹配顶层 test.ts），尾部斜杠忽略（docs/ ≡ docs）。
+     * 通配符：*（单段不含 /）、**（跨目录）、?（单字符）、[abc]/[!abc]（字符类）。
+     * 目录与文件统一适用同一条规则，不按类型区分。
+     */
+    static isExcluded(name, relPath, excludeDirs) {
+        if (!excludeDirs || excludeDirs.length === 0) {
+            return false;
+        }
+        const rel = (relPath || '').replace(/\\/g, '/');
+        for (const raw of excludeDirs) {
+            let d = String(raw).trim().replace(/\\/g, '/');
+            if (!d)
+                continue;
+            // 尾部斜杠忽略（docs/ ≡ docs），先剥离再做通配符/斜杠判定
+            d = d.replace(/\/+$/g, '');
+            if (!d)
+                continue;
+            // 是否含斜杠决定规则：含 /（内部或前导）走路径锚定，不含 / 走名称匹配。
+            // 先判再剥前导斜杠（/i18n 含 / 应锚定顶层，剥掉后匹配串为 i18n）
+            const hasSlash = d.indexOf('/') >= 0;
+            d = d.replace(/^\/+/, '');
+            if (!d)
+                continue;
+            // 是否含 glob 通配符（* ? [）
+            const hasWildcard = d.indexOf('*') >= 0 || d.indexOf('?') >= 0 || d.indexOf('[') >= 0;
+            if (hasSlash) {
+                // 路径规则：锚定扫描根，匹配相对路径
+                const re = FileCollector.globToRegExp(d);
+                if (re && re.test(rel)) {
+                    return true;
+                }
+            }
+            else if (hasWildcard) {
+                // 裸名称 + 通配符：任意层级匹配条目名
+                const re = FileCollector.globToRegExp(d);
+                if (re && re.test(name)) {
+                    return true;
+                }
+            }
+            else if (d === rel) {
+                // 裸名称（无通配符）：仅顶层精确匹配（等价锚定根）
+                return true;
+            }
+        }
+        return false;
+    }
+    /**
+     * 判断某条相对路径（文件或目录）是否被 excludeDirs 整棵剪枝命中（大小写敏感）。
+     * 与 _walkDir 的目录剪枝语义一致：逐层考察「文件自身 + 所有祖先目录」，
+     * 任一层级被 isExcluded 命中即判定排除。用于对 scc 等外部扫描器的输出做后置过滤，
+     * 保证与 FileCollector 收集的文件范围完全一致。
+     * 例：excludeDirs=['go/','cpp/**'] 时，
+     *   - go/test-codeql.go：祖先目录 go 命中顶层规则 → 排除
+     *   - cpp/part_dup1.cpp：自身命中 cpp/** → 排除
+     *   - src/go/x.go：go 非顶层，不命中 go/ → 保留
+     */
+    static isPathExcluded(relPath, excludeDirs) {
+        const p = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+        if (!p)
+            return false;
+        const parts = p.split('/');
+        let prefix = '';
+        for (let i = 0; i < parts.length; i++) {
+            prefix = prefix ? prefix + '/' + parts[i] : parts[i];
+            if (FileCollector.isExcluded(parts[i], prefix, excludeDirs)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    /**
+     * 记录并跳过非法/超限 glob 规则（同一规则只告警一次，避免遍历中刷屏）
+     */
+    static _warnInvalidGlob(pattern, reason) {
+        if (FileCollector._warnedGlobs.has(pattern)) {
+            return;
+        }
+        FileCollector._warnedGlobs.add(pattern);
+        console.warn(`[WARN] exclude-dirs 规则已跳过: ${pattern}（${reason}）`);
+    }
+    // 将单个 glob 模式转为锚定整串匹配的正则（大小写敏感）。
+    // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
+    // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
+    // 返回 null 表示模式非法/超限（由调用方跳过，避免中断整个扫描），非 null 为锚定整串匹配的正则
+    static globToRegExp(glob) {
+        const pattern = String(glob || '');
+        // 长度与 globstar 层数上限：兜底超长/深度嵌套模式的正则回溯风险
+        if (pattern.length > FileCollector.MAX_GLOB_PATTERN_LENGTH
+            || (pattern.match(/\*\*/g) || []).length > FileCollector.MAX_GLOBSTAR_COUNT) {
+            FileCollector._warnInvalidGlob(pattern, '超出长度或 globstar 层数上限');
+            return null;
+        }
+        let re = '^';
+        for (let i = 0; i < pattern.length; i++) {
+            const c = pattern[i];
+            if (c === '*') {
+                // 连续 * 合并为 **（跨目录分隔符）
+                if (pattern[i + 1] === '*') {
+                    while (pattern[i + 1] === '*')
+                        i++;
+                    if (pattern[i + 1] === '/') {
+                        // **/：匹配 0 层或多层目录，顶层与任意深层均命中
+                        re += '(?:.*/)?';
+                        i++;
+                    }
+                    else {
+                        re += '.*';
+                    }
+                }
+                else {
+                    // *：单段内任意字符（不含 /）
+                    re += '[^/]*';
+                }
+            }
+            else if (c === '?') {
+                re += '[^/]';
+            }
+            else if (c === '[') {
+                // 字符类：[abc]、[a-z]、[!abc]（或 [^abc]）；未闭合的 [ 当作普通字符
+                let j = i + 1;
+                let negate = false;
+                if (pattern[j] === '!' || pattern[j] === '^') {
+                    negate = true;
+                    j++;
+                }
+                let cls = '';
+                let closed = false;
+                let first = true;
+                while (j < pattern.length) {
+                    if (pattern[j] === ']' && !first) {
+                        closed = true;
+                        break;
+                    }
+                    first = false;
+                    cls += pattern[j];
+                    j++;
+                }
+                if (closed) {
+                    re += '[' + (negate ? '^' : '') + cls + ']';
+                    i = j;
+                }
+                else {
+                    re += '\\[';
+                }
+            }
+            else {
+                // 正则元字符转义，其余按字面匹配
+                re += '\\^$.|+(){}'.indexOf(c) >= 0 ? '\\' + c : c;
+            }
+        }
+        try {
+            return new RegExp(re + '$');
+        }
+        catch (error) {
+            // 字符类内容按 glob 语义原样拼接，非法区间（如 [z-a]）在此兜底
+            FileCollector._warnInvalidGlob(pattern, error.message);
+            return null;
+        }
+    }
+    /**
+     * 收集文件列表
+     * @param {string|string[]} source - 源代码目录或文件路径（可以是字符串或数组）
+     * @param {string[]} excludeDirs - 排除列表（目录名 / 相对路径 / 文件名，逗号分隔）
+     * @param {string[]} allowedExtensions - 允许的文件扩展名列表（配置后完全覆盖缺省白名单）
+     * @returns {string[]} 文件路径列表
+     */
+    static collectFiles(source, excludeDirs = [], allowedExtensions = []) {
+        const files = [];
+        // 支持传入单个路径或路径数组
+        const sources = Array.isArray(source) ? source : [source];
+        for (const src of sources) {
+            const absolutePath = path_1.default.resolve(src);
+            if (!fs_1.default.existsSync(absolutePath)) {
+                console.warn(`[WARN] 路径不存在: ${absolutePath}`);
+                continue;
+            }
+            const stat = fs_1.default.statSync(absolutePath);
+            if (stat.isDirectory()) {
+                // 如果是目录，递归遍历
+                FileCollector._walkDir(absolutePath, '', excludeDirs, allowedExtensions, files);
+            }
+            else if (stat.isFile()) {
+                // 单文件输入：文件级排除 + 扩展名白名单双重过滤
+                const name = path_1.default.basename(absolutePath);
+                // 相对扫描根的路径取调用方传入路径（正斜杠、剥离前导 ./ 与 /），
+                // 使含斜杠的路径式规则（如 src/opensource/*）在传入相对路径时同样生效；
+                // 两种形态叠加判断，保持与目录扫描的 isExcluded 语义一致。
+                const relInput = String(src).replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
+                if (FileCollector.isPathExcluded(name, excludeDirs) || FileCollector.isPathExcluded(relInput, excludeDirs)) {
+                    continue;
+                }
+                if (!FileCollector.isAllowedFile(name, allowedExtensions)) {
+                    console.warn(`[WARN] 文件扩展名不在允许列表中: ${path_1.default.basename(absolutePath)}`);
+                    continue;
+                }
+                files.push(absolutePath);
+            }
+        }
+        return files;
+    }
+    // 递归遍历目录，根据排除规则和扩展名过滤文件。
+    // relPrefix：当前目录相对扫描根的路径（用于路径式排除匹配），根目录本身为 ''
+    static _walkDir(dir, relPrefix, excludeDirs, allowedExtensions, files) {
+        // readdirSync 失败（如权限/符号链接断裂）时静默跳过该目录
+        let entries;
+        try {
+            entries = fs_1.default.readdirSync(dir, { withFileTypes: true });
+        }
+        catch (error) {
+            return;
+        }
+        for (const entry of entries) {
+            const fullPath = path_1.default.join(dir, entry.name);
+            // 当前条目相对扫描根的路径（正斜杠），用于路径式排除匹配
+            const relPath = relPrefix ? relPrefix + '/' + entry.name : entry.name;
+            if (entry.isDirectory()) {
+                // 跳过默认隐藏目录（版本控制/IDE 私有目录）和 excludeDirs 命中的目录
+                // （纯目录名任意层级生效；相对路径如 src/opensource/grapesjs 命中即整棵子树剪枝）
+                if (FileCollector.isDefaultExcludedDir(entry.name)
+                    || FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
+                    continue;
+                }
+                FileCollector._walkDir(fullPath, relPath, excludeDirs, allowedExtensions, files);
+            }
+            else if (entry.isFile()) {
+                // 文件级排除（文件名/相对路径命中 excludeDirs 即跳过）
+                if (FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
+                    continue;
+                }
+                // 白名单三段式过滤：文件名特例 > 显式扩展名 > 缺省白名单
+                if (!FileCollector.isAllowedFile(entry.name, allowedExtensions)) {
+                    continue;
+                }
+                files.push(fullPath);
+            }
+        }
+    }
+}
+exports.FileCollector = FileCollector;
+// 缺省代码扩展名白名单（allowed-extensions 未配置时生效，业界惯例为白名单制，
+// 对齐 scc/cloc 内置语言的常见子集；.gn/.gni/.prelds 为 OHOS 构建体系特有脚本）
+FileCollector.DEFAULT_CODE_EXTENSIONS = [
     // C/C++ 家族
     '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hxx', '.inl', '.cu', '.cuh',
     // 主流通用语言
@@ -60257,387 +60423,109 @@ class FileCollector {
     '.cmake', '.mk',
     // OHOS 构建体系
     '.gn', '.gni', '.prelds'
-  ];
-
-  // 文件名特例：无扩展名或需按文件名识别的构建/入口文件（对齐 scc/cloc 的文件名识别规则），
-  // 不受扩展名白名单限制，始终放行
-  static SPECIAL_FILE_NAMES = [
+];
+// 文件名特例：无扩展名或需按文件名识别的构建/入口文件（对齐 scc/cloc 的文件名识别规则），
+// 不受扩展名白名单限制，始终放行
+FileCollector.SPECIAL_FILE_NAMES = [
     'cmakelists.txt', 'makefile', 'gnumakefile', 'dockerfile', 'jenkinsfile',
     'rakefile', 'gemfile', 'build', 'build.bazel', 'workspace'
-  ];
-
-  // 默认跳过的隐藏目录（定向黑名单）：只排版本控制与 IDE 的私有目录，
-  // 不再按「. 开头」一刀切——否则 .gitcode 这类承载流水线配置的正式源码目录会被连带剪枝，
-  // 使本地收集范围（重复率分子）小于 scc 全量扫描范围（分母），重复率被系统性低估。
-  static DEFAULT_EXCLUDED_DIRS = ['.git', '.svn', '.hg', '.idea', '.vscode'];
-
-  // glob 规则防护上限：超长或 globstar 层数过多的模式存在正则回溯爆炸风险，直接拒绝
-  static MAX_GLOB_PATTERN_LENGTH = 256;
-  static MAX_GLOBSTAR_COUNT = 16;
-  // 已告警的非法/超限规则，避免目录遍历时重复刷日志
-  static _warnedGlobs = new Set();
-
-  /**
-   * 判断目录是否属于默认跳过的隐藏目录（版本控制/IDE 私有目录）
-   *
-   * @param {string} dirName 目录名（不含路径）
-   * @return {boolean} 命中默认跳过名单返回 true，否则返回 false
-   */
-  static isDefaultExcludedDir(dirName) {
-    return FileCollector.DEFAULT_EXCLUDED_DIRS.includes(String(dirName || '').toLowerCase());
-  }
-
-  /**
-   * 判断文件是否放行：文件名特例 > 显式 allowed-extensions > 缺省白名单。
-   * 扩展名统一小写比较；显式配置为覆盖式语义——用户指定扩展名后，
-   * 扫描范围 = 用户指定的扩展名 + 文件名特例（如指定 .h,.cpp 则只扫这两类 + CMakeLists.txt 等），
-   * 不再叠加缺省白名单。
-   */
-  static isAllowedFile(fileName, allowedExtensions) {
-    const lower = (fileName || '').toLowerCase();
-    if (FileCollector.SPECIAL_FILE_NAMES.includes(lower)) {
-      return true;
-    }
-    const normalized = (allowedExtensions || []).map(e => String(e).toLowerCase());
-    const list = normalized.length > 0 ? normalized : FileCollector.DEFAULT_CODE_EXTENSIONS;
-    const ext = path.extname(lower);
-    return list.includes(ext);
-  }
-
-  /**
-   * 判断目录/文件是否被 excludeDirs 命中（大小写敏感）。匹配目标为条目相对扫描根的路径（正斜杠）。
-   * 规则：
-   * 1. 裸名称（不含 /）：
-   *    - 无通配符：仅顶层精确匹配。例：test.ts、docs（不命中 src/test.ts；排任意层级同名文件请用 globstar 路径）
-   *    - 含通配符：任意层级匹配条目名。例：*.test.js、*test*
-   * 2. 路径（含 /）：锚定扫描根，匹配相对路径，命中目录即整棵子树剪枝。
-   *    例：src/opensource/grapesjs、src/opensource/*
-   * 前导斜杠为可选显式写法（/test.ts 仅匹配顶层 test.ts），尾部斜杠忽略（docs/ ≡ docs）。
-   * 通配符：*（单段不含 /）、**（跨目录）、?（单字符）、[abc]/[!abc]（字符类）。
-   * 目录与文件统一适用同一条规则，不按类型区分。
-   */
-  static isExcluded(name, relPath, excludeDirs) {
-    if (!excludeDirs || excludeDirs.length === 0) {
-      return false;
-    }
-    const rel = (relPath || '').replace(/\\/g, '/');
-    for (const raw of excludeDirs) {
-      let d = String(raw).trim().replace(/\\/g, '/');
-      if (!d) continue;
-      // 尾部斜杠忽略（docs/ ≡ docs），先剥离再做通配符/斜杠判定
-      d = d.replace(/\/+$/g, '');
-      if (!d) continue;
-      // 是否含斜杠决定规则：含 /（内部或前导）走路径锚定，不含 / 走名称匹配。
-      // 先判再剥前导斜杠（/i18n 含 / 应锚定顶层，剥掉后匹配串为 i18n）
-      const hasSlash = d.indexOf('/') >= 0;
-      d = d.replace(/^\/+/, '');
-      if (!d) continue;
-      // 是否含 glob 通配符（* ? [）
-      const hasWildcard = d.indexOf('*') >= 0 || d.indexOf('?') >= 0 || d.indexOf('[') >= 0;
-      if (hasSlash) {
-        // 路径规则：锚定扫描根，匹配相对路径
-        const re = FileCollector.globToRegExp(d);
-        if (re && re.test(rel)) {
-          return true;
-        }
-      } else if (hasWildcard) {
-        // 裸名称 + 通配符：任意层级匹配条目名
-        const re = FileCollector.globToRegExp(d);
-        if (re && re.test(name)) {
-          return true;
-        }
-      } else if (d === rel) {
-        // 裸名称（无通配符）：仅顶层精确匹配（等价锚定根）
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * 判断某条相对路径（文件或目录）是否被 excludeDirs 整棵剪枝命中（大小写敏感）。
-   * 与 _walkDir 的目录剪枝语义一致：逐层考察「文件自身 + 所有祖先目录」，
-   * 任一层级被 isExcluded 命中即判定排除。用于对 scc 等外部扫描器的输出做后置过滤，
-   * 保证与 FileCollector 收集的文件范围完全一致。
-   * 例：excludeDirs=['go/','cpp/**'] 时，
-   *   - go/test-codeql.go：祖先目录 go 命中顶层规则 → 排除
-   *   - cpp/part_dup1.cpp：自身命中 cpp/** → 排除
-   *   - src/go/x.go：go 非顶层，不命中 go/ → 保留
-   */
-  static isPathExcluded(relPath, excludeDirs) {
-    const p = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
-    if (!p) return false;
-    const parts = p.split('/');
-    let prefix = '';
-    for (let i = 0; i < parts.length; i++) {
-      prefix = prefix ? prefix + '/' + parts[i] : parts[i];
-      if (FileCollector.isExcluded(parts[i], prefix, excludeDirs)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * 记录并跳过非法/超限 glob 规则（同一规则只告警一次，避免遍历中刷屏）
-   */
-  static _warnInvalidGlob(pattern, reason) {
-    if (FileCollector._warnedGlobs.has(pattern)) {
-      return;
-    }
-    FileCollector._warnedGlobs.add(pattern);
-    console.warn(`[WARN] exclude-dirs 规则已跳过: ${pattern}（${reason}）`);
-  }
-
-  // 将单个 glob 模式转为锚定整串匹配的正则（大小写敏感）。
-  // 支持 *（单段不含 /）、**（跨目录，**/ 可匹配 0 层目录）、?（单字符不含 /）、
-  // [abc]/[a-z]/[!abc]（字符类，! 取反）；其余字符按字面匹配，正则元字符自动转义。
-  // 非法或超限模式返回 null，由调用方跳过，避免中断整个扫描。
-  static globToRegExp(glob) {
-    const pattern = String(glob || '');
-    // 长度与 globstar 层数上限：兜底超长/深度嵌套模式的正则回溯风险
-    if (pattern.length > FileCollector.MAX_GLOB_PATTERN_LENGTH
-        || (pattern.match(/\*\*/g) || []).length > FileCollector.MAX_GLOBSTAR_COUNT) {
-      FileCollector._warnInvalidGlob(pattern, '超出长度或 globstar 层数上限');
-      return null;
-    }
-    let re = '^';
-    for (let i = 0; i < pattern.length; i++) {
-      const c = pattern[i];
-      if (c === '*') {
-        // 连续 * 合并为 **（跨目录分隔符）
-        if (pattern[i + 1] === '*') {
-          while (pattern[i + 1] === '*') i++;
-          if (pattern[i + 1] === '/') {
-            // **/：匹配 0 层或多层目录，顶层与任意深层均命中
-            re += '(?:.*/)?';
-            i++;
-          } else {
-            re += '.*';
-          }
-        } else {
-          // *：单段内任意字符（不含 /）
-          re += '[^/]*';
-        }
-      } else if (c === '?') {
-        re += '[^/]';
-      } else if (c === '[') {
-        // 字符类：[abc]、[a-z]、[!abc]（或 [^abc]）；未闭合的 [ 当作普通字符
-        let j = i + 1;
-        let negate = false;
-        if (pattern[j] === '!' || pattern[j] === '^') {
-          negate = true;
-          j++;
-        }
-        let cls = '';
-        let closed = false;
-        let first = true;
-        while (j < pattern.length) {
-          if (pattern[j] === ']' && !first) {
-            closed = true;
-            break;
-          }
-          first = false;
-          cls += pattern[j];
-          j++;
-        }
-        if (closed) {
-          re += '[' + (negate ? '^' : '') + cls + ']';
-          i = j;
-        } else {
-          re += '\\[';
-        }
-      } else {
-        // 正则元字符转义，其余按字面匹配
-        re += '\\^$.|+(){}'.indexOf(c) >= 0 ? '\\' + c : c;
-      }
-    }
-    try {
-      return new RegExp(re + '$');
-    } catch (error) {
-      // 字符类内容按 glob 语义原样拼接，非法区间（如 [z-a]）在此兜底
-      FileCollector._warnInvalidGlob(pattern, error.message);
-      return null;
-    }
-  }
-
-  /**
-   * 收集文件列表
-   * @param {string|string[]} source - 源代码目录或文件路径（可以是字符串或数组）
-   * @param {string[]} excludeDirs - 排除列表（目录名 / 相对路径 / 文件名，逗号分隔）
-   * @param {string[]} allowedExtensions - 允许的文件扩展名列表（配置后完全覆盖缺省白名单）
-   * @returns {string[]} 文件路径列表
-   */
-  static collectFiles(source, excludeDirs = [], allowedExtensions = []) {
-    const files = [];
-
-    // 支持传入单个路径或路径数组
-    const sources = Array.isArray(source) ? source : [source];
-
-    for (const src of sources) {
-      const absolutePath = path.resolve(src);
-
-      if (!fs.existsSync(absolutePath)) {
-        console.warn(`[WARN] 路径不存在: ${absolutePath}`);
-        continue;
-      }
-
-      const stat = fs.statSync(absolutePath);
-
-      if (stat.isDirectory()) {
-        // 如果是目录，递归遍历
-        FileCollector._walkDir(absolutePath, '', excludeDirs, allowedExtensions, files);
-      } else if (stat.isFile()) {
-        // 单文件输入：文件级排除 + 扩展名白名单双重过滤
-        const name = path.basename(absolutePath);
-        // 相对扫描根的路径取调用方传入路径（正斜杠、剥离前导 ./ 与 /），
-        // 使含斜杠的路径式规则（如 src/opensource/*）在传入相对路径时同样生效；
-        // 两种形态叠加判断，保持与目录扫描的 isExcluded 语义一致。
-        const relInput = String(src).replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
-        if (FileCollector.isPathExcluded(name, excludeDirs) || FileCollector.isPathExcluded(relInput, excludeDirs)) {
-          continue;
-        }
-        if (!FileCollector.isAllowedFile(name, allowedExtensions)) {
-          console.warn(`[WARN] 文件扩展名不在允许列表中: ${path.basename(absolutePath)}`);
-          continue;
-        }
-        files.push(absolutePath);
-      }
-    }
-
-    return files;
-  }
-
-  // 递归遍历目录，根据排除规则和扩展名过滤文件。
-  // relPrefix：当前目录相对扫描根的路径（用于路径式排除匹配），根目录本身为 ''
-  static _walkDir(dir, relPrefix, excludeDirs, allowedExtensions, files) {
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch (error) {
-      return;
-    }
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      // 当前条目相对扫描根的路径（正斜杠），用于路径式排除匹配
-      const relPath = relPrefix ? relPrefix + '/' + entry.name : entry.name;
-
-      if (entry.isDirectory()) {
-        // 跳过默认隐藏目录（版本控制/IDE 私有目录）和 excludeDirs 命中的目录
-        // （纯目录名任意层级生效；相对路径如 src/opensource/grapesjs 命中即整棵子树剪枝）
-        if (FileCollector.isDefaultExcludedDir(entry.name)
-            || FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
-          continue;
-        }
-        FileCollector._walkDir(fullPath, relPath, excludeDirs, allowedExtensions, files);
-      } else if (entry.isFile()) {
-        // 文件级排除（文件名/相对路径命中 excludeDirs 即跳过）
-        if (FileCollector.isExcluded(entry.name, relPath, excludeDirs)) {
-          continue;
-        }
-        // 白名单三段式过滤：文件名特例 > 显式扩展名 > 缺省白名单
-        if (!FileCollector.isAllowedFile(entry.name, allowedExtensions)) {
-          continue;
-        }
-        files.push(fullPath);
-      }
-    }
-  }
-}
-
-module.exports = FileCollector;
+];
+// 默认跳过的隐藏目录（定向黑名单）：只排版本控制与 IDE 的私有目录，
+// 不再按「. 开头」一刀切——否则 .gitcode 这类承载流水线配置的正式源码目录会被连带剪枝，
+// 使本地收集范围（重复率分子）小于 scc 全量扫描范围（分母），重复率被系统性低估。
+FileCollector.DEFAULT_EXCLUDED_DIRS = ['.git', '.svn', '.hg', '.idea', '.vscode'];
+// glob 规则防护上限：超长或 globstar 层数过多的模式存在正则回溯爆炸风险，直接拒绝
+FileCollector.MAX_GLOB_PATTERN_LENGTH = 256;
+FileCollector.MAX_GLOBSTAR_COUNT = 16;
+// 已告警的非法/超限规则，避免目录遍历时重复刷日志
+FileCollector._warnedGlobs = new Set();
 
 
 /***/ }),
 
-/***/ 7248:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ 5213:
+/***/ ((module, exports, __nccwpck_require__) => {
 
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 const fs = __nccwpck_require__(9896);
 const path = __nccwpck_require__(6928);
-
 class FileUtils {
-  static writeJsonFile(filePath, data, pretty = true) {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    static writeJsonFile(filePath, data, pretty = true) {
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        const content = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
+        fs.writeFileSync(filePath, content, 'utf8');
     }
-
-    const content = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
-    fs.writeFileSync(filePath, content, 'utf8');
-  }
-
-  static ensureDirectory(dirPath) {
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
+    static ensureDirectory(dirPath) {
+        if (!fs.existsSync(dirPath)) {
+            fs.mkdirSync(dirPath, { recursive: true });
+        }
+        return dirPath;
     }
-    return dirPath;
-  }
-
-  static getExtension(filePath) {
-    return path.extname(filePath);
-  }
-
-  static isFileAllowed(filePath, allowedExtensions) {
-    if (!allowedExtensions || allowedExtensions.length === 0) {
-      return true;
+    static getExtension(filePath) {
+        return path.extname(filePath);
     }
-    const ext = this.getExtension(filePath).toLowerCase();
-    return allowedExtensions.includes(ext);
-  }
-
-  static isDirectoryExcluded(dirPath, excludeDirs) {
-    if (!excludeDirs || excludeDirs.length === 0) {
-      return false;
+    static isFileAllowed(filePath, allowedExtensions) {
+        if (!allowedExtensions || allowedExtensions.length === 0) {
+            return true;
+        }
+        const ext = this.getExtension(filePath).toLowerCase();
+        return allowedExtensions.includes(ext);
     }
-    const dirName = path.basename(dirPath);
-    return excludeDirs.some(exclude => {
-      return dirName === exclude || dirPath.includes(`/${exclude}/`);
-    });
-  }
+    static isDirectoryExcluded(dirPath, excludeDirs) {
+        if (!excludeDirs || excludeDirs.length === 0) {
+            return false;
+        }
+        const dirName = path.basename(dirPath);
+        return excludeDirs.some((exclude) => {
+            return dirName === exclude || dirPath.includes(`/${exclude}/`);
+        });
+    }
 }
-
 module.exports = FileUtils;
 
 
 /***/ }),
 
-/***/ 8467:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ 7893:
+/***/ ((module, exports, __nccwpck_require__) => {
 
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __nccwpck_require__(7484);
-
 /**
  * 统一日志封装：直接使用 @actions/core。
  * GitHub / GitCode 运行日志按 info / warning / error 级别展示；debug 仅在平台开启调试日志时输出。
  */
 class Logger {
-  // 支持多参数，拼接为一条消息
-  debug(...args) {
-    core.debug(args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
-  }
-
-  info(message) {
-    core.info(message);
-  }
-
-  warn(message) {
-    core.warning(message);
-  }
-
-  error(message) {
-    core.error(message);
-  }
+    // 支持多参数，拼接为一条消息
+    debug(...args) {
+        core.debug(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+    }
+    info(message) {
+        core.info(message);
+    }
+    warn(message) {
+        core.warning(message);
+    }
+    error(message) {
+        core.error(message);
+    }
 }
-
 module.exports = Logger;
 
 
 /***/ }),
 
-/***/ 9900:
-/***/ ((module) => {
+/***/ 3262:
+/***/ ((module, exports) => {
+
+"use strict";
 
 /**
  * 日志/输出行注入清洗（Ref #64）。
@@ -60651,213 +60539,212 @@ module.exports = Logger;
  * 正常值（无控制字符）清洗前后逐字节一致，属恒等变换。
  * 与 security-compilation-options-action #37 已验证实现同款。
  */
-
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 /** 日志/输出行最大长度（字符） */
 const MAX_LOG_LINE_LEN = 2048;
-
 function sanitize(value, maxLen = MAX_LOG_LINE_LEN) {
-  if (typeof value !== 'string') {
-    return value;
-  }
-  // 控制字符（含 \r \n \t）折叠为单空格，压缩连续空格
-  // 匹配控制字符正是本函数的功能本体，豁免 no-control-regex（与 sec-comp #37 同款实现）
-  // eslint-disable-next-line no-control-regex
-  const cleaned = value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/ {2,}/g, ' ').trim();
-  if (cleaned.length > maxLen) {
-    return cleaned.slice(0, maxLen) + '...(truncated)';
-  }
-  return cleaned;
+    if (typeof value !== 'string') {
+        return value;
+    }
+    // 控制字符（含 \r \n \t）折叠为单空格，压缩连续空格
+    // 匹配控制字符正是本函数的功能本体，豁免 no-control-regex（与 sec-comp #37 同款实现）
+    // eslint-disable-next-line no-control-regex
+    const cleaned = value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/ {2,}/g, ' ').trim();
+    if (cleaned.length > maxLen) {
+        return cleaned.slice(0, maxLen) + '...(truncated)';
+    }
+    return cleaned;
 }
-
 module.exports = { sanitize };
 
 
 /***/ }),
 
-/***/ 3111:
-/***/ ((module) => {
+/***/ 8633:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
 
 /**
  * 运行摘要（Markdown）构建工具。
  * 从 src/index.js 抽出为无副作用模块，便于单测覆盖；GitHub/GitCode 两个平台统一使用摘要表展示。
  * GitHub Actions 侧摘要固定使用英文（平台面向国际用户），GitCode 侧保持中文不变。
  */
-
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.buildSummaryMarkdown = exports.safeLinkUrl = exports.formatCstTime = exports.escapeCell = void 0;
 /** 摘要文案字典：zh 为 GitCode 现有文案，en 为 GitHub 侧全英文文案 */
 const SUMMARY_TEXT = {
-  zh: {
-    title: '## 📊 代码度量指标扫描结果',
-    scanTableHeader: '| 扫描信息 | 扫描值 |',
-    labels: {
-      repo: '仓库',
-      branch: '分支',
-      commit: '提交',
-      pipeline: '流水线',
-      finishedAt: '扫描完成时间'
+    zh: {
+        title: '## 📊 代码度量指标扫描结果',
+        scanTableHeader: '| 扫描信息 | 扫描值 |',
+        labels: {
+            repo: '仓库',
+            branch: '分支',
+            commit: '提交',
+            pipeline: '流水线',
+            finishedAt: '扫描完成时间'
+        },
+        overviewTitle: '### 指标概览',
+        metricTableHeader: '| 指标 | 数值 | 说明 |',
+        metrics: [
+            { name: '代码规模', unit: ' 行', desc: '有效代码行数（排除空行与注释）' },
+            { name: '平均函数代码行', unit: ' 行', desc: '函数体有效代码行的算术平均值' },
+            { name: '平均圈复杂度', unit: '', desc: '函数级圈复杂度的算术平均值' },
+            { name: '总代码重复率', unit: '%', desc: '重复代码行占有效代码行的比例' },
+            { name: '总文件重复率', unit: '%', desc: '内容完全一致文件占总文件数的比例' }
+        ],
+        detailPrefix: '> 查看详情：',
+        detailText: '代码度量指标扫描结果',
+        detailFallback: ''
     },
-    overviewTitle: '### 指标概览',
-    metricTableHeader: '| 指标 | 数值 | 说明 |',
-    metrics: [
-      { name: '代码规模', unit: ' 行', desc: '有效代码行数（排除空行与注释）' },
-      { name: '平均函数代码行', unit: ' 行', desc: '函数体有效代码行的算术平均值' },
-      { name: '平均圈复杂度', unit: '', desc: '函数级圈复杂度的算术平均值' },
-      { name: '总代码重复率', unit: '%', desc: '重复代码行占有效代码行的比例' },
-      { name: '总文件重复率', unit: '%', desc: '内容完全一致文件占总文件数的比例' }
-    ],
-    detailPrefix: '> 查看详情：',
-    detailText: '代码度量指标扫描结果'
-  },
-  en: {
-    title: '## 📊 Code Metrics Scan Result',
-    scanTableHeader: '| Scan Info | Value |',
-    labels: {
-      repo: 'Repository',
-      branch: 'Branch',
-      commit: 'Commit',
-      pipeline: 'Pipeline',
-      finishedAt: 'Scan Completed At'
-    },
-    overviewTitle: '### Metrics Overview',
-    metricTableHeader: '| Metric | Value | Description |',
-    metrics: [
-      {
-        name: 'Code Scale',
-        unit: ' lines',
-        desc: 'Effective lines of code (excluding blank lines and comments)'
-      },
-      {
-        name: 'Avg Function LOC',
-        unit: ' lines',
-        desc: 'Arithmetic mean of effective lines of code per function'
-      },
-      {
-        name: 'Avg Cyclomatic Complexity',
-        unit: '',
-        desc: 'Arithmetic mean of function-level cyclomatic complexity'
-      },
-      {
-        name: 'Total Code Duplication Rate',
-        unit: '%',
-        desc: 'Percentage of duplicated lines among effective lines of code'
-      },
-      {
-        name: 'Total File Duplication Rate',
-        unit: '%',
-        desc: 'Percentage of identical files among all files'
-      }
-    ],
-    detailPrefix: '> View details: ',
-    detailText: 'Code Metrics Scan Result',
-    // 服务端返回的 detailTip 为中文，英文模式下替换为通用英文提示，保证摘要全英文
-    detailFallback:
-      'Detail link is unavailable. Make sure the repository and branch are registered on the openLiBing platform.'
-  }
+    en: {
+        title: '## 📊 Code Metrics Scan Result',
+        scanTableHeader: '| Scan Info | Value |',
+        labels: {
+            repo: 'Repository',
+            branch: 'Branch',
+            commit: 'Commit',
+            pipeline: 'Pipeline',
+            finishedAt: 'Scan Completed At'
+        },
+        overviewTitle: '### Metrics Overview',
+        metricTableHeader: '| Metric | Value | Description |',
+        metrics: [
+            {
+                name: 'Code Scale',
+                unit: ' lines',
+                desc: 'Effective lines of code (excluding blank lines and comments)'
+            },
+            {
+                name: 'Avg Function LOC',
+                unit: ' lines',
+                desc: 'Arithmetic mean of effective lines of code per function'
+            },
+            {
+                name: 'Avg Cyclomatic Complexity',
+                unit: '',
+                desc: 'Arithmetic mean of function-level cyclomatic complexity'
+            },
+            {
+                name: 'Total Code Duplication Rate',
+                unit: '%',
+                desc: 'Percentage of duplicated lines among effective lines of code'
+            },
+            {
+                name: 'Total File Duplication Rate',
+                unit: '%',
+                desc: 'Percentage of identical files among all files'
+            }
+        ],
+        detailPrefix: '> View details: ',
+        detailText: 'Code Metrics Scan Result',
+        // 服务端返回的 detailTip 为中文，英文模式下替换为通用英文提示，保证摘要全英文
+        detailFallback: 'Detail link is unavailable. Make sure the repository and branch are registered on the openLiBing platform.'
+    }
 };
-
 /** Markdown 表格单元格转义：竖线必须转义，换行压平，避免撑破表格 */
 function escapeCell(value) {
-  return String(value === null || value === undefined || value === '' ? '-' : value)
-    .replace(/\|/g, '\\|')
-    .replace(/\r?\n/g, ' ');
+    return String(value === null || value === undefined || value === '' ? '-' : value)
+        .replace(/\|/g, '\\|')
+        .replace(/\r?\n/g, ' ');
 }
-
+exports.escapeCell = escapeCell;
 /** 格式化为东八区时间（平台展示口径统一为 UTC+8） */
 function formatCstTime(date) {
-  const cst = new Date(date.getTime() + 8 * 3600 * 1000);
-  return `${cst.toISOString().replace('T', ' ').slice(0, 19)} (UTC+8)`;
+    const cst = new Date(date.getTime() + 8 * 3600 * 1000);
+    return `${cst.toISOString().replace('T', ' ').slice(0, 19)} (UTC+8)`;
 }
-
+exports.formatCstTime = formatCstTime;
 /**
  * 链接 URL 安全处理（Ref #76）：仅放行 http/https，编码会破坏 Markdown 链接结构的字符。
  * 非法协议或非法 URL 返回空串，由调用方降级为纯文本，避免 `)` 提前闭合链接目标后注入 Markdown。
  */
 function safeLinkUrl(value) {
-  const url = String(value || '').trim();
-  if (!url) {
-    return '';
-  }
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return '';
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return '';
-  }
-  // 括号会提前闭合 Markdown 链接目标，空白/尖括号/引号可改变链接解析，统一百分号编码
-  // 注：encodeURIComponent 不编码 ( ) ! * '，此处按字符显式转 %XX
-  return url.replace(/[()<>\s"]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+    const url = String(value || '').trim();
+    if (!url) {
+        return '';
+    }
+    let parsed;
+    try {
+        parsed = new URL(url);
+    }
+    catch {
+        return '';
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return '';
+    }
+    // 括号会提前闭合 Markdown 链接目标，空白/尖括号/引号可改变链接解析，统一百分号编码
+    // 注：encodeURIComponent 不编码 ( ) ! * '，此处按字符显式转 %XX
+    return url.replace(/[()<>\s"]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
 }
-
+exports.safeLinkUrl = safeLinkUrl;
 /**
  * 生成运行摘要（Markdown 表格）。
  * GitHub Actions 没有 GitCode 那样的输出面板，只能在运行摘要页展示，故两个平台统一用摘要表呈现。
  *
- * @param {Object} ctx 扫描上下文（仓库、分支、提交、流水线、完成时间、详情链接）
- * @param {Object} result 扫描结果（5 项指标）
- * @param {Object} [options] 展示选项；english=true 时输出全英文摘要（GitHub 平台）
- * @returns {string} Markdown 文本
+ * @param ctx 扫描上下文（仓库、分支、提交、流水线、完成时间、详情链接）
+ * @param result 扫描结果（5 项指标）
+ * @param [options] 展示选项；english=true 时输出全英文摘要（GitHub 平台）
+ * @returns Markdown 文本
  */
 function buildSummaryMarkdown(ctx, result, options = {}) {
-  const text = options.english ? SUMMARY_TEXT.en : SUMMARY_TEXT.zh;
-  const pipelineLabel = ctx.runNumber ? `#${ctx.runNumber}` : ctx.pipelineRunId || '-';
-  const repoBase = String(ctx.gitUrl || '').replace(/\.git$/, '');
-  const pipelineUrl = safeLinkUrl(
-    repoBase && ctx.pipelineRunId ? `${repoBase}/actions/runs/${ctx.pipelineRunId}` : ''
-  );
-  const pipelineCell = pipelineUrl
-    ? `[${escapeCell(pipelineLabel)}](${pipelineUrl})`
-    : escapeCell(pipelineLabel);
-
-  const scanRows = [
-    [text.labels.repo, ctx.gitUrl],
-    [text.labels.branch, ctx.branchName],
-    [text.labels.commit, ctx.commitId ? String(ctx.commitId).slice(0, 8) : ''],
-    [text.labels.pipeline, pipelineCell],
-    [text.labels.finishedAt, ctx.finishedAt]
-  ];
-  // 指标值按字典顺序对应：代码规模、平均函数代码行、平均圈复杂度、总代码重复率、总文件重复率
-  // 无函数（分母为 0）时两个均值指标为 null，展示 -- 表示无数据
-  const metricValues = [
-    result.codeScale,
-    result.avgFunctionLoc,
-    result.avgCyclomaticComplexity,
-    result.totalCodeDuplicationRate,
-    result.totalFileDuplicationRate
-  ];
-  const metricRows = text.metrics.map((metric, index) => {
-    const value = metricValues[index];
-    const display = value === null || value === undefined ? '--' : value;
-    return [metric.name, `${display}${metric.unit}`, metric.desc];
-  });
-
-  const lines = [
-    text.title,
-    '',
-    text.scanTableHeader,
-    '|:--|:--|',
-    ...scanRows.map(([key, value]) => `| ${escapeCell(key)} | ${value === pipelineCell ? value : escapeCell(value)} |`),
-    '',
-    text.overviewTitle,
-    '',
-    text.metricTableHeader,
-    '|:--|--:|:--|',
-    ...metricRows.map(([key, value, desc]) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
-    ''
-  ];
-  // 详情链接同样只放行合法 http(s) URL；非法链接降级为提示文本，不生成 Markdown 链接
-  const detailUrl = safeLinkUrl(ctx.detailLink);
-  if (detailUrl) {
-    lines.push(`${text.detailPrefix}[${text.detailText}](${detailUrl})`);
-  } else if (ctx.detailTip) {
-    // GitHub 摘要要求全英文：服务端提示为中文，英文模式下替换为通用英文提示
-    lines.push(`> ${escapeCell(options.english ? text.detailFallback : ctx.detailTip)}`);
-  }
-  return `${lines.join('\n')}\n`;
+    const text = options.english ? SUMMARY_TEXT.en : SUMMARY_TEXT.zh;
+    const pipelineLabel = ctx.runNumber ? `#${ctx.runNumber}` : ctx.pipelineRunId || '-';
+    const repoBase = String(ctx.gitUrl || '').replace(/\.git$/, '');
+    const pipelineUrl = safeLinkUrl(repoBase && ctx.pipelineRunId ? `${repoBase}/actions/runs/${ctx.pipelineRunId}` : '');
+    const pipelineCell = pipelineUrl
+        ? `[${escapeCell(pipelineLabel)}](${pipelineUrl})`
+        : escapeCell(pipelineLabel);
+    // 每行为 [标签, 展示值]；ctx 各字段允许缺省（如 GitCode 无 runNumber），转义时统一兜底
+    const scanRows = [
+        [text.labels.repo, ctx.gitUrl],
+        [text.labels.branch, ctx.branchName],
+        [text.labels.commit, ctx.commitId ? String(ctx.commitId).slice(0, 8) : ''],
+        [text.labels.pipeline, pipelineCell],
+        [text.labels.finishedAt, ctx.finishedAt]
+    ];
+    // 指标值按字典顺序对应：代码规模、平均函数代码行、平均圈复杂度、总代码重复率、总文件重复率
+    // 无函数（分母为 0）时两个均值指标为 null，展示 -- 表示无数据
+    const metricValues = [
+        result.codeScale,
+        result.avgFunctionLoc,
+        result.avgCyclomaticComplexity,
+        result.totalCodeDuplicationRate,
+        result.totalFileDuplicationRate
+    ];
+    const metricRows = text.metrics.map((metric, index) => {
+        const value = metricValues[index];
+        // 无函数（分母为 0）时两个均值指标为 null，展示 -- 表示无数据
+        const display = value === null || value === undefined ? '--' : value;
+        return [metric.name, `${display}${metric.unit}`, metric.desc];
+    });
+    const lines = [
+        text.title,
+        '',
+        text.scanTableHeader,
+        '|:--|:--|',
+        ...scanRows.map(([key, value]) => `| ${escapeCell(key)} | ${value === pipelineCell ? value : escapeCell(value)} |`),
+        '',
+        text.overviewTitle,
+        '',
+        text.metricTableHeader,
+        '|:--|--:|:--|',
+        ...metricRows.map(([key, value, desc]) => `| ${escapeCell(key)} | ${escapeCell(value)} | ${escapeCell(desc)} |`),
+        ''
+    ];
+    // 详情链接同样只放行合法 http(s) URL；非法链接降级为提示文本，不生成 Markdown 链接
+    const detailUrl = safeLinkUrl(ctx.detailLink);
+    if (detailUrl) {
+        lines.push(`${text.detailPrefix}[${text.detailText}](${detailUrl})`);
+    }
+    else if (ctx.detailTip) {
+        // GitHub 摘要要求全英文：服务端提示为中文，英文模式下替换为通用英文提示
+        lines.push(`> ${escapeCell(options.english ? text.detailFallback : ctx.detailTip)}`);
+    }
+    return `${lines.join('\n')}\n`;
 }
-
-module.exports = { escapeCell, formatCstTime, safeLinkUrl, buildSummaryMarkdown };
+exports.buildSummaryMarkdown = buildSummaryMarkdown;
 
 
 /***/ }),
@@ -69769,12 +69656,19 @@ module.exports = /*#__PURE__*/JSON.parse('{"application/1d-interleaved-parityfec
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
 /******/
 /************************************************************************/
-/******/
-/******/ 	// startup
-/******/ 	// Load entry module and return exports
-/******/ 	// This entry module is referenced by other modules so it can't be inlined
-/******/ 	var __webpack_exports__ = __nccwpck_require__(5105);
-/******/ 	module.exports = __webpack_exports__;
-/******/
+var __webpack_exports__ = {};
+// This entry need to be wrapped in an IIFE because it need to be in strict mode.
+(() => {
+"use strict";
+var exports = __webpack_exports__;
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+/** Action 入口壳：仅负责启动主流程，业务实现位于 main.ts */
+const { run } = __nccwpck_require__(1730);
+run();
+
+})();
+
+module.exports = __webpack_exports__;
 /******/ })()
 ;
