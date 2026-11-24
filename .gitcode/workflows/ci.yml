@@ -23,14 +23,20 @@ env:
   UT_INCREMENTAL_LINE_COVERAGE_THRESHOLD: ${{ vars.UT_INCREMENTAL_LINE_COVERAGE_THRESHOLD || '80' }}
   # UT报告输出目录：Jest 默认输出路径；json 供平台上报，cobertura 供 diff-cover 计算增量覆盖率
   UT_REPORT_DIR: coverage/
-  # PR 触发场景标记：覆盖率上报仅 push/手动触发执行
-  IS_PR_EVENT: ${{ atomgit.event_name != '' && contains('pull_request_target,pull_request_comment,MR,Note', atomgit.event_name) }}
+  # PR 触发场景标记：覆盖率上报仅 push/手动触发执行；白名单事件名须与 on 触发器保持一致
+  IS_PR_EVENT: ${{ atomgit.event_name != '' && contains('pull_request,pull_request_comment,MR,Note', atomgit.event_name) }}
 
 jobs:
   build:
     name: build
     runs-on: ["self-hosted", "large"]
     steps:
+      # PR 场景断言预合并 commit 可达：merge_commit_sha 缺失时（如 fork PR 平台侧不可达）显式失败，
+      # 避免空 ref 静默检出默认分支——build 验证的是「合入默认分支后的最终状态」，验证错对象比失败更危险
+      - name: assert pre-merged commit available
+        if: ${{ env.IS_PR_EVENT == 'true' }}
+        run: test -n "${{ atomgit.event.pull_request.merge_commit_sha }}" || (echo "merge_commit_sha unavailable, cannot verify merged state" && exit 1)
+
       - name: checkout
         uses: checkout
         with:
