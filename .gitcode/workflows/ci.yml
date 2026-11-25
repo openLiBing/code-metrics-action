@@ -1,16 +1,16 @@
-name: ut
+name: ci
 
 on:
   workflow_dispatch:
-  push: # master 分支推送触发 UT
+  push: # master 分支推送触发 CI
     branches:
       - master
-  pull_request: # PR 触发 UT
+  pull_request: # PR 触发 CI
     branches:
       - "*"
-  pull_request_comment: # PR 评论 /ut 触发 UT
+  pull_request_comment: # PR 评论 /ci 触发 CI（原 /build、/ut、/pre-commit 三个评论触发词统一收敛为 /ci）
     types: [created]
-    comments: ["/ut"]
+    comments: ["/ci"]
     branches:
       - "*"
 
@@ -23,10 +23,53 @@ env:
   UT_INCREMENTAL_LINE_COVERAGE_THRESHOLD: ${{ vars.UT_INCREMENTAL_LINE_COVERAGE_THRESHOLD || '80' }}
   # UT报告输出目录：Jest 默认输出路径；json 供平台上报，cobertura 供 diff-cover 计算增量覆盖率
   UT_REPORT_DIR: coverage/
-  # PR 触发场景标记：覆盖率上报仅 push/手动触发执行
-  IS_PR_EVENT: ${{ atomgit.event_name != '' && contains('pull_request_target,pull_request_comment,MR,Note', atomgit.event_name) }}
+  # PR 触发场景标记：覆盖率上报仅 push/手动触发执行；白名单事件名须与 on 触发器保持一致
+  IS_PR_EVENT: ${{ atomgit.event_name != '' && contains('pull_request,pull_request_comment,MR,Note', atomgit.event_name) }}
 
 jobs:
+  build:
+    name: build
+    runs-on: ["self-hosted", "large"]
+    steps:
+      # PR 场景断言预合并 commit 可达：merge_commit_sha 缺失时（如 fork PR 平台侧不可达）显式失败，
+      # 避免空 ref 静默检出默认分支——build 验证的是「合入默认分支后的最终状态」，验证错对象比失败更危险
+      - name: assert pre-merged commit available
+        if: ${{ env.IS_PR_EVENT == 'true' }}
+        run: test -n "${{ atomgit.event.pull_request.merge_commit_sha }}" || (echo "merge_commit_sha unavailable, cannot verify merged state" && exit 1)
+
+      - name: checkout
+        uses: checkout
+        with:
+          ref: ${{ atomgit.event.pull_request.merge_commit_sha || '' }} # PR 场景检出预合并 commit（验证合入默认分支后的最终状态），push/手动场景为空走默认检出
+
+      # npm ci 按 lockfile 精确安装依赖；随后依次执行格式检查、静态检查与完整构建链（ncc 打包 + 复制二进制）
+      - name: install dependencies
+        run: npm ci
+
+      - name: format check
+        run: npm run format:check
+
+      - name: lint
+        run: npm run lint
+
+      # TypeScript strict 类型检查：与 ncc 构建解耦，类型错误直接判红
+      - name: type check
+        run: npm run typecheck
+
+      - name: build
+        run: npm run build
+
+      # dist 与源码一致性门禁：src 改动后忘记重建并提交 dist 时直接失败，避免发布旧逻辑
+      # 忽略行尾空白差异：构建产物在不同平台/钩子下可能有纯空白差异，只拦截实质内容漂移与新增文件
+      - name: check dist in sync
+        run: |
+          if ! git diff --ignore-space-at-eol --exit-code -- dist || [ -n "$(git ls-files --others --exclude-standard -- dist)" ]; then
+            echo "dist 与源码不一致，请本地执行 npm run build 并提交 dist 变更：" >&2
+            git diff --stat -- dist
+            git ls-files --others --exclude-standard -- dist
+            exit 1
+          fi
+
   ut:
     name: ut
     runs-on: ["self-hosted", "large"]
@@ -95,3 +138,27 @@ jobs:
           overwrite: true
           if-no-files-found: warn
           retention-days: 1
+
+  pre-commit:
+    name: pre-commit
+    runs-on: ["self-hosted", "default"]
+    steps:
+      - name: Checkout repository
+        uses: checkout
+        with:
+          ref: ${{ atomgit.event.pull_request.merge_commit_sha || atomgit.event.pull_request.head.sha }} # 使用预合并后的 commit SHA 进行检出，确保 CI 检查的是 PR 与目标分支合并后的最终代码状态
+          fetch-depth: 0 # 全量检出以生成基线远端 ref origin/<目标分支>，供 pre-commit-action v1.1.0 增量比较（未传 gc_token 时必需）
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: setup-prettier
+        run: |
+          npm install --save-dev --save-exact prettier@3.9.5
+          npx -v
+          npx prettier --version
+
+      - name: pre-commit
+        uses: openlibing/pre-commit-action@v1.1.0
+        with:
+          extra_args: ${{ inputs.extra_args }}
